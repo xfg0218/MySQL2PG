@@ -2,6 +2,58 @@
 
 MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于将MySQL数据库无缝迁移到PostgreSQL。它提供了全面的转换功能，包括表结构、数据、索引、函数、用户权限等，同时具备高性能、高可靠性和丰富的配置选项。
 
+# 说明
+
+本项目是使用AI工具自动生成，共测试了 1614 张MySQL的表自定转换到 PostgreSQL 中，涉及到数据类型包含整数类型、浮点数类型、字符串类型、日期时间类型、枚举类型、二进制类型等其他特殊类型的转换，表的索引和用户权限自动转换。同步数据的效率在 1W+/s 左右，根据硬件配置调整`batch_insert_size` 参数大小。以下为 `V1.0` 版本详细说明。
+
+## 版本待实现
+
+1. MySQL 的 FUNCTION 待实现自动转换。
+2. 数据同步效率需要进一步优化。 
+3. MySQL 不同版本到 PostgreSQL 不同版本的转换需要测试。
+
+## 转换流程逻辑
+
+```
+开始
+ │
+ ├─▶ [Step 0] test_only 模式？
+ │     ├─ 是 → 测试 MySQL & PostgreSQL 连接 → 显示版本 → 退出
+ │     └─ 否 → 继续
+ │
+ ├─▶ [Step 1] 转换表结构 (tableddl: true)
+ │     ├─ 读取 MySQL 表定义
+ │     ├─ 字段类型智能映射（如 tinyint(1) → BOOLEAN）
+ │     ├─ lowercase_columns 控制字段名大小写
+ │     └─ 在 PostgreSQL 中创建表（skip_existing_tables 控制是否跳过）
+ │
+ ├─▶ [Step 2] 同步数据 (data: true)
+ │     ├─ 若 use_table_list=true → 仅同步 table_list 中的表
+ │     ├─ 若 truncate_before_sync=true → 清空目标表
+ │     ├─ 分批读取 MySQL 数据（max_rows_per_batch）
+ │     ├─ 批量插入 PostgreSQL（batch_insert_size）
+ │     └─ 并发线程数由 concurrency 控制
+ │
+ ├─▶ [Step 3] 转换索引 (indexes: true)
+ │     ├─ 主键、唯一索引、普通索引 → 自动重建
+ │     └─ 批量处理（max_indexes_per_batch=20）
+ │
+ ├─▶ [Step 4] 转换函数 (functions: true) ←【V1.0 未完全实现】
+ │     └─ 支持50+函数映射（如 NOW() → CURRENT_TIMESTAMP）
+ │
+ ├─▶ [Step 5] 转换用户 (users: true)
+ │     └─ MySQL 用户 → PostgreSQL 角色（带密码）
+ │
+ ├─▶ [Step 6] 转换表权限 (table_privileges: true)
+ │     └─ GRANT SELECT ON table → GRANT USAGE, SELECT
+ │
+ └─▶ [Final Step] 数据校验 (validate_data: true)
+       ├─ 查询 MySQL 和 PostgreSQL 表行数
+       ├─ 若 truncate_before_sync=true 且不一致 → 报错中断
+       └─ 若 truncate_before_sync=false → 记录不一致表，继续执行
+             └─ 最终输出「数据量校验不一致的表统计」表格
+```
+
 ## 项目独特特点
 
 ### 🚀 高性能设计
