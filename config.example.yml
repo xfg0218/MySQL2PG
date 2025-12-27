@@ -1,0 +1,58 @@
+# MySQL连接配置
+mysql:
+  host: localhost
+  port: 3306
+  username: root
+  password: password
+  database: test_db
+  test_only: false           # 仅测试连接，不执行转换
+  max_open_conns: 100        # 连接池配置的最大连接数，从50提升到100
+  max_idle_conns: 50         # 连接池配置的最大空闲连接数，从20提升到50
+  conn_max_lifetime: 3600    # 连接池配置的最大生命周期（秒）
+
+# PostgreSQL连接配置
+postgresql:
+  host: localhost
+  port: 5432
+  username: postgres
+  password: password
+  database: test_db
+  test_only: false  # 仅测试连接，不执行转换
+  max_conns: 50     # 连接池配置的最大连接数，从20提升到50
+
+# 转换配置
+conversion:
+  # 转换选项，按照以下参数顺序进行
+  options:
+    tableddl: true    # 转换表DDL
+    data: true        # 转换数据（先转DDL后转数据）
+    indexes: true     # 转换索引
+    functions: false   # 转换函数
+    users: true       # 转换用户
+    table_privileges: true # 转换用户在表上的权限
+    use_table_list: false       # 是否使用指定的表列表进行数据同步，其他步骤不生效
+    table_list: [table1,table2]  # 指定要同步的表列表，当use_table_list为true时生效，格式为[table1,table2,...]
+    lowercase_columns: true     # 控制表字段是否需要转小写，true为转小写（默认值），false保持与MySQL字段一致
+    skip_existing_tables: true  # 如果表在PostgreSQL中已存在则跳过，否则创建
+    validate_data: true         # 同步数据后验证数据一致性
+    truncate_before_sync: true  # 同步前是否清空表数据
+  
+  # 限制配置
+  limits:
+    concurrency: 10             # 并发数限制
+    bandwidth_mbps: 100         # 网络带宽限制(Mbps)
+    max_ddl_per_batch: 10       # 一次性转换DDL的个数限制
+    max_functions_per_batch: 5  # 一次性转换function的个数限制
+    max_indexes_per_batch: 20   # 一次性转换index的个数限制
+    max_users_per_batch: 10     # 一次性转换用户的个数限制
+    max_rows_per_batch: 1000    # 一次性同步数据的行数限制
+    batch_insert_size: 1000     # 批量插入的大小
+
+# 运行配置
+run:
+  show_progress: true           # 显示任务进度
+  error_log_path: ./errors.log  # 转换异常保存路径
+  enable_file_logging: true     # 是否启用文件日志
+  log_file_path: ./conversion.log  # 日志文件保存路径
+  show_console_logs: true      # 是否在控制台显示日志信息
+  show_log_in_console: false   # 是否在控制台显示Log日志输出
