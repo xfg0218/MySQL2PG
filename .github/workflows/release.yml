@@ -18,10 +18,13 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
+            suffix: ""
           - goos: linux
             goarch: arm64
+            suffix: ""
           - goos: windows
             goarch: amd64
+            suffix: ".exe"
     steps:
       - uses: actions/checkout@v4
 
@@ -38,16 +41,16 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          OUTPUT_NAME="mysql2pg"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            OUTPUT_NAME="${OUTPUT_NAME}.exe"
-          fi
-          go build -o "dist/${{ matrix.goos }}_${{ matrix.goarch }}/${OUTPUT_NAME}" -v ./cmd/main.go
+          OUTPUT="dist/${{ matrix.goos }}_${{ matrix.goarch }}/mysql2pg${{ matrix.suffix }}"
+          go build -o "$OUTPUT" -v ./cmd/main.go
+
+      - name: Debug: Verify binary exists
+        run: ls -l "dist/${{ matrix.goos }}_${{ matrix.goarch }}/"
 
       - name: Upload to existing release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: dist/${{ matrix.goos }}_${{ matrix.goarch }}/*
-          asset_name: mysql2pg_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
+          file: dist/${{ matrix.goos }}_${{ matrix.goarch }}/mysql2pg${{ matrix.suffix }}
+          asset_name: mysql2pg_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.suffix }}
           tag: ${{ github.event.inputs.tag || github.ref_name }}
