@@ -61,7 +61,7 @@ jobs:
             go build -o "$OUTPUT" -v .
           fi
 
-      - name: Debug: Verify binary exists
+      - name: Verify binary exists
         run: ls -l "dist/${{ matrix.goos }}_${{ matrix.goarch }}/"
 
       - name: Upload to existing release
