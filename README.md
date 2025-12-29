@@ -569,6 +569,15 @@ conversion:
 - 在配置文件中设置 `mysql.test_only: true` 或 `postgresql.test_only: true`
 - 运行工具，它会测试连接并显示版本信息，然后退出
 
+### 5. 主键冲突问题
+
+当主键冲突时会提示一下的报错、根据实际情况是否选择跳过或truncate 表数据。
+
+```sql
+错误: 插入表 users_20251201 数据失败: 批量插入失败: ERROR: duplicate key value violates unique constraint "users_20251201_pkey" (SQLSTATE 23505), 数据样本: [[49] [50] [51]]
+转换失败: 批量插入失败: ERROR: duplicate key value violates unique constraint "users_20251201_pkey" (SQLSTATE 23505), 数据样本: [[49] [50] [51]]
+```
+
 ## 总结
 
 MySQL2PG是一款功能强大、性能优异的MySQL到PostgreSQL转换工具，它提供了全面的转换功能和丰富的配置选项，能够满足各种复杂的数据库迁移需求。无论是小型项目还是大型企业级应用，MySQL2PG都能提供高效、可靠的数据库迁移解决方案。
