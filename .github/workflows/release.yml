@@ -42,7 +42,7 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             OUTPUT_NAME="${OUTPUT_NAME}.exe"
           fi
-          go build -o "dist/${{ matrix.goos }}_${{ matrix.goarch }}/${OUTPUT_NAME}" -v ./cmd/mysql2pg
+          go build -o "dist/${{ matrix.goos }}_${{ matrix.goarch }}/${OUTPUT_NAME}" -v ./cmd/main.go
 
       - name: Upload to existing release
         uses: svenstaro/upload-release-action@v2
