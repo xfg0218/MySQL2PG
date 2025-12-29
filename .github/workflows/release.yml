@@ -56,7 +56,7 @@ jobs:
           echo "Building to $OUTPUT"
           # Adjust the build target below if your main is not in ./cmd
           if [ -f ./cmd/main.go ]; then
-            go build -o "$OUTPUT" -v ./cmd/main.go
+            go build -o "$OUTPUT" -v ./cmd
           else
             go build -o "$OUTPUT" -v .
           fi
@@ -71,3 +71,4 @@ jobs:
           file: dist/${{ matrix.goos }}_${{ matrix.goarch }}/mysql2pg${{ matrix.suffix }}
           asset_name: mysql2pg_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.suffix }}
           tag: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+          overwrite: true
