@@ -1,5 +1,9 @@
 name: Build and Release Binaries
 
+# Ensure the workflow has permission to upload release assets
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
@@ -36,13 +40,26 @@ jobs:
       - name: Create dist directory
         run: mkdir -p dist/${{ matrix.goos }}_${{ matrix.goarch }}
 
+      - name: Prepare modules
+        run: |
+          go env
+          go mod download
+
       - name: Build binary
+        # Disable CGO for reproducible cross-compilation unless your project requires cgo
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
         run: |
           OUTPUT="dist/${{ matrix.goos }}_${{ matrix.goarch }}/mysql2pg${{ matrix.suffix }}"
-          go build -o "$OUTPUT" -v ./cmd/main.go
+          echo "Building to $OUTPUT"
+          # Adjust the build target below if your main is not in ./cmd
+          if [ -f ./cmd/main.go ]; then
+            go build -o "$OUTPUT" -v ./cmd/main.go
+          else
+            go build -o "$OUTPUT" -v .
+          fi
 
       - name: Debug: Verify binary exists
         run: ls -l "dist/${{ matrix.goos }}_${{ matrix.goarch }}/"
@@ -53,4 +70,4 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dist/${{ matrix.goos }}_${{ matrix.goarch }}/mysql2pg${{ matrix.suffix }}
           asset_name: mysql2pg_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.suffix }}
-          tag: ${{ github.event.inputs.tag || github.ref_name }}
+          tag: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
