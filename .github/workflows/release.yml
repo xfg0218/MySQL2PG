@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to upload assets to (e.g., v1.0)'
+        description: 'Release tag to upload assets to (e.g., V1.0)'
         required: true
-        default: 'v1.0'
+        default: 'V1.0'
   release:
     types: [published]
 
