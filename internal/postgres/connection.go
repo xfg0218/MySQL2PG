@@ -190,13 +190,13 @@ func (c *Connection) BatchInsertDataWithTransaction(tx pgx.Tx, tableName string,
 	var batchValues []interface{}
 	var rowCount int
 
-	// 增加批量大小，减少批次数量
-	effectiveBatchSize := 20000 // 调整为更适中的值
-	if batchSize > effectiveBatchSize {
-		effectiveBatchSize = batchSize
+	// 严格使用传入的batchSize参数，不使用硬编码默认值
+	effectiveBatchSize := batchSize
+	if effectiveBatchSize <= 0 {
+		effectiveBatchSize = 10000 // 确保至少有一个合理的默认值
 	}
 
-	// 预分配更大的切片容量，减少内存分配
+	// 预分配切片容量，减少内存分配
 	batchValues = make([]interface{}, 0, effectiveBatchSize*len(columns))
 
 	// 重用values和valuePtrs切片，减少内存分配
@@ -218,11 +218,12 @@ func (c *Connection) BatchInsertDataWithTransaction(tx pgx.Tx, tableName string,
 		rowCount++
 
 		// 当达到批量大小时执行插入
-		if rowCount%effectiveBatchSize == 0 {
+		if rowCount == effectiveBatchSize {
 			if err := c.executeBatchInsert(tx, ctx, tableName, columnsStr, columns, batchValues); err != nil {
 				return err
 			}
 			batchValues = batchValues[:0] // 重置切片，保留容量
+			rowCount = 0
 		}
 	}
 
@@ -242,11 +243,16 @@ func (c *Connection) BatchInsertDataWithTransaction(tx pgx.Tx, tableName string,
 
 // executeBatchInsert 执行批量插入操作
 func (c *Connection) executeBatchInsert(tx pgx.Tx, ctx context.Context, tableName, columnsStr string, columns []string, values []interface{}) error {
-	// 计算批次大小，使用更大的默认值
-	maxRowsPerBatch := 20000 // 调整为更适中的值
+	// 计算批次大小，确保总参数数量不超过PostgreSQL的限制(65535)
+	columnCount := len(columns)
+	// 计算每个批次的最大行数，确保总参数数量不超过65535
+	maxRowsPerBatch := 65535 / columnCount
+	if maxRowsPerBatch == 0 {
+		maxRowsPerBatch = 1 // 确保至少有一行
+	}
 
 	// 计算总共有多少行数据
-	totalRows := len(values) / len(columns)
+	totalRows := len(values) / columnCount
 
 	// 分批执行
 	for i := 0; i < totalRows; i += maxRowsPerBatch {
@@ -256,8 +262,8 @@ func (c *Connection) executeBatchInsert(tx pgx.Tx, ctx context.Context, tableNam
 		}
 
 		// 计算当前批次的起始和结束索引
-		startIdx := i * len(columns)
-		endIdx := end * len(columns)
+		startIdx := i * columnCount
+		endIdx := end * columnCount
 
 		// 获取当前批次的值
 		batchValues := values[startIdx:endIdx]
@@ -265,7 +271,7 @@ func (c *Connection) executeBatchInsert(tx pgx.Tx, ctx context.Context, tableNam
 		// 构建VALUES部分
 		var valuesParts strings.Builder
 		// 预分配更大的内存
-		valuesParts.Grow((end - i) * (len(columns)*4 + 5)) // 增加预分配空间
+		valuesParts.Grow((end - i) * (columnCount*4 + 5)) // 增加预分配空间
 
 		// 生成参数占位符
 		for row := 0; row < end-i; row++ {
@@ -273,12 +279,12 @@ func (c *Connection) executeBatchInsert(tx pgx.Tx, ctx context.Context, tableNam
 				valuesParts.WriteString(", ")
 			}
 			valuesParts.WriteString("(")
-			for col := 0; col < len(columns); col++ {
+			for col := 0; col < columnCount; col++ {
 				if col > 0 {
 					valuesParts.WriteString(", ")
 				}
 				valuesParts.WriteString("$")
-				valuesParts.WriteString(strconv.Itoa(row*len(columns) + col + 1))
+				valuesParts.WriteString(strconv.Itoa(row*columnCount + col + 1))
 			}
 			valuesParts.WriteString(")")
 		}
@@ -422,25 +428,15 @@ func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, tableName string, columns []string, batchSize int, primaryKey string, rows *sql.Rows) (int, interface{}, error) {
 	ctx := context.Background()
 
-	// 构建列名字符串
-	var quotedColumns []string
-	for _, col := range columns {
-		quotedColumns = append(quotedColumns, fmt.Sprintf(`"%s"`, col))
-	}
-	columnsStr := strings.Join(quotedColumns, ", ")
-
 	// 准备批量插入
-	var batchValues []interface{}
 	var rowCount int
+	var totalRows int
 
-	// 增加批量大小，减少批次数量
-	effectiveBatchSize := 20000 // 调整为更适中的值
-	if batchSize > effectiveBatchSize {
-		effectiveBatchSize = batchSize
+	// 严格使用传入的batchSize参数，不使用硬编码默认值
+	effectiveBatchSize := batchSize
+	if effectiveBatchSize <= 0 {
+		effectiveBatchSize = 10000 // 确保至少有一个合理的默认值
 	}
-
-	// 预分配更大的切片容量，减少内存分配
-	batchValues = make([]interface{}, 0, effectiveBatchSize*len(columns))
 
 	// 跟踪最后一个主键值
 	var lastValue interface{}
@@ -463,6 +459,9 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 		valuePtrs[i] = &values[i]
 	}
 
+	// 使用pgx的CopyFrom函数进行高效批量插入
+	copyRows := make([][]interface{}, 0, effectiveBatchSize)
+
 	// 处理数据行
 	for rows.Next() {
 		// 扫描行数据
@@ -475,24 +474,43 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 			lastValue = values[primaryKeyIndex]
 		}
 
-		// 添加到批量值中
-		batchValues = append(batchValues, values...)
-		rowCount++
-
-		// 当达到批量大小时执行插入
-		if rowCount%effectiveBatchSize == 0 {
-			if err := c.executeBatchInsert(tx, ctx, tableName, columnsStr, columns, batchValues); err != nil {
-				return 0, nil, err
+		// 复制当前行的值到新的切片并进行类型转换
+		rowValues := make([]interface{}, len(values))
+		for i, v := range values {
+			// 进行数据类型转换，处理MySQL和PostgreSQL之间的类型差异
+			switch val := v.(type) {
+			case []byte:
+				// 将[]byte转换为字符串，pgx会自动处理后续的类型转换
+				rowValues[i] = string(val)
+			default:
+				// 其他类型保持不变
+				rowValues[i] = val
 			}
-			// 重置切片，保留容量
-			batchValues = batchValues[:0]
+		}
+		copyRows = append(copyRows, rowValues)
+
+		rowCount++
+		totalRows++
+
+		// 当达到批量大小时执行CopyFrom
+		if rowCount == effectiveBatchSize {
+			// 执行CopyFrom
+			_, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, columns, pgx.CopyFromRows(copyRows))
+			if err != nil {
+				return 0, nil, fmt.Errorf("CopyFrom执行失败: %w", err)
+			}
+
+			// 重置切片和计数器
+			copyRows = make([][]interface{}, 0, effectiveBatchSize)
+			rowCount = 0
 		}
 	}
 
 	// 执行剩余的数据
-	if len(batchValues) > 0 {
-		if err := c.executeBatchInsert(tx, ctx, tableName, columnsStr, columns, batchValues); err != nil {
-			return 0, nil, err
+	if rowCount > 0 {
+		_, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, columns, pgx.CopyFromRows(copyRows))
+		if err != nil {
+			return 0, nil, fmt.Errorf("CopyFrom执行失败: %w", err)
 		}
 	}
 
@@ -509,5 +527,5 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 		}
 	}
 
-	return rowCount, lastValue, nil
+	return totalRows, lastValue, nil
 }

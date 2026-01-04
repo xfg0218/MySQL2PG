@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/yourusername/mysql2pg/internal/config"
-	"github.com/yourusername/mysql2pg/internal/converter"
+	converter "github.com/yourusername/mysql2pg/internal/converter/postgres"
 	"github.com/yourusername/mysql2pg/internal/mysql"
-	"github.com/yourusername/mysql2pg/internal/postgres"
+	pgconn "github.com/yourusername/mysql2pg/internal/postgres"
 )
 
 func main() {
@@ -51,7 +51,7 @@ func main() {
 	}
 
 	// 测试PostgreSQL连接
-	if err := postgres.TestConnection(&cfg.PostgreSQL); err != nil {
+	if err := pgconn.TestConnection(&cfg.PostgreSQL); err != nil {
 		fmt.Printf("PostgreSQL连接测试失败: %v\n", err)
 		os.Exit(1)
 	}
@@ -64,7 +64,7 @@ func main() {
 	}
 	defer mysqlConn.Close()
 
-	postgresConn, err := postgres.NewConnection(&cfg.PostgreSQL)
+	postgresConn, err := pgconn.NewConnection(&cfg.PostgreSQL)
 	if err != nil {
 		fmt.Printf("创建PostgreSQL连接失败: %v\n", err)
 		os.Exit(1)
@@ -84,14 +84,15 @@ func main() {
 		postgresVersion = "未知"
 	}
 
-	fmt.Println("\n+-------------------------------------------------------------+")
-
 	// 显示测试连接成功信息
-	if cfg.MySQL.TestOnly {
-		fmt.Println("1. MySQL连接测试完成，版本信息已显示，退出程序。")
-	}
-	if cfg.PostgreSQL.TestOnly {
-		fmt.Println("2. PostgreSQL 连接测试完成，版本信息已显示，退出程序。")
+	if cfg.MySQL.TestOnly || cfg.PostgreSQL.TestOnly {
+		fmt.Println("\n+-------------------------------------------------------------+")
+		if cfg.MySQL.TestOnly {
+			fmt.Println("1. MySQL连接测试完成，版本信息已显示，退出程序。")
+		}
+		if cfg.PostgreSQL.TestOnly {
+			fmt.Println("2. PostgreSQL 连接测试完成，版本信息已显示，退出程序。")
+		}
 	}
 
 	// 使用表格形式显示版本信息
@@ -131,18 +132,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer manager.Close()
-
-	// 如果仅测试MySQL连接，退出
-	if cfg.MySQL.TestOnly {
-		manager.Log("MySQL连接测试完成，退出程序。")
-		return
-	}
-
-	// 如果仅测试PostgreSQL连接，退出
-	if cfg.PostgreSQL.TestOnly {
-		manager.Log("PostgreSQL连接测试完成，退出程序。")
-		return
-	}
 
 	if err := manager.Run(); err != nil {
 		fmt.Printf("转换失败: %v\n", err)

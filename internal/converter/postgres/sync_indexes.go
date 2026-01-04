@@ -1,0 +1,46 @@
+package postgres
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/yourusername/mysql2pg/internal/mysql"
+)
+
+// ConvertIndexDDL 将MySQL索引DDL转换为PostgreSQL索引DDL
+func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns bool) (string, error) {
+	var uniqueClause string
+	if index.IsUnique {
+		uniqueClause = "UNIQUE "
+	}
+
+	// 为列名添加双引号，保持大小写一致
+	var quotedColumns []string
+	for _, column := range index.Columns {
+		// 处理pri_key特殊情况
+		if strings.ToLower(column) == "pri_key" {
+			continue
+		}
+
+		// 处理列名大小写
+		if lowercaseColumns {
+			column = strings.ToLower(column)
+		}
+
+		quotedColumns = append(quotedColumns, fmt.Sprintf(`"%s"`, column))
+	}
+
+	// 如果没有有效的列名，则跳过这个索引的创建
+	// 这通常是因为索引只包含pri_key，而PostgreSQL会自动为主键创建索引
+	if len(quotedColumns) == 0 {
+		return "", nil
+	}
+
+	columns := strings.Join(quotedColumns, ", ")
+
+	// 为表名和索引名添加双引号，以处理特殊字符和关键字
+	pgDDL := fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS \"%s\" ON \"%s\" (%s);",
+		uniqueClause, index.Name, tableName, columns)
+
+	return pgDDL, nil
+}
