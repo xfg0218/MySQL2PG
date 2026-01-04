@@ -125,6 +125,16 @@ func main() {
 	fmt.Println("+--------------+----------------------------------------------+")
 	fmt.Println()
 
+	// 如果仅测试MySQL连接，退出
+	if cfg.MySQL.TestOnly {
+		return
+	}
+
+	// 如果仅测试PostgreSQL连接，退出
+	if cfg.PostgreSQL.TestOnly {
+		return
+	}
+
 	// 创建转换管理器并运行转换
 	manager, err := converter.NewManager(mysqlConn, postgresConn, cfg)
 	if err != nil {
