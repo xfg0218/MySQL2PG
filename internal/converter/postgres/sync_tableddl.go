@@ -94,14 +94,15 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 		trimmedLine := strings.TrimSpace(line)
 
 		// 跳过空行、索引定义和外键约束
+		upperTrimmedLine := strings.ToUpper(trimmedLine)
 		if trimmedLine == "" ||
-			strings.HasPrefix(trimmedLine, "KEY ") ||
-			strings.HasPrefix(trimmedLine, "INDEX ") ||
-			strings.HasPrefix(trimmedLine, "UNIQUE KEY ") ||
-			strings.HasPrefix(trimmedLine, "UNIQUE INDEX ") ||
-			strings.Contains(trimmedLine, "FOREIGN KEY") ||
-			strings.Contains(trimmedLine, "USING BTREE") ||
-			strings.Contains(trimmedLine, "USING HASH") ||
+			strings.HasPrefix(upperTrimmedLine, "KEY ") ||
+			strings.HasPrefix(upperTrimmedLine, "INDEX ") ||
+			strings.HasPrefix(upperTrimmedLine, "UNIQUE KEY ") ||
+			strings.HasPrefix(upperTrimmedLine, "UNIQUE INDEX ") ||
+			strings.Contains(upperTrimmedLine, "FOREIGN KEY") ||
+			strings.Contains(upperTrimmedLine, "USING BTREE") ||
+			strings.Contains(upperTrimmedLine, "USING HASH") ||
 			// 跳过表级别的引擎和字符集设置
 			strings.Contains(trimmedLine, "engine=") ||
 			strings.Contains(trimmedLine, "ENGINE=") ||
