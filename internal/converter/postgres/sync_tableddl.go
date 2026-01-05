@@ -154,8 +154,12 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 		trimmedLine = strings.ReplaceAll(trimmedLine, " unsigned", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " UNSIGNED", "")
 
-		// 处理列注释（PostgreSQL的注释语法不同，暂时移除注释）
-		trimmedLine = strings.Split(trimmedLine, "COMMENT")[0]
+		// 移除列注释 COMMENT '...' 或 COMMENT "..." 格式
+		// 允许注释后面有逗号和空白字符，使用更精确的匹配避免匹配列名中的 COMMENT（如 COMMENTINFO）
+		// 匹配模式：COMMENT '注释内容' 或 COMMENT "注释内容"，后面可能有逗号和空白
+		// 使用 (?i) 忽略大小写，因为 MySQL 的 COMMENT 关键字可能是小写
+		reComment := regexp.MustCompile(`(?i)\s+comment\s+'[^']*'\s*,?\s*$|\s+comment\s+"[^"]*"\s*,?\s*$`)
+		trimmedLine = reComment.ReplaceAllString(trimmedLine, "")
 		trimmedLine = strings.TrimSpace(trimmedLine)
 
 		// 移除末尾的逗号
