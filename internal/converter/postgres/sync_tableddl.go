@@ -154,8 +154,9 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 		trimmedLine = strings.ReplaceAll(trimmedLine, " unsigned", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " UNSIGNED", "")
 
-		// 处理列注释（PostgreSQL的注释语法不同，暂时移除注释）
-		trimmedLine = strings.Split(trimmedLine, "COMMENT")[0]
+		// 解决mysql字段中有commitinfo字段无法转移的问题
+		reComment := regexp.MustCompile(`(?i)\s+comment\s+'[^']*'\s*,?\s*$|\s+comment\s+"[^"]*"\s*,?\s*$`)
+		trimmedLine = reComment.ReplaceAllString(trimmedLine, "")
 		trimmedLine = strings.TrimSpace(trimmedLine)
 
 		// 移除末尾的逗号
