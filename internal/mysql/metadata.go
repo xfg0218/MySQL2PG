@@ -36,8 +36,10 @@ type IndexInfo struct {
 
 // FunctionInfo 函数信息
 type FunctionInfo struct {
-	Name string
-	DDL  string
+	Name       string
+	DDL        string
+	Parameters string
+	ReturnType string
 }
 
 // UserInfo 用户信息
@@ -95,6 +97,13 @@ func (c *Connection) GetTables() ([]TableInfo, error) {
 			query := fmt.Sprintf("SHOW CREATE TABLE `%s`", name)
 			err := c.db.QueryRowContext(ctx, query).Scan(&name, &ddl)
 			if err != nil {
+				// 检查错误是否是因为权限不足导致的SHOW VIEW命令被拒绝
+				if strings.Contains(err.Error(), "SHOW VIEW command denied") || strings.Contains(err.Error(), "1142") {
+					// 这是一个视图，当前用户没有权限查看其DDL，跳过该视图
+					resultChan <- tableResult{}
+					return
+				}
+				// 其他错误，返回错误信息
 				resultChan <- tableResult{err: fmt.Errorf("获取表DDL失败: %w", err)}
 				return
 			}
@@ -136,7 +145,10 @@ func (c *Connection) GetTables() ([]TableInfo, error) {
 		if result.err != nil {
 			return nil, result.err
 		}
-		tables = append(tables, result.table)
+		// 只添加成功获取到DDL的表
+		if result.table.DDL != "" {
+			tables = append(tables, result.table)
+		}
 	}
 
 	return tables, nil
@@ -242,7 +254,10 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 	// MySQL中获取函数定义
 	rows, err := c.db.Query(`
-		SELECT routine_name, routine_definition 
+		SELECT 
+			routine_name, 
+			routine_definition,
+			data_type
 		FROM information_schema.routines 
 		WHERE routine_schema = DATABASE() AND routine_type = 'FUNCTION'
 	`)
@@ -253,14 +268,39 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 
 	var functions []FunctionInfo
 	for rows.Next() {
-		var funcName, definition string
-		if err := rows.Scan(&funcName, &definition); err != nil {
+		var funcName, definition, returnType string
+		if err := rows.Scan(&funcName, &definition, &returnType); err != nil {
 			return nil, fmt.Errorf("扫描函数信息失败: %w", err)
 		}
 
+		// 从函数体中解析参数
+		// 对于MySQL函数，定义通常是 "函数名(参数列表) 函数体"
+		parameters := ""
+		if idx := strings.Index(definition, "("); idx != -1 {
+			// 寻找匹配的右括号
+			count := 1
+			endIdx := idx + 1
+			for endIdx < len(definition) {
+				if definition[endIdx] == '(' {
+					count++
+				} else if definition[endIdx] == ')' {
+					count--
+					if count == 0 {
+						break
+					}
+				}
+				endIdx++
+			}
+			if endIdx < len(definition) {
+				parameters = definition[idx+1 : endIdx]
+			}
+		}
+
 		functions = append(functions, FunctionInfo{
-			Name: funcName,
-			DDL:  definition,
+			Name:       funcName,
+			DDL:        definition,
+			Parameters: parameters,
+			ReturnType: returnType,
 		})
 	}
 
