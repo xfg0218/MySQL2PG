@@ -1137,9 +1137,11 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 	for _, index := range indexes {
 		semaphore <- struct{}{}
 
+		// 使用小写索引名进行日志输出
+		lowercaseIndexName := strings.ToLower(index.Name)
 		pgDDL, err := ConvertIndexDDL(index.Table, index, m.config.Conversion.Options.LowercaseColumns)
 		if err != nil {
-			errMsg := fmt.Sprintf("转换索引 %s 失败: %v", index.Name, err)
+			errMsg := fmt.Sprintf("转换索引 %s 失败: %v", lowercaseIndexName, err)
 			m.logError(errMsg)
 			<-semaphore
 			m.updateProgress()
@@ -1162,9 +1164,9 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 			// 检查是否是索引已存在的错误
 			if strings.Contains(err.Error(), "duplicate key value violates unique constraint") ||
 				strings.Contains(err.Error(), "already exists") {
-				m.Log("索引 %s 已存在，跳过创建", index.Name)
+				m.Log("索引 %s 已存在，跳过创建", lowercaseIndexName)
 			} else {
-				errMsg := fmt.Sprintf("执行索引 %s DDL失败: %v", index.Name, err)
+				errMsg := fmt.Sprintf("执行索引 %s DDL失败: %v", lowercaseIndexName, err)
 				m.logError(errMsg)
 				<-semaphore
 				m.updateProgress()
@@ -1181,7 +1183,7 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
 			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, index.Name)
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, lowercaseIndexName)
 			m.mutex.Unlock()
 		}
 
