@@ -86,6 +86,9 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 	var primaryKeyColumn string
 	var re *regexp.Regexp
 
+	// 存储列注释，用于生成 COMMENT ON COLUMN 语句
+	var columnComments []string
+
 	// 存储列名映射，用于保持大小写一致
 	columnNames := make(map[string]string)
 
@@ -156,7 +159,17 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 		trimmedLine = strings.ReplaceAll(trimmedLine, " UNSIGNED", "")
 
 		// 解决mysql字段中有commitinfo字段无法转移的问题
-		reComment := regexp.MustCompile(`(?i)\s+comment\s+'[^']*'\s*,?\s*$|\s+comment\s+"[^"]*"\s*,?\s*$`)
+		// 先提取COMMENT文本
+		reComment := regexp.MustCompile(`(?i)\s+comment\s+'([^']*)'\s*,?\s*$|\s+comment\s+"([^"]*)"\s*,?\s*$`)
+		commentMatch := reComment.FindStringSubmatch(trimmedLine)
+		var commentText string
+		if commentMatch != nil {
+			if commentMatch[1] != "" {
+				commentText = commentMatch[1]
+			} else if commentMatch[2] != "" {
+				commentText = commentMatch[2]
+			}
+		}
 		trimmedLine = reComment.ReplaceAllString(trimmedLine, "")
 		trimmedLine = strings.TrimSpace(trimmedLine)
 
@@ -209,6 +222,19 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 
 		// 存储列名，保持原始大小写
 		columnNames[strings.ToLower(columnName)] = columnName
+
+		// 保存列注释（如果有）
+		if commentText != "" {
+			// 处理列名大小写
+			columnNameForComment := columnName
+			if lowercaseColumns {
+				columnNameForComment = strings.ToLower(columnNameForComment)
+			}
+			// 生成 PostgreSQL COMMENT ON COLUMN 语句
+			escapedComment := strings.ReplaceAll(commentText, "'", "''")
+			commentSQL := fmt.Sprintf(`COMMENT ON COLUMN "%s"."%s" IS '%s';`, tableName, columnNameForComment, escapedComment)
+			columnComments = append(columnComments, commentSQL)
+		}
 
 		// 处理自增主键（在替换数据类型之前）
 		if strings.Contains(typeDefinition, "AUTO_INCREMENT") {
@@ -505,6 +531,12 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 
 	result.WriteString(`
 )`)
+
+	// 添加列注释 COMMENT ON COLUMN 语句
+	for _, comment := range columnComments {
+		result.WriteString(fmt.Sprintf(`
+%s`, comment))
+	}
 
 	finalDDL := result.String()
 
