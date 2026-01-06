@@ -86,9 +86,6 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 	var primaryKeyColumn string
 	var re *regexp.Regexp
 
-	// 存储列注释，用于生成 COMMENT ON COLUMN 语句
-	var columnComments []string
-
 	// 存储列名映射，用于保持大小写一致
 	columnNames := make(map[string]string)
 
@@ -98,11 +95,12 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 
 		// 跳过空行、索引定义和外键约束
 		upperTrimmedLine := strings.ToUpper(trimmedLine)
+		// 使用正则表达式更精确地匹配索引定义
+		// 索引定义必须以 KEY/INDEX 开头，索引名后面必须有左括号，且左括号后紧跟列名
+		// 列名必须以字母或下划线开头（不能是类型参数如 20、255 等）
+		indexPattern := regexp.MustCompile(`^(KEY|INDEX|UNIQUE KEY|UNIQUE INDEX)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([a-zA-Z_]`)
 		if trimmedLine == "" ||
-			strings.HasPrefix(upperTrimmedLine, "KEY ") ||
-			strings.HasPrefix(upperTrimmedLine, "INDEX ") ||
-			strings.HasPrefix(upperTrimmedLine, "UNIQUE KEY ") ||
-			strings.HasPrefix(upperTrimmedLine, "UNIQUE INDEX ") ||
+			indexPattern.MatchString(upperTrimmedLine) ||
 			strings.Contains(upperTrimmedLine, "FOREIGN KEY") ||
 			strings.Contains(upperTrimmedLine, "USING BTREE") ||
 			strings.Contains(upperTrimmedLine, "USING HASH") ||
@@ -159,17 +157,8 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 		trimmedLine = strings.ReplaceAll(trimmedLine, " UNSIGNED", "")
 
 		// 解决mysql字段中有commitinfo字段无法转移的问题
-		// 先提取COMMENT文本
-		reComment := regexp.MustCompile(`(?i)\s+comment\s+'([^']*)'\s*,?\s*$|\s+comment\s+"([^"]*)"\s*,?\s*$`)
-		commentMatch := reComment.FindStringSubmatch(trimmedLine)
-		var commentText string
-		if commentMatch != nil {
-			if commentMatch[1] != "" {
-				commentText = commentMatch[1]
-			} else if commentMatch[2] != "" {
-				commentText = commentMatch[2]
-			}
-		}
+		// 移除COMMENT子句，支持任意位置的COMMENT和转义的单引号
+		reComment := regexp.MustCompile(`(?i)\s+comment\s+'((?:[^']|'')*)'\s*,?\s*|\s+comment\s+"([^"]*)"\s*,?\s*`)
 		trimmedLine = reComment.ReplaceAllString(trimmedLine, "")
 		trimmedLine = strings.TrimSpace(trimmedLine)
 
@@ -222,19 +211,6 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 
 		// 存储列名，保持原始大小写
 		columnNames[strings.ToLower(columnName)] = columnName
-
-		// 保存列注释（如果有）
-		if commentText != "" {
-			// 处理列名大小写
-			columnNameForComment := columnName
-			if lowercaseColumns {
-				columnNameForComment = strings.ToLower(columnNameForComment)
-			}
-			// 生成 PostgreSQL COMMENT ON COLUMN 语句
-			escapedComment := strings.ReplaceAll(commentText, "'", "''")
-			commentSQL := fmt.Sprintf(`COMMENT ON COLUMN "%s"."%s" IS '%s';`, tableName, columnNameForComment, escapedComment)
-			columnComments = append(columnComments, commentSQL)
-		}
 
 		// 处理自增主键（在替换数据类型之前）
 		if strings.Contains(typeDefinition, "AUTO_INCREMENT") {
@@ -531,12 +507,6 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 
 	result.WriteString(`
 )`)
-
-	// 添加列注释 COMMENT ON COLUMN 语句
-	for _, comment := range columnComments {
-		result.WriteString(fmt.Sprintf(`
-%s`, comment))
-	}
 
 	finalDDL := result.String()
 
