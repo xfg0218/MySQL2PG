@@ -438,14 +438,22 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 		effectiveBatchSize = 10000 // 确保至少有一个合理的默认值
 	}
 
+	// 将所有列名转换为小写，以匹配PostgreSQL的默认行为
+	lowercaseColumns := make([]string, len(columns))
+	for i, col := range columns {
+		lowercaseColumns[i] = strings.ToLower(col)
+	}
+
 	// 跟踪最后一个主键值
 	var lastValue interface{}
 	var primaryKeyIndex int = -1
 
 	// 找到主键列的索引
 	if primaryKey != "" {
-		for i, col := range columns {
-			if col == primaryKey {
+		// 同样将主键名转换为小写进行比较
+		lowercasePrimaryKey := strings.ToLower(primaryKey)
+		for i, col := range lowercaseColumns {
+			if col == lowercasePrimaryKey {
 				primaryKeyIndex = i
 				break
 			}
@@ -494,8 +502,8 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 
 		// 当达到批量大小时执行CopyFrom
 		if rowCount == effectiveBatchSize {
-			// 执行CopyFrom
-			_, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, columns, pgx.CopyFromRows(copyRows))
+			// 执行CopyFrom，使用转换后的小写列名
+			_, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, lowercaseColumns, pgx.CopyFromRows(copyRows))
 			if err != nil {
 				return 0, nil, fmt.Errorf("CopyFrom执行失败: %w", err)
 			}
@@ -508,7 +516,8 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 
 	// 执行剩余的数据
 	if rowCount > 0 {
-		_, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, columns, pgx.CopyFromRows(copyRows))
+		// 执行CopyFrom，使用转换后的小写列名
+		_, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, lowercaseColumns, pgx.CopyFromRows(copyRows))
 		if err != nil {
 			return 0, nil, fmt.Errorf("CopyFrom执行失败: %w", err)
 		}
