@@ -957,7 +957,7 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		// 记录原始MySQL DDL到日志文件
 		m.Log("转换表 %s，MySQL DDL: %s", table.Name, table.DDL)
 
-		pgDDL, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns)
+		pgResult, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns)
 		if err != nil {
 			errMsg := fmt.Sprintf("转换表 %s 失败: %v", table.Name, err)
 			m.logError(errMsg)
@@ -993,7 +993,14 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 
 				m.Log("表 %s 已存在，跳过创建", table.Name)
 
-				// 即使表已存在，也添加注释
+				// 即使表已存在，也添加表注释和列注释
+				if pgResult.TableComment != "" {
+					tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
+						table.Name, strings.ReplaceAll(pgResult.TableComment, "'", "''"))
+					if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
+						m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
+					}
+				}
 				m.addColumnComments(table)
 
 				<-semaphore
@@ -1012,12 +1019,21 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 			}
 		}
 
-		if err := m.postgresConn.ExecuteDDL(pgDDL); err != nil {
+		if err := m.postgresConn.ExecuteDDL(pgResult.DDL); err != nil {
 			errMsg := fmt.Sprintf("执行表 %s DDL失败: %v", table.Name, err)
 			m.logError(errMsg)
 			<-semaphore
 			m.updateProgress()
 			return err
+		}
+
+		// 添加表注释
+		if pgResult.TableComment != "" {
+			tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
+				table.Name, strings.ReplaceAll(pgResult.TableComment, "'", "''"))
+			if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
+				m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
+			}
 		}
 
 		// 为每个列添加注释
@@ -1121,9 +1137,11 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 	for _, index := range indexes {
 		semaphore <- struct{}{}
 
+		// 使用小写索引名进行日志输出
+		lowercaseIndexName := strings.ToLower(index.Name)
 		pgDDL, err := ConvertIndexDDL(index.Table, index, m.config.Conversion.Options.LowercaseColumns)
 		if err != nil {
-			errMsg := fmt.Sprintf("转换索引 %s 失败: %v", index.Name, err)
+			errMsg := fmt.Sprintf("转换索引 %s 失败: %v", lowercaseIndexName, err)
 			m.logError(errMsg)
 			<-semaphore
 			m.updateProgress()
@@ -1146,9 +1164,9 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 			// 检查是否是索引已存在的错误
 			if strings.Contains(err.Error(), "duplicate key value violates unique constraint") ||
 				strings.Contains(err.Error(), "already exists") {
-				m.Log("索引 %s 已存在，跳过创建", index.Name)
+				m.Log("索引 %s 已存在，跳过创建", lowercaseIndexName)
 			} else {
-				errMsg := fmt.Sprintf("执行索引 %s DDL失败: %v", index.Name, err)
+				errMsg := fmt.Sprintf("执行索引 %s DDL失败: %v", lowercaseIndexName, err)
 				m.logError(errMsg)
 				<-semaphore
 				m.updateProgress()
@@ -1165,7 +1183,7 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
 			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, index.Name)
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, lowercaseIndexName)
 			m.mutex.Unlock()
 		}
 

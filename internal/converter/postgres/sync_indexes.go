@@ -38,9 +38,12 @@ func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns b
 
 	columns := strings.Join(quotedColumns, ", ")
 
+	// 将索引名转换为小写，以匹配PostgreSQL的默认行为
+	lowercaseIndexName := strings.ToLower(index.Name)
+
 	// 为表名和索引名添加双引号，以处理特殊字符和关键字
 	pgDDL := fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS \"%s\" ON \"%s\" (%s);",
-		uniqueClause, index.Name, tableName, columns)
+		uniqueClause, lowercaseIndexName, tableName, columns)
 
 	return pgDDL, nil
 }
