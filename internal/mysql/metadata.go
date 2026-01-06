@@ -49,9 +49,27 @@ type UserInfo struct {
 }
 
 // GetTables 获取所有表信息
-func (c *Connection) GetTables() ([]TableInfo, error) {
-	// 获取所有表名
-	rows, err := c.db.Query("SHOW TABLES")
+func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string) ([]TableInfo, error) {
+	// 构建查询表名的SQL语句
+	var query string
+	var args []interface{}
+
+	if skipUseTableList && len(skipTableList) > 0 {
+		// 使用NOT IN子句过滤掉需要排除的表
+		placeholders := make([]string, len(skipTableList))
+		for i := range placeholders {
+			placeholders[i] = "?"
+			args = append(args, skipTableList[i])
+		}
+
+		query = fmt.Sprintf("SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_name NOT IN (%s)", strings.Join(placeholders, ","))
+		args = append([]interface{}{c.config.Database}, args...)
+	} else {
+		// 获取所有表名
+		query = "SHOW TABLES"
+	}
+
+	rows, err := c.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("获取表列表失败: %w", err)
 	}
