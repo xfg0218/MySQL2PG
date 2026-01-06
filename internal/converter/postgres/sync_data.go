@@ -13,8 +13,6 @@ import (
 )
 
 // TableDataInconsistency 表数据不一致信息
-// 注意：此类型是从converter包中移动的
-
 type TableDataInconsistency struct {
 	TableName        string
 	MySQLRowCount    int64

@@ -30,8 +30,7 @@ func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns b
 		quotedColumns = append(quotedColumns, fmt.Sprintf(`"%s"`, column))
 	}
 
-	// 如果没有有效的列名，则跳过这个索引的创建
-	// 这通常是因为索引只包含pri_key，而PostgreSQL会自动为主键创建索引
+	// 如果没有有效的列名，则跳过这个索引的创建，这通常是因为索引只包含pri_key，而PostgreSQL会自动为主键创建索引
 	if len(quotedColumns) == 0 {
 		return "", nil
 	}

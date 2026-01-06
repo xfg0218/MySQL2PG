@@ -1,8 +1,5 @@
 package postgres
 
-// 统一使用小写文件名，避免大小写不敏感文件系统下的冲突
-// 本文件对应原 syncIndexes.go，已重命名为 syncindexes.go
-
 import (
 	"fmt"
 	"strings"
