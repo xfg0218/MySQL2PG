@@ -6,8 +6,13 @@ import (
 	"strings"
 )
 
+type ConvertTableDDLResult struct {
+	DDL          string
+	TableComment string
+}
+
 // ConvertTableDDL 转换MySQL表DDL到PostgreSQL
-func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
+func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLResult, error) {
 	// 移除MySQL反引号
 	mysqlDDL = strings.ReplaceAll(mysqlDDL, "`", "")
 
@@ -24,14 +29,14 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 		// 不是临时表，检查普通表
 		tableNameStart = strings.Index(strings.ToUpper(mysqlDDL), "CREATE TABLE")
 		if tableNameStart == -1 {
-			return "", fmt.Errorf("无效的CREATE TABLE语句")
+			return nil, fmt.Errorf("无效的CREATE TABLE语句")
 		}
 		tableNameStart += len("CREATE TABLE")
 	}
 
 	tableNameEnd := strings.Index(mysqlDDL[tableNameStart:], "(")
 	if tableNameEnd == -1 {
-		return "", fmt.Errorf("无效的CREATE TABLE语句，缺少左括号")
+		return nil, fmt.Errorf("无效的CREATE TABLE语句，缺少左括号")
 	}
 
 	// 提取表名，处理引号包围的情况
@@ -45,18 +50,37 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 
 	// 提取列定义部分
 	columnsStart := tableNameStart + tableNameEnd + 1
-	columnsEnd := strings.LastIndex(mysqlDDL, ")")
-	if columnsEnd == -1 {
-		return "", fmt.Errorf("无效的CREATE TABLE语句，缺少右括号")
+	columnsEnd := 0
+
+	// 提取表注释（在找到右括号之前先处理表注释，避免括号匹配问题）
+	// 先提取表注释，然后再处理列定义
+	tableComment := ""
+	reTableComment := regexp.MustCompile(`(?i)\s+COMMENT\s*=\s*'([^']*)'`)
+	tableCommentMatch := reTableComment.FindStringSubmatch(mysqlDDL)
+	if tableCommentMatch != nil {
+		tableComment = tableCommentMatch[1]
+	}
+
+	// 使用正则表达式来正确找到表定义的结束位置
+	// 匹配 ) 后跟表级选项（ENGINE, CHARSET, COLLATE, ROW_FORMAT, COMMENT等）的模式
+	// 注意：表注释中的右括号不应该被匹配，所以我们需要更精确的匹配
+	reTableEnd := regexp.MustCompile(`(?i)\)\s*(?:ENGINE\s*=\s*\w+\s*)?(?:DEFAULT\s+(?:CHARSET|CHARACTER\s+SET)\s*=\w+\s*)?(?:COLLATE\s*=\w+\s*)?(?:ROW_FORMAT\s*=\w+\s*)?(?:COMMENT\s*=\s*'[^']*'\s*)?;?\s*$`)
+	tableEndMatch := reTableEnd.FindStringIndex(mysqlDDL)
+	if tableEndMatch != nil {
+		// 找到表定义结束位置
+		columnsEnd = tableEndMatch[0]
+	} else {
+		// 如果没有匹配到表级选项，使用原来的方法（找最后一个右括号）
+		columnsEnd = strings.LastIndex(mysqlDDL, ")")
+		if columnsEnd == -1 {
+			return nil, fmt.Errorf("无效的CREATE TABLE语句，缺少右括号")
+		}
 	}
 
 	// 检查是否有表级选项（如engine、charset、row_format等）
-	// 在MySQL中，表定义的结尾通常会有 ) engine=innodb default charset=utf8mb4 collate=utf8mb4_bin;
-	// 我们需要确保在提取列定义时，正确地处理这部分内容
 	columnsDefinition := mysqlDDL[columnsStart:columnsEnd]
 
 	// 移除任何可能的表级别的引擎、字符集和行格式设置
-	// 这些设置可能会被错误地包含在列定义中
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " engine=innodb", "")
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " ENGINE=InnoDB", "")
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " engine=myisam", "")
@@ -512,8 +536,12 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (string, error) {
 
 	// 检查生成的DDL是否有效
 	if (!strings.Contains(finalDDL, "CREATE TABLE") && !strings.Contains(finalDDL, "CREATE TEMPORARY TABLE")) || !strings.Contains(finalDDL, "(") || !strings.Contains(finalDDL, ")") {
-		return "", fmt.Errorf("生成的DDL无效: %s", finalDDL)
+		return nil, fmt.Errorf("生成的DDL无效: %s", finalDDL)
 	}
 
-	return finalDDL, nil
+	// 返回结果，包含DDL和表注释
+	return &ConvertTableDDLResult{
+		DDL:          finalDDL,
+		TableComment: tableComment,
+	}, nil
 }

@@ -957,7 +957,7 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		// 记录原始MySQL DDL到日志文件
 		m.Log("转换表 %s，MySQL DDL: %s", table.Name, table.DDL)
 
-		pgDDL, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns)
+		pgResult, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns)
 		if err != nil {
 			errMsg := fmt.Sprintf("转换表 %s 失败: %v", table.Name, err)
 			m.logError(errMsg)
@@ -993,7 +993,14 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 
 				m.Log("表 %s 已存在，跳过创建", table.Name)
 
-				// 即使表已存在，也添加注释
+				// 即使表已存在，也添加表注释和列注释
+				if pgResult.TableComment != "" {
+					tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
+						table.Name, strings.ReplaceAll(pgResult.TableComment, "'", "''"))
+					if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
+						m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
+					}
+				}
 				m.addColumnComments(table)
 
 				<-semaphore
@@ -1012,12 +1019,21 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 			}
 		}
 
-		if err := m.postgresConn.ExecuteDDL(pgDDL); err != nil {
+		if err := m.postgresConn.ExecuteDDL(pgResult.DDL); err != nil {
 			errMsg := fmt.Sprintf("执行表 %s DDL失败: %v", table.Name, err)
 			m.logError(errMsg)
 			<-semaphore
 			m.updateProgress()
 			return err
+		}
+
+		// 添加表注释
+		if pgResult.TableComment != "" {
+			tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
+				table.Name, strings.ReplaceAll(pgResult.TableComment, "'", "''"))
+			if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
+				m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
+			}
 		}
 
 		// 为每个列添加注释
