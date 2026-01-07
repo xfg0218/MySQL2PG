@@ -30,7 +30,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │     ├─ 主键、唯一索引、普通索引 → 自动重建
  │     └─ 批量处理（max_indexes_per_batch=20）
  │
- ├─▶ [Step 5] 转换函数 (functions: true) ←【V1.0 未完全实现】
+ ├─▶ [Step 5] 转换函数 (functions: true)
  │     └─ 支持50+函数映射（如 NOW() → CURRENT_TIMESTAMP）
  │
  ├─▶ [Step 6] 转换用户 (users: true)
@@ -41,7 +41,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │
  └─▶ [Final Step] 数据校验 (validate_data: true)
        ├─ 查询 MySQL 和 PostgreSQL 表行数
-       ├─ 若 truncate_before_sync=true 且不一致 → 报错中断
+       ├─ 若 truncate_before_sync=true 清除目标表数据继续执行
        └─ 若 truncate_before_sync=false → 记录不一致表，继续执行
              └─ 最终输出「数据量校验不一致的表统计」表格
 ```
