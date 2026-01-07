@@ -11,7 +11,6 @@ import (
 // ConvertFunctionDDL 将MySQL函数转换为PostgreSQL函数
 func ConvertFunctionDDL(mysqlFunc mysql.FunctionInfo) (string, error) {
 	// 从DDL中解析参数列表
-	// 完整的DDL应该是这样的形式: CREATE FUNCTION name(param1 type1, param2 type2) RETURNS return_type ...
 	parameters := ""
 	returnType := "VOID"
 

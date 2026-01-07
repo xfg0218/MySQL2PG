@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/yourusername/mysql2pg/internal/config"
-	// 因避免循环依赖，此处不导入 converter 包，相关功能通过其他方式实现
 	"github.com/yourusername/mysql2pg/internal/mysql"
 	"github.com/yourusername/mysql2pg/internal/postgres"
 )
@@ -178,7 +177,7 @@ func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysq
 	var err error
 
 	if m.config.Conversion.Options.TableDDL || m.config.Conversion.Options.Indexes || m.config.Conversion.Options.Data || m.config.Conversion.Options.Grant {
-		tables, err = m.mysqlConn.GetTables()
+		tables, err = m.mysqlConn.GetTables(m.config.Conversion.Options.SkipUseTableList, m.config.Conversion.Options.SkipTableList)
 		if err != nil {
 			return nil, nil, nil, nil, nil, fmt.Errorf("获取表信息失败: %w", err)
 		}
@@ -293,10 +292,6 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 
 	if allOptionsEnabled {
 		// 所有选项都打开时，按照指定顺序执行
-		if m.config.Run.ShowConsoleLogs {
-			// fmt.Println("\n所有选项都已启用，按照指定顺序执行转换...")
-		}
-
 		// 1. 首先执行表DDL转换
 		if m.config.Conversion.Options.TableDDL && len(filteredTables) > 0 {
 			if m.config.Run.ShowConsoleLogs {
@@ -1236,7 +1231,6 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 }
 
 // syncTableData 同步表数据
-// 注意：此函数已迁移到postgresql包中，这里只是调用包装
 func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	return SyncTableData(
 		m.mysqlConn,

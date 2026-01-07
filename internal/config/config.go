@@ -52,16 +52,18 @@ type OptionsConfig struct {
 	Functions          bool     `mapstructure:"functions"`
 	Indexes            bool     `mapstructure:"indexes"`
 	Users              bool     `mapstructure:"users"`
-	TableDDL           bool     `mapstructure:"tableddl"`             // 转换表DDL
-	Data               bool     `mapstructure:"data"`                 // 转换数据
-	Grant              bool     `mapstructure:"grant"`                // 转换权限
-	TablePrivileges    bool     `mapstructure:"table_privileges"`     // 转换表权限
-	SkipExistingTables bool     `mapstructure:"skip_existing_tables"` // 跳过已存在的表
-	UseTableList       bool     `mapstructure:"use_table_list"`       // 是否使用指定的表列表进行数据同步
-	TableList          []string `mapstructure:"table_list"`           // 指定要同步的表列表
-	ValidateData       bool     `mapstructure:"validate_data"`        // 同步后验证数据一致性
-	LowercaseColumns   bool     `mapstructure:"lowercase_columns"`    // 表字段是否转小写，true代表转小写，默认，false代表与mysql一致
-	TruncateBeforeSync bool     `mapstructure:"truncate_before_sync"` // 同步前是否清空表数据
+	TableDDL           bool     `mapstructure:"tableddl"`               // 转换表DDL
+	Data               bool     `mapstructure:"data"`                   // 转换数据
+	Grant              bool     `mapstructure:"grant"`                  // 转换权限
+	TablePrivileges    bool     `mapstructure:"table_privileges"`       // 转换表权限
+	SkipExistingTables bool     `mapstructure:"skip_existing_tables"`   // 跳过已存在的表
+	UseTableList       bool     `mapstructure:"use_table_list"`         // 是否使用指定的表列表进行数据同步
+	TableList          []string `mapstructure:"table_list"`             // 指定要同步的表列表
+	SkipUseTableList   bool     `mapstructure:"exclude_use_table_list"` // 是否使用跳过表列表
+	SkipTableList      []string `mapstructure:"exclude_table_list"`     // 要跳过的表列表
+	ValidateData       bool     `mapstructure:"validate_data"`          // 同步后验证数据一致性
+	LowercaseColumns   bool     `mapstructure:"lowercase_columns"`      // 表字段是否转小写，true代表转小写，默认，false代表与mysql一致
+	TruncateBeforeSync bool     `mapstructure:"truncate_before_sync"`   // 同步前是否清空表数据
 }
 
 // LimitsConfig 限制配置

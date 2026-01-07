@@ -30,12 +30,14 @@ conversion:
     functions: false   # 转换函数
     users: true       # 转换用户
     table_privileges: true # 转换用户在表上的权限
-    use_table_list: false       # 是否使用指定的表列表进行数据同步，其他步骤不生效
-    table_list: [table1,table2]  # 指定要同步的表列表，当use_table_list为true时生效，格式为[table1,table2,...]
     lowercase_columns: true     # 控制表字段是否需要转小写，true为转小写（默认值），false保持与MySQL字段一致
     skip_existing_tables: true  # 如果表在PostgreSQL中已存在则跳过，否则创建
+    use_table_list: false       # 是否使用指定的表列表进行数据同步，其他步骤不生效
+    table_list: [table1]  # 指定要同步的表列表，当use_table_list为true时生效，格式为[table1,table2,...]
+    exclude_use_table_list: false   # 是否使用跳过表列表，为true时不同步exclude_table_list中的表
+    exclude_table_list: [table1]         # 要跳过的表列表，当exclude_use_table_list为true时生效
     validate_data: true         # 同步数据后验证数据一致性
-    truncate_before_sync: true  # 同步前是否清空表数据
+    truncate_before_sync: false  # 同步前是否清空表数据
   
   # 限制配置
   limits:
