@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 
@@ -12,6 +14,12 @@ import (
 )
 
 func main() {
+
+	// 监听本地 6060 端口，用于性能分析
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
+
 	// 解析命令行参数
 	var configPath string
 	for i := 1; i < len(os.Args); i++ {
