@@ -18,18 +18,9 @@ type Connection struct {
 
 // NewConnection 创建新的MySQL连接
 func NewConnection(config *config.MySQLConfig) (*Connection, error) {
-	// 构建DSN
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s",
+	// 使用无压缩连接
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4",
 		config.Username, config.Password, config.Host, config.Port, config.Database)
-
-	// 添加连接参数
-	if config.ConnectionParams != "" {
-		if strings.HasPrefix(config.ConnectionParams, "?") {
-			dsn += config.ConnectionParams
-		} else {
-			dsn += "?" + config.ConnectionParams
-		}
-	}
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
