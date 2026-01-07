@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 
@@ -12,6 +14,12 @@ import (
 )
 
 func main() {
+
+	// 监听本地 6060 端口，用于性能分析
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
+
 	// 解析命令行参数
 	var configPath string
 	for i := 1; i < len(os.Args); i++ {
@@ -211,11 +219,13 @@ func showHelp() {
 	fmt.Println("  enable_file_logging: 是否启用文件日志 (默认: true)")
 	fmt.Println("  log_file_path: 日志文件保存路径 (默认: ./conversion.log)")
 	fmt.Println("  show_console_logs: 是否在控制台显示日志信息 (默认: true)")
-	fmt.Println("  show_log_in_console: 是否在控制台显示Log日志输出 (默认: false)")
 	fmt.Println()
 	fmt.Println("重要功能说明:")
 	fmt.Println("  1. test_only模式: 仅测试数据库连接，不执行转换，连接测试响应时间<1秒")
 	fmt.Println("  2. 数据校验: 同步数据后验证MySQL和PostgreSQL的数据一致性，确保数据迁移的完整性")
 	fmt.Println("  3. truncate_before_sync选项: 控制是否在同步数据前清空PostgreSQL中的表数据")
 	fmt.Println("  4. 数据不一致表统计: 当数据校验失败时，收集并显示所有数据不一致的表信息")
+	fmt.Println("  5. 零数据处理: 支持零数据行表的完整同步流程，包括进度显示和验证")
+	fmt.Println("  6. 完整的资源清理: 所有数据库连接和资源都会被正确释放，避免资源泄漏")
+	fmt.Println("  7. 完善的性能分析: 监听本地 6060 端口，用于性能分析")
 }

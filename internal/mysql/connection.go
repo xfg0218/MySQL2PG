@@ -28,8 +28,8 @@ func NewConnection(config *config.MySQLConfig) (*Connection, error) {
 	}
 
 	// 优化连接池配置
-	db.SetMaxOpenConns(config.MaxOpenConns)           // 最大打开连接数
-	db.SetMaxIdleConns(config.MaxIdleConns)           // 最大空闲连接数
+	db.SetMaxOpenConns(config.MaxOpenConns)                                    // 最大打开连接数
+	db.SetMaxIdleConns(config.MaxIdleConns)                                    // 最大空闲连接数
 	db.SetConnMaxLifetime(time.Duration(config.ConnMaxLifetime) * time.Second) // 连接最大生命周期
 
 	// 测试连接

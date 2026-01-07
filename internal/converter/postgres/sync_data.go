@@ -20,15 +20,18 @@ type TableDataInconsistency struct {
 }
 
 // SyncTableData 同步表数据
-// 注意：此函数是从manager.go中提取的，参数保持与原函数一致
 func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string), updateProgress func(), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}) error {
+	var wg sync.WaitGroup
+
 	for _, table := range tables {
 		semaphore <- struct{}{}
+		wg.Add(1)
 
 		go func(table mysql.TableInfo) {
 			defer func() {
 				<-semaphore
 				updateProgress()
+				wg.Done()
 			}()
 
 			// 获取表列信息
@@ -47,9 +50,57 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				return
 			}
 
-			// 如果表为空，直接返回
+			// 如果表为空，仍然显示同步信息并更新进度
 			if totalRows == 0 {
+
 				log("表 %s 没有数据，跳过同步", table.Name)
+				// 仍然显示进度信息
+				/***
+				if config.Run.ShowConsoleLogs {
+					mutex.Lock()
+					overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
+					currentTask := *completedTasks + 1
+					bar := strings.Repeat("-", 20) + ">"
+					fmt.Printf("\n进度: %.2f%% (%d/%d) : 同步表 %s [%s] 100.00%%", overallProgress, currentTask, totalTasks, table.Name, bar)
+					mutex.Unlock()
+				}
+				****/
+				// 执行数据校验（如果启用）
+				var validationResult string
+				if config.Conversion.Options.ValidateData {
+					pgRowCount, err := postgresConn.GetTableRowCount(table.Name)
+					if err != nil {
+						errMsg := fmt.Sprintf("校验表 %s 数据失败: %v", table.Name, err)
+						logError(errMsg)
+						return
+					}
+
+					if pgRowCount == totalRows {
+						validationResult = "数据一致"
+					} else {
+						validationResult = fmt.Sprintf("数据不一致")
+						mutex.Lock()
+						*inconsistentTables = append(*inconsistentTables, TableDataInconsistency{
+							TableName:        table.Name,
+							MySQLRowCount:    totalRows,
+							PostgresRowCount: pgRowCount,
+						})
+						mutex.Unlock()
+					}
+				} else {
+					validationResult = "跳过验证"
+				}
+
+				// 显示同步成功信息
+				if config.Run.ShowConsoleLogs {
+					mutex.Lock()
+					overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
+					currentTask := *completedTasks + 1
+					fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 数据成功，共有 0 行数据，%s \n", overallProgress, currentTask, totalTasks, table.Name, validationResult)
+					mutex.Unlock()
+				}
+				// 记录同步完成信息
+				log("表 %s 同步完成，0 行数据，%s", table.Name, validationResult)
 				return
 			}
 
@@ -245,12 +296,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 	}
 
 	// 等待所有goroutine完成
-	for i := 0; i < cap(semaphore); i++ {
-		semaphore <- struct{}{}
-	}
-	for i := 0; i < cap(semaphore); i++ {
-		<-semaphore
-	}
+	wg.Wait()
 
 	return nil
 }

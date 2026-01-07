@@ -1,5 +1,6 @@
 package postgres
 
+// 统一使用小写文件名，避免大小写不敏感文件系统下的冲突
 import (
 	"fmt"
 	"strings"
