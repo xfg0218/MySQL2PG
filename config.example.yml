@@ -9,6 +9,7 @@ mysql:
   max_open_conns: 100        # 连接池配置的最大连接数，从50提升到100
   max_idle_conns: 50         # 连接池配置的最大空闲连接数，从20提升到50
   conn_max_lifetime: 3600    # 连接池配置的最大生命周期（秒）
+  connection_params: charset=utf8mb4&parseTime=false&interpolateParams=true # MySQL连接参数
 
 # PostgreSQL连接配置
 postgresql:

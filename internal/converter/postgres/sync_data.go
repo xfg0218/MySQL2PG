@@ -20,7 +20,6 @@ type TableDataInconsistency struct {
 }
 
 // SyncTableData 同步表数据
-// 注意：此函数是从manager.go中提取的，参数保持与原函数一致
 func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string), updateProgress func(), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}) error {
 	for _, table := range tables {
 		semaphore <- struct{}{}

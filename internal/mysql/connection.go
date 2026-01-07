@@ -18,9 +18,18 @@ type Connection struct {
 
 // NewConnection 创建新的MySQL连接
 func NewConnection(config *config.MySQLConfig) (*Connection, error) {
-	// 使用无压缩连接
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4",
+	// 构建DSN
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s",
 		config.Username, config.Password, config.Host, config.Port, config.Database)
+
+	// 添加连接参数
+	if config.ConnectionParams != "" {
+		if strings.HasPrefix(config.ConnectionParams, "?") {
+			dsn += config.ConnectionParams
+		} else {
+			dsn += "?" + config.ConnectionParams
+		}
+	}
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -28,8 +37,8 @@ func NewConnection(config *config.MySQLConfig) (*Connection, error) {
 	}
 
 	// 优化连接池配置
-	db.SetMaxOpenConns(config.MaxOpenConns)           // 最大打开连接数
-	db.SetMaxIdleConns(config.MaxIdleConns)           // 最大空闲连接数
+	db.SetMaxOpenConns(config.MaxOpenConns)                                    // 最大打开连接数
+	db.SetMaxIdleConns(config.MaxIdleConns)                                    // 最大空闲连接数
 	db.SetConnMaxLifetime(time.Duration(config.ConnMaxLifetime) * time.Second) // 连接最大生命周期
 
 	// 测试连接
