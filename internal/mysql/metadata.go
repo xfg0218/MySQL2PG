@@ -210,8 +210,20 @@ func (c *Connection) getTableColumns(tableName string) ([]ColumnInfo, error) {
 
 // getTableIndexes 获取表的索引信息
 func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
-	// 使用反引号包围表名，以处理包含特殊字符的表名
-	rows, err := c.db.Query(fmt.Sprintf("SHOW INDEX FROM `%s`", tableName))
+	// 使用information_schema.STATISTICS系统表查询索引信息，适配MySQL 8.0
+	query := `
+		SELECT 
+			TABLE_NAME AS table_name,
+			NON_UNIQUE AS non_unique,
+			INDEX_NAME AS index_name,
+			COLUMN_NAME AS column_name
+		FROM information_schema.STATISTICS 
+		WHERE TABLE_SCHEMA = DATABASE() 
+		  AND TABLE_NAME = ?
+		ORDER BY INDEX_NAME, SEQ_IN_INDEX
+	`
+
+	rows, err := c.db.Query(query, tableName)
 	if err != nil {
 		return nil, err
 	}
@@ -221,42 +233,23 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	indexMap := make(map[string]*IndexInfo)
 
 	for rows.Next() {
-		var table, nonUnique, keyName, columnName string
+		var tableName, indexName, columnName string
+		var nonUnique int
 
-		// 只获取我们需要的字段，忽略其他字段
-		// 这里使用sql.RawBytes来处理可变列数的情况
-		values := make([]interface{}, 13) // 标准的13个字段
-		for i := range values {
-			values[i] = &sql.RawBytes{}
-		}
-
-		if err := rows.Scan(values...); err != nil {
+		// 直接扫描需要的字段
+		if err := rows.Scan(&tableName, &nonUnique, &indexName, &columnName); err != nil {
 			return nil, err
 		}
 
-		// 提取我们需要的字段
-		if val, ok := values[0].(*sql.RawBytes); ok && val != nil {
-			table = string(*val)
-		}
-		if val, ok := values[1].(*sql.RawBytes); ok && val != nil {
-			nonUnique = string(*val)
-		}
-		if val, ok := values[2].(*sql.RawBytes); ok && val != nil {
-			keyName = string(*val)
-		}
-		if val, ok := values[4].(*sql.RawBytes); ok && val != nil {
-			columnName = string(*val)
-		}
-
-		if _, exists := indexMap[keyName]; !exists {
-			indexMap[keyName] = &IndexInfo{
-				Name:     keyName,
-				Table:    table,
-				IsUnique: nonUnique == "0",
+		if _, exists := indexMap[indexName]; !exists {
+			indexMap[indexName] = &IndexInfo{
+				Name:     indexName,
+				Table:    tableName,
+				IsUnique: nonUnique == 0,
 			}
 		}
 
-		indexMap[keyName].Columns = append(indexMap[keyName].Columns, columnName)
+		indexMap[indexName].Columns = append(indexMap[indexName].Columns, columnName)
 	}
 
 	// 将map转换为slice
