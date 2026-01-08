@@ -128,18 +128,26 @@ func (c *Connection) GetTableDataWithPagination(tableName string, columns []stri
 
 // GetTablePrimaryKey 获取表的主键列名
 func (c *Connection) GetTablePrimaryKey(tableName string) (string, error) {
-	query := fmt.Sprintf("SHOW KEYS FROM `%s` WHERE Key_name = 'PRIMARY'", tableName)
+	// 使用information_schema.STATISTICS系统表查询主键信息，适配MySQL 8.0
+	query := `
+		SELECT COLUMN_NAME 
+		FROM information_schema.STATISTICS 
+		WHERE TABLE_SCHEMA = DATABASE() 
+		  AND TABLE_NAME = ? 
+		  AND INDEX_NAME = 'PRIMARY'
+		LIMIT 1
+	`
 
-	rows, err := c.db.Query(query)
+	rows, err := c.db.Query(query, tableName)
 	if err != nil {
 		return "", fmt.Errorf("获取表主键失败: %w", err)
 	}
 	defer rows.Close()
 
-	var table, nonUnique, keyName, seqInIndex, columnName, collation, cardinality, subPart, packed, null, indexType, comment, indexComment, visible, expression string
+	var columnName string
 
 	if rows.Next() {
-		if err := rows.Scan(&table, &nonUnique, &keyName, &seqInIndex, &columnName, &collation, &cardinality, &subPart, &packed, &null, &indexType, &comment, &indexComment, &visible, &expression); err != nil {
+		if err := rows.Scan(&columnName); err != nil {
 			return "", fmt.Errorf("扫描主键信息失败: %w", err)
 		}
 		return columnName, nil
