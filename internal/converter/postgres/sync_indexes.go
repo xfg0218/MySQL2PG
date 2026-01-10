@@ -8,7 +8,7 @@ import (
 )
 
 // ConvertIndexDDL 将MySQL索引DDL转换为PostgreSQL索引DDL
-func ConvertIndexDDL(_ string, index mysql.IndexInfo, lowercaseColumns bool) (string, error) {
+func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns bool, columnNamesMap map[string]string) (string, error) {
 	// 检查索引名称是否有效
 	if index.Name == "" {
 		return "", fmt.Errorf("索引名称为空，表：%s", index.Table)
@@ -35,6 +35,13 @@ func ConvertIndexDDL(_ string, index mysql.IndexInfo, lowercaseColumns bool) (st
 		// 检查列名是否有效
 		if column == "" {
 			return "", fmt.Errorf("索引列名为空，索引：%s，表：%s", index.Name, index.Table)
+		}
+
+		// 使用列名映射获取转换后的列名
+		if convertedColumn, ok := columnNamesMap[column]; ok {
+			column = convertedColumn
+			// 移除双引号，因为后面会重新添加
+			column = strings.Trim(column, `"`)
 		}
 
 		// 处理列名大小写
