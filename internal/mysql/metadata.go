@@ -269,9 +269,15 @@ func (c *Connection) getTableColumns(tableName string) ([]ColumnInfo, error) {
 
 // getTableIndexes 获取表的索引信息
 func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
-	// 使用SHOW INDEX FROM语句获取索引信息，避免查询information_schema导致的权限问题
-	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
-	rows, err := c.db.Query(fmt.Sprintf("SHOW INDEX FROM `%s`", tableName))
+	// 使用information_schema.statistics查询索引信息，兼容MySQL 5.7和MySQL 8.0
+	// 只查询需要的字段：table_name, index_name, non_unique, column_name, seq_in_index
+	query := `
+		SELECT table_name, index_name, non_unique, column_name, seq_in_index 
+		FROM information_schema.statistics 
+		WHERE table_schema = ? AND table_name = ? 
+		ORDER BY index_name, seq_in_index
+	`
+	rows, err := c.db.Query(query, c.config.Database, tableName)
 	if err != nil {
 		return nil, err
 	}
@@ -281,33 +287,23 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	indexMap := make(map[string]*IndexInfo)
 
 	for rows.Next() {
-		// 使用字符串指针来存储结果
-		var table, nonUniqueStr, keyName, columnName string
-		var seqInIndex, collation, cardinality, subPart, packed, null, indexType, comment, indexComment, visible, expression sql.NullString
+		var tableName, indexName, columnName string
 		var nonUnique int
+		var seqInIndex sql.NullString
 
-		// SHOW INDEX FROM返回的字段顺序：
-		// Table, Non_unique, Key_name, Seq_in_index, Column_name, Collation, Cardinality, Sub_part, Packed, Null, Index_type, Comment, Index_comment, Visible, Expression
-		if err := rows.Scan(&table, &nonUniqueStr, &keyName, &seqInIndex, &columnName, &collation, &cardinality, &subPart, &packed, &null, &indexType, &comment, &indexComment, &visible, &expression); err != nil {
+		if err := rows.Scan(&tableName, &indexName, &nonUnique, &columnName, &seqInIndex); err != nil {
 			return nil, err
 		}
 
-		// 转换Non_unique为int
-		if nonUniqueStr == "0" {
-			nonUnique = 0
-		} else {
-			nonUnique = 1
-		}
-
-		if _, exists := indexMap[keyName]; !exists {
-			indexMap[keyName] = &IndexInfo{
-				Name:     keyName,
-				Table:    table,
+		if _, exists := indexMap[indexName]; !exists {
+			indexMap[indexName] = &IndexInfo{
+				Name:     indexName,
+				Table:    tableName,
 				IsUnique: nonUnique == 0,
 			}
 		}
 
-		indexMap[keyName].Columns = append(indexMap[keyName].Columns, columnName)
+		indexMap[indexName].Columns = append(indexMap[indexName].Columns, columnName)
 	}
 
 	// 将map转换为slice
