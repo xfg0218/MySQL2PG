@@ -9,6 +9,16 @@ import (
 
 // ConvertIndexDDL 将MySQL索引DDL转换为PostgreSQL索引DDL
 func ConvertIndexDDL(_ string, index mysql.IndexInfo, lowercaseColumns bool) (string, error) {
+	// 检查索引名称是否有效
+	if index.Name == "" {
+		return "", fmt.Errorf("索引名称为空，表：%s", index.Table)
+	}
+
+	// 检查表名是否有效
+	if index.Table == "" {
+		return "", fmt.Errorf("索引所属表名为空，索引：%s", index.Name)
+	}
+
 	var uniqueClause string
 	if index.IsUnique {
 		uniqueClause = "UNIQUE "
@@ -20,6 +30,11 @@ func ConvertIndexDDL(_ string, index mysql.IndexInfo, lowercaseColumns bool) (st
 		// 处理pri_key特殊情况
 		if strings.ToLower(column) == "pri_key" {
 			continue
+		}
+
+		// 检查列名是否有效
+		if column == "" {
+			return "", fmt.Errorf("索引列名为空，索引：%s，表：%s", index.Name, index.Table)
 		}
 
 		// 处理列名大小写
