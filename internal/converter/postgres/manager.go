@@ -26,6 +26,8 @@ type Manager struct {
 	conversionStats []ConversionStageStat
 	// 存储数据校验不一致的表信息
 	inconsistentTables []TableDataInconsistency
+	// 存储表名到列名映射的映射
+	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
 }
 
 // ConversionStageStat 转换阶段统计信息
@@ -36,7 +38,8 @@ type ConversionStageStat struct {
 	ObjectCount int       // 处理的对象数量
 }
 
-// NewManager 创建新的转换管理器
+// NewManager 创建新的转换管理器实例
+// 初始化数据库连接、配置和日志文件
 func NewManager(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config) (*Manager, error) {
 	// 打开错误日志文件
 	errorLogFile, err := os.OpenFile(config.Run.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -54,15 +57,17 @@ func NewManager(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, 
 	}
 
 	return &Manager{
-		mysqlConn:    mysqlConn,
-		postgresConn: postgresConn,
-		config:       config,
-		errorLogFile: errorLogFile,
-		logFile:      logFile,
+		mysqlConn:           mysqlConn,
+		postgresConn:        postgresConn,
+		config:              config,
+		errorLogFile:        errorLogFile,
+		logFile:             logFile,
+		tableColumnNamesMap: make(map[string]map[string]string),
 	}, nil
 }
 
-// Close 关闭管理器
+// Close 关闭转换管理器
+// 关闭打开的日志文件
 func (m *Manager) Close() error {
 	var err error
 	if m.logFile != nil {
@@ -78,7 +83,8 @@ func (m *Manager) Close() error {
 	return err
 }
 
-// Run 开始转换
+// Run 执行完整的转换流程
+// 根据配置执行表DDL、数据、索引、函数、用户和权限的转换
 func (m *Manager) Run() error {
 	m.Log("开始转换MySQL DDL到PostgreSQL...")
 
@@ -196,7 +202,8 @@ func (m *Manager) Run() error {
 	return nil
 }
 
-// getMetadata 获取MySQL元数据
+// getMetadata 获取MySQL数据库的元数据信息
+// 返回表、函数、索引、用户和表权限信息
 func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysql.IndexInfo, []mysql.UserInfo, []mysql.TablePrivInfo, error) {
 	var tables []mysql.TableInfo
 	var functions []mysql.FunctionInfo
@@ -248,7 +255,8 @@ func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysq
 	return tables, functions, indexes, users, tablePrivileges, nil
 }
 
-// calculateTotalTasks 计算总任务数
+// calculateTotalTasks 计算转换的总任务数
+// 根据启用的转换选项和对象数量计算总任务数
 func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) {
 	m.totalTasks = 0
 
@@ -276,7 +284,8 @@ func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysq
 	}
 }
 
-// executeConversion 执行转换
+// executeConversion 执行完整的转换流程
+// 按照配置的顺序执行表DDL、数据、索引、函数、用户和权限的转换
 func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) error {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
@@ -970,7 +979,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 	return nil
 }
 
-// convertTables 转换表
+// convertTables 转换表DDL
+// 将MySQL表结构转换为PostgreSQL表结构并执行
 func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	currentTableIndex := 0
 
@@ -978,17 +988,21 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		semaphore <- struct{}{}
 		currentTableIndex++
 
-		// 记录原始MySQL DDL到日志文件
-		m.Log("转换表 %s，MySQL DDL: %s", table.Name, table.DDL)
-
 		pgResult, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns)
 		if err != nil {
+			// 记录转换失败的 MySQL 表的部分转换结果
+			m.Log("转换表 %s，MySQL DDL: %s", table.Name, table.DDL)
+			// 记录转换失败的 PostgreSQL 表的部分转换结果
+			m.Log("转换表 %s 失败，PostgreSQL DDL: %s", table.Name, pgResult.DDL)
 			errMsg := fmt.Sprintf("转换表 %s 失败: %v", table.Name, err)
 			m.logError(errMsg)
 			<-semaphore
 			m.updateProgress()
 			return err
 		}
+
+		// 存储列名映射，用于后续索引转换
+		m.tableColumnNamesMap[table.Name] = pgResult.ColumnNames
 
 		// 先检查表是否存在
 		tableExists, err := m.postgresConn.TableExists(table.Name)
@@ -1031,7 +1045,6 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 				<-semaphore
 				continue
 			} else {
-				m.Log("表 %s 已存在，正在删除...", table.Name)
 				dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS \"%s\" CASCADE", table.Name)
 				if err := m.postgresConn.ExecuteDDL(dropTableSQL); err != nil {
 					errMsg := fmt.Sprintf("删除表 %s 失败: %v", table.Name, err)
@@ -1040,7 +1053,6 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 					m.updateProgress()
 					return err
 				}
-				m.Log("表 %s 删除成功", table.Name)
 			}
 		}
 
@@ -1104,8 +1116,6 @@ func (m *Manager) processComment(comment string) string {
 func (m *Manager) addColumnComments(table mysql.TableInfo, columnNameMap map[string]string) {
 	for _, column := range table.Columns {
 		if column.Comment != "" {
-			// 记录注释信息
-			m.Log("为表 %s 的列 %s 添加注释: %s", table.Name, column.Name, column.Comment)
 
 			// 处理注释中的特殊字符
 			processedComment := m.processComment(column.Comment)
@@ -1160,16 +1170,12 @@ func (m *Manager) addColumnComments(table mysql.TableInfo, columnNameMap map[str
 								table.Name, column.Name, rawColName, err, commentSQL)
 							continue
 						} else {
-							// 注释添加成功
-							m.Log("为表 %s 的列 %s 添加注释成功", table.Name, column.Name)
 							commentAdded = true
 							break
 						}
 					}
 					continue
 				} else {
-					// 注释添加成功
-					m.Log("为表 %s 的列 %s 添加注释成功", table.Name, column.Name)
 					commentAdded = true
 					break
 				}
@@ -1227,13 +1233,16 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 }
 
 // convertIndexes 转换索引
+// 将MySQL索引转换为PostgreSQL索引并执行
 func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struct{}) error {
 	for _, index := range indexes {
 		semaphore <- struct{}{}
 
 		// 使用小写索引名进行日志输出
 		lowercaseIndexName := strings.ToLower(index.Name)
-		pgDDL, err := ConvertIndexDDL(index.Table, index, m.config.Conversion.Options.LowercaseColumns)
+		// 获取该表的列名映射
+		columnNamesMap := m.tableColumnNamesMap[index.Table]
+		pgDDL, err := ConvertIndexDDL(index.Table, index, m.config.Conversion.Options.LowercaseColumns, columnNamesMap)
 		if err != nil {
 			errMsg := fmt.Sprintf("转换索引 %s 失败: %v", lowercaseIndexName, err)
 			m.logError(errMsg)
