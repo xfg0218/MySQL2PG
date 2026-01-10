@@ -1,4 +1,4 @@
-package main
+package main // 此文件与 test_constraints_column.go 同目录，但后者属于 testconstraints 包，为避免冲突，本文件保留 package main
 
 import (
 	"fmt"
