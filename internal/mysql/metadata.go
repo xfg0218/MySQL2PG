@@ -60,9 +60,9 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string) ([
 	var rows *sql.Rows
 	var err error
 
-	// 方法1: 直接使用SHOW TABLES命令
-	query := "SHOW TABLES"
-	rows, err = c.db.Query(query)
+	// 使用INFORMATION_SCHEMA.TABLES查询，只获取TABLE类型的对象，过滤掉视图
+	query := "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = ? AND table_type = 'BASE TABLE'"
+	rows, err = c.db.Query(query, c.config.Database)
 
 	if err != nil {
 		// 如果失败，返回包含当前用户名的详细错误信息
