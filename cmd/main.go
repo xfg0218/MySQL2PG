@@ -83,13 +83,13 @@ func main() {
 	mysqlVersion, err := mysqlConn.GetVersion()
 	if err != nil {
 		fmt.Printf("获取MySQL版本失败: %v\n", err)
-		mysqlVersion = "未知"
+		os.Exit(1)
 	}
 
 	postgresVersion, err := postgresConn.GetVersion()
 	if err != nil {
 		fmt.Printf("获取PostgreSQL版本失败: %v\n", err)
-		postgresVersion = "未知"
+		os.Exit(1)
 	}
 
 	// 显示测试连接成功信息
