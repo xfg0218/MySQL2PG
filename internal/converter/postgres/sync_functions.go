@@ -32,7 +32,11 @@ func ConvertFunctionDDL(mysqlFunc mysql.FunctionInfo) (string, error) {
 		}
 		if endIdx < len(mysqlFunc.DDL) {
 			parameters = mysqlFunc.DDL[idx+1 : endIdx]
+		} else {
+			return "", fmt.Errorf("无法解析函数 %s 的参数: 找不到匹配的右括号", mysqlFunc.Name)
 		}
+	} else {
+		return "", fmt.Errorf("无法解析函数 %s 的参数: 找不到左括号", mysqlFunc.Name)
 	}
 
 	// 解析返回类型
@@ -50,7 +54,11 @@ func ConvertFunctionDDL(mysqlFunc mysql.FunctionInfo) (string, error) {
 		}
 		if endIdx > startIdx {
 			returnType = mysqlFunc.DDL[startIdx:endIdx]
+		} else {
+			return "", fmt.Errorf("无法解析函数 %s 的返回类型", mysqlFunc.Name)
 		}
+	} else {
+		return "", fmt.Errorf("无法解析函数 %s 的返回类型: 找不到 RETURNS 关键字", mysqlFunc.Name)
 	}
 
 	// 解析函数体
@@ -58,6 +66,8 @@ func ConvertFunctionDDL(mysqlFunc mysql.FunctionInfo) (string, error) {
 	// 找到BEGIN关键字
 	if idx := strings.Index(strings.ToUpper(funcBody), "BEGIN"); idx != -1 {
 		funcBody = funcBody[idx+5:] // "BEGIN"的长度
+	} else {
+		return "", fmt.Errorf("无法解析函数 %s 的函数体: 找不到 BEGIN 关键字", mysqlFunc.Name)
 	}
 	// 移除END关键字
 	funcBody = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(funcBody, "END$$", ""), "END;", ""))
@@ -212,13 +222,13 @@ func ConvertFunctionDDL(mysqlFunc mysql.FunctionInfo) (string, error) {
 		volatility += " "
 	}
 
-	// 构建PostgreSQL函数DDL
+	// 构建PostgreSQL函数DDL，将函数名转换为小写
 	pgDDL := fmt.Sprintf(`
 CREATE OR REPLACE FUNCTION %s(%s)
 RETURNS %s %sAS $$
 %s
 $$ LANGUAGE plpgsql;
-`, mysqlFunc.Name, parameters, returnType, volatility, funcBody)
+`, strings.ToLower(mysqlFunc.Name), parameters, returnType, volatility, funcBody)
 
 	return pgDDL, nil
 }
