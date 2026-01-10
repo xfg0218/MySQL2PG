@@ -74,9 +74,12 @@ func (c *Connection) ExecuteDDL(ddl string) error {
 	// 将DDL转换为小写
 	lowercaseDDL := strings.ToLower(ddl)
 
+	// 将char(0)转换为char(10)，因为PostgreSQL不允许char(0)类型
+	lowercaseDDL = strings.ReplaceAll(lowercaseDDL, "char(0)", "char(10)")
+
 	_, err := c.pool.Exec(ctx, lowercaseDDL)
 	if err != nil {
-		return fmt.Errorf("执行DDL失败: %w, SQL: %s", err, lowercaseDDL)
+		return fmt.Errorf("执行DDL失败: %w, PostgreSQL SQL: %s", err, lowercaseDDL)
 	}
 	return err
 }
@@ -85,6 +88,10 @@ func (c *Connection) ExecuteDDL(ddl string) error {
 func (c *Connection) ExecuteDDLWithTransaction(tx pgx.Tx, ddl string) error {
 	// 将DDL转换为小写
 	lowercaseDDL := strings.ToLower(ddl)
+
+	// 将char(0)转换为char(10)，因为PostgreSQL不允许char(0)类型
+	lowercaseDDL = strings.ReplaceAll(lowercaseDDL, "char(0)", "char(10)")
+
 	_, err := tx.Exec(context.Background(), lowercaseDDL)
 	return err
 }
