@@ -22,6 +22,8 @@ type TableDataInconsistency struct {
 // SyncTableData 同步表数据
 func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string), updateProgress func(), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}) error {
 	var wg sync.WaitGroup
+	// 创建错误通道来捕获goroutine中的错误
+	errorChan := make(chan error, len(tables))
 
 	for _, table := range tables {
 		semaphore <- struct{}{}
@@ -39,6 +41,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			if err != nil {
 				errMsg := fmt.Sprintf("获取表 %s 列信息失败: %v", table.Name, err)
 				logError(errMsg)
+				select {
+				case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+				default:
+				}
 				return
 			}
 
@@ -47,6 +53,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			if err != nil {
 				errMsg := fmt.Sprintf("获取表 %s 行数失败: %v", table.Name, err)
 				logError(errMsg)
+				select {
+				case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+				default:
+				}
 				return
 			}
 
@@ -54,17 +64,6 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			if totalRows == 0 {
 
 				log("表 %s 没有数据，跳过同步", table.Name)
-				// 仍然显示进度信息
-				/***
-				if config.Run.ShowConsoleLogs {
-					mutex.Lock()
-					overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
-					currentTask := *completedTasks + 1
-					bar := strings.Repeat("-", 20) + ">"
-					fmt.Printf("\n进度: %.2f%% (%d/%d) : 同步表 %s [%s] 100.00%%", overallProgress, currentTask, totalTasks, table.Name, bar)
-					mutex.Unlock()
-				}
-				****/
 				// 执行数据校验（如果启用）
 				var validationResult string
 				if config.Conversion.Options.ValidateData {
@@ -72,6 +71,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					if err != nil {
 						errMsg := fmt.Sprintf("校验表 %s 数据失败: %v", table.Name, err)
 						logError(errMsg)
+						select {
+						case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+						default:
+						}
 						return
 					}
 
@@ -111,6 +114,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				if err != nil {
 					errMsg := fmt.Sprintf("开始事务失败: %v", err)
 					logError(errMsg)
+					select {
+					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					default:
+					}
 					return
 				}
 
@@ -119,6 +126,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					errMsg := fmt.Sprintf("清空表 %s 数据失败: %v", table.Name, err)
 					logError(errMsg)
 					tx.Rollback(context.Background())
+					select {
+					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					default:
+					}
 					return
 				}
 
@@ -126,6 +137,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				if err := tx.Commit(context.Background()); err != nil {
 					errMsg := fmt.Sprintf("提交事务失败: %v", err)
 					logError(errMsg)
+					select {
+					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					default:
+					}
 					return
 				}
 			}
@@ -181,6 +196,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				if err != nil {
 					errMsg := fmt.Sprintf("获取表 %s 数据失败: %v", table.Name, err)
 					logError(errMsg)
+					select {
+					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					default:
+					}
 					return
 				}
 
@@ -190,6 +209,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					errMsg := fmt.Sprintf("开始事务失败: %v", err)
 					logError(errMsg)
 					rows.Close()
+					select {
+					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					default:
+					}
 					return
 				}
 
@@ -201,6 +224,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					errMsg := fmt.Sprintf("插入表 %s 数据失败: %v", table.Name, err)
 					logError(errMsg)
 					tx.Rollback(context.Background())
+					select {
+					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					default:
+					}
 					return
 				}
 
@@ -208,6 +235,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				if err := tx.Commit(context.Background()); err != nil {
 					errMsg := fmt.Sprintf("提交事务失败: %v", err)
 					logError(errMsg)
+					select {
+					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					default:
+					}
 					return
 				}
 
@@ -261,6 +292,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				if err != nil {
 					errMsg := fmt.Sprintf("校验表 %s 数据失败: %v", table.Name, err)
 					logError(errMsg)
+					select {
+					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					default:
+					}
 					return
 				}
 
@@ -298,5 +333,13 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 	// 等待所有goroutine完成
 	wg.Wait()
 
-	return nil
+	// 检查是否有错误发生
+	select {
+	case err := <-errorChan:
+		// 返回第一个遇到的错误
+		return err
+	default:
+		// 没有错误发生
+		return nil
+	}
 }
