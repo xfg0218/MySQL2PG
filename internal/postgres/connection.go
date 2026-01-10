@@ -70,16 +70,22 @@ func (c *Connection) BeginTransaction(ctx context.Context) (pgx.Tx, error) {
 // ExecuteDDL 执行DDL语句
 func (c *Connection) ExecuteDDL(ddl string) error {
 	ctx := context.Background()
-	_, err := c.pool.Exec(ctx, ddl)
+
+	// 将DDL转换为小写
+	lowercaseDDL := strings.ToLower(ddl)
+
+	_, err := c.pool.Exec(ctx, lowercaseDDL)
 	if err != nil {
-		return fmt.Errorf("执行DDL失败: %w, SQL: %s", err, ddl)
+		return fmt.Errorf("执行DDL失败: %w, SQL: %s", err, lowercaseDDL)
 	}
 	return err
 }
 
 // ExecuteDDLWithTransaction 在事务中执行DDL语句
 func (c *Connection) ExecuteDDLWithTransaction(tx pgx.Tx, ddl string) error {
-	_, err := tx.Exec(context.Background(), ddl)
+	// 将DDL转换为小写
+	lowercaseDDL := strings.ToLower(ddl)
+	_, err := tx.Exec(context.Background(), lowercaseDDL)
 	return err
 }
 
