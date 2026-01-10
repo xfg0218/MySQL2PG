@@ -84,7 +84,7 @@ func (m *Manager) Run() error {
 
 	// 检查是否启用了表列表功能
 	if m.config.Conversion.Options.UseTableList && len(m.config.Conversion.Options.TableList) > 0 {
-		m.Log("启用了表列表功能，只同步指定表的数据")
+		m.Log("启用了表列表功能，只同步指定的表")
 
 		// 获取MySQL元数据（只需要表信息）
 		allTables, _, _, _, _, err := m.getMetadata()
@@ -108,32 +108,61 @@ func (m *Manager) Run() error {
 		}
 
 		if len(filteredTables) == 0 {
-			m.Log("警告: 表列表中没有指定存在的表，跳过数据同步")
+			m.Log("警告: 表列表中没有指定存在的表，跳过同步")
 			return nil
 		}
 
-		// 计算总任务数（只计算数据同步任务）
-		m.totalTasks = len(filteredTables)
+		// 计算总任务数
+		m.totalTasks = 0
+		if m.config.Conversion.Options.TableDDL {
+			m.totalTasks += len(filteredTables)
+		}
+		if m.config.Conversion.Options.Data {
+			m.totalTasks += len(filteredTables)
+		}
 		m.Log("启用了表列表功能，只同步指定的 %d 个表", len(filteredTables))
 
-		// 执行数据同步
-		if m.config.Run.ShowConsoleLogs {
-			fmt.Println("\n2. 同步表数据...")
+		// 执行DDL转换（如果启用）
+		if m.config.Conversion.Options.TableDDL {
+			if m.config.Run.ShowConsoleLogs {
+				fmt.Println("\n1. 开始转换表结构...")
+			}
+			// 记录DDL转换开始时间
+			startTime := time.Now()
+			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
+			if err := m.convertTables(filteredTables, semaphore); err != nil {
+				return err
+			}
+			// 记录DDL转换结束时间并添加到转换统计中
+			endTime := time.Now()
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "转换表结构",
+				StartTime:   startTime,
+				EndTime:     endTime,
+				ObjectCount: len(filteredTables),
+			})
 		}
-		// 记录数据同步开始时间
-		startTime := time.Now()
-		semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
-		if err := m.syncTableData(filteredTables, semaphore); err != nil {
-			return err
+
+		// 执行数据同步（如果启用）
+		if m.config.Conversion.Options.Data {
+			if m.config.Run.ShowConsoleLogs {
+				fmt.Println("\n2. 同步表数据...")
+			}
+			// 记录数据同步开始时间
+			startTime := time.Now()
+			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
+			if err := m.syncTableData(filteredTables, semaphore); err != nil {
+				return err
+			}
+			// 记录数据同步结束时间并添加到转换统计中
+			endTime := time.Now()
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "同步表数据",
+				StartTime:   startTime,
+				EndTime:     endTime,
+				ObjectCount: len(filteredTables),
+			})
 		}
-		// 记录数据同步结束时间并添加到转换统计中
-		endTime := time.Now()
-		m.conversionStats = append(m.conversionStats, ConversionStageStat{
-			StageName:   "同步表数据",
-			StartTime:   startTime,
-			EndTime:     endTime,
-			ObjectCount: len(filteredTables),
-		})
 
 		// 显示数据不一致表的统计信息
 		m.displayInconsistentTables()
@@ -141,7 +170,7 @@ func (m *Manager) Run() error {
 		// 生成汇总表格
 		m.generateSummaryTable()
 
-		m.Log("表列表数据同步完成!")
+		m.Log("表列表同步完成!")
 		return nil
 	}
 
@@ -990,13 +1019,14 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 
 				// 即使表已存在，也添加表注释和列注释
 				if pgResult.TableComment != "" {
+					processedComment := m.processComment(pgResult.TableComment)
 					tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
-						table.Name, strings.ReplaceAll(pgResult.TableComment, "'", "''"))
+						table.Name, processedComment)
 					if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
 						m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
 					}
 				}
-				m.addColumnComments(table)
+				m.addColumnComments(table, pgResult.ColumnNames)
 
 				<-semaphore
 				continue
@@ -1024,15 +1054,16 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 
 		// 添加表注释
 		if pgResult.TableComment != "" {
+			processedComment := m.processComment(pgResult.TableComment)
 			tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
-				table.Name, strings.ReplaceAll(pgResult.TableComment, "'", "''"))
+				table.Name, processedComment)
 			if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
 				m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
 			}
 		}
 
 		// 为每个列添加注释
-		m.addColumnComments(table)
+		m.addColumnComments(table, pgResult.ColumnNames)
 
 		// 更新进度
 		m.mutex.Lock()
@@ -1053,35 +1084,103 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 	return nil
 }
 
+// processComment 处理注释中的特殊字符
+func (m *Manager) processComment(comment string) string {
+	processedComment := comment
+	// 替换单引号
+	processedComment = strings.ReplaceAll(processedComment, "'", "''")
+	// 替换换行符
+	processedComment = strings.ReplaceAll(processedComment, "\n", "\\n")
+	// 替换回车符
+	processedComment = strings.ReplaceAll(processedComment, "\r", "\\r")
+	// 替换制表符
+	processedComment = strings.ReplaceAll(processedComment, "\t", "\\t")
+	// 替换反斜杠
+	processedComment = strings.ReplaceAll(processedComment, "\\", "\\\\")
+	return processedComment
+}
+
 // addColumnComments 为表的列添加注释
-func (m *Manager) addColumnComments(table mysql.TableInfo) {
+func (m *Manager) addColumnComments(table mysql.TableInfo, columnNameMap map[string]string) {
 	for _, column := range table.Columns {
 		if column.Comment != "" {
 			// 记录注释信息
 			m.Log("为表 %s 的列 %s 添加注释: %s", table.Name, column.Name, column.Comment)
 
-			// 构建注释语句 - 使用小写列名，因为PostgreSQL默认会将未加双引号的列名转换为小写
-			commentSQL := fmt.Sprintf("COMMENT ON COLUMN \"%s\".\"%s\" IS '%s';",
-				table.Name, strings.ToLower(column.Name), strings.ReplaceAll(column.Comment, "'", "''"))
+			// 处理注释中的特殊字符
+			processedComment := m.processComment(column.Comment)
 
-			m.Log("执行注释SQL: %s", commentSQL)
+			// 尝试多种可能的列名格式
+			var columnNames []string
 
-			if err := m.postgresConn.ExecuteDDL(commentSQL); err != nil {
-				// 如果使用小写列名失败，尝试使用原始大小写的列名（可能在DDL中使用了双引号）
-				m.Log("使用小写列名失败，尝试使用原始大小写列名: %s", column.Name)
-				commentSQL := fmt.Sprintf("COMMENT ON COLUMN \"%s\".\"%s\" IS '%s';",
-					table.Name, column.Name, strings.ReplaceAll(column.Comment, "'", "''"))
+			// 首先检查是否有转换后的列名映射
+			if convertedColumnName, exists := columnNameMap[column.Name]; exists {
+				// 使用映射表中的列名（已经包含了正确的格式和双引号）
+				columnNames = []string{convertedColumnName}
+			} else if m.config.Conversion.Options.LowercaseColumns {
+				// 配置为转小写，尝试小写列名和原始大小写列名
+				columnNames = []string{strings.ToLower(column.Name), column.Name}
+			} else {
+				// 保持原始大小写，尝试原始大小写列名和小写列名
+				columnNames = []string{column.Name, strings.ToLower(column.Name)}
+			}
+
+			// 尝试多种列名格式和引用方式
+			commentAdded := false
+			for _, colName := range columnNames {
+				var commentSQL string
+
+				// 检查列名是否已经包含双引号
+				if strings.HasPrefix(colName, `"`) && strings.HasSuffix(colName, `"`) {
+					// 列名已经包含双引号，直接使用
+					commentSQL = fmt.Sprintf("COMMENT ON COLUMN \"%s\".%s IS '%s';",
+						table.Name, colName, processedComment)
+				} else {
+					// 列名不包含双引号，添加双引号
+					commentSQL = fmt.Sprintf("COMMENT ON COLUMN \"%s\".\"%s\" IS '%s';",
+						table.Name, colName, processedComment)
+				}
 
 				if err := m.postgresConn.ExecuteDDL(commentSQL); err != nil {
-					errMsg := fmt.Sprintf("为表 %s 的列 %s 添加注释失败: %v", table.Name, column.Name, err)
-					m.logError(errMsg)
-					// 注释失败不影响整个表的转换，继续处理下一列
+					// 记录尝试失败的信息，包括具体的SQL语句和错误信息
+					m.Log("为表 %s 的列 %s 使用列名 %s 添加注释失败: %v，SQL语句: %s",
+						table.Name, column.Name, colName, err, commentSQL)
+
+					// 如果列名已经包含双引号，再尝试不带双引号的版本
+					if strings.HasPrefix(colName, `"`) && strings.HasSuffix(colName, `"`) {
+						// 去掉双引号
+						rawColName := colName[1 : len(colName)-1]
+						// 尝试不带双引号的列名（PostgreSQL默认不区分大小写）
+						commentSQL = fmt.Sprintf("COMMENT ON COLUMN %s.%s IS '%s';",
+							table.Name, rawColName, processedComment)
+
+						if err := m.postgresConn.ExecuteDDL(commentSQL); err != nil {
+							// 记录尝试失败的信息
+							m.Log("为表 %s 的列 %s 使用列名 %s 添加注释失败: %v，SQL语句: %s",
+								table.Name, column.Name, rawColName, err, commentSQL)
+							continue
+						} else {
+							// 注释添加成功
+							m.Log("为表 %s 的列 %s 添加注释成功", table.Name, column.Name)
+							commentAdded = true
+							break
+						}
+					}
 					continue
+				} else {
+					// 注释添加成功
+					m.Log("为表 %s 的列 %s 添加注释成功", table.Name, column.Name)
+					commentAdded = true
+					break
 				}
-				// 记录使用原始大小写列名成功的日志
-				m.Log("为表 %s 的列 %s (使用原始大小写) 添加注释成功", table.Name, column.Name)
-			} else {
-				m.Log("为表 %s 的列 %s 添加注释成功", table.Name, column.Name)
+			}
+
+			if !commentAdded {
+				// 所有格式都失败，可能是因为该列在实际表中不存在
+				// 记录更清晰的错误信息
+				errMsg := fmt.Sprintf("为表 %s 的列 %s 添加注释失败: 该列可能在实际表中不存在，跳过添加注释",
+					table.Name, column.Name)
+				m.logError(errMsg)
 			}
 		}
 	}

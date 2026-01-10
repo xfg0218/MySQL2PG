@@ -2,19 +2,95 @@ package postgres
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 )
 
+// postgresReservedKeywords PostgreSQL保留关键字列表
+var postgresReservedKeywords = map[string]bool{
+	// 常用数据类型相关
+	"type":        true,
+	"class":       true,
+	"select":      true,
+	"insert":      true,
+	"update":      true,
+	"delete":      true,
+	"from":        true,
+	"where":       true,
+	"and":         true,
+	"or":          true,
+	"not":         true,
+	"in":          true,
+	"is":          true,
+	"null":        true,
+	"default":     true,
+	"primary":     true,
+	"key":         true,
+	"unique":      true,
+	"foreign":     true,
+	"references":  true,
+	"check":       true,
+	"constraint":  true,
+	"table":       true,
+	"column":      true,
+	"view":        true,
+	"index":       true,
+	"sequence":    true,
+	"function":    true,
+	"procedure":   true,
+	"trigger":     true,
+	"schema":      true,
+	"database":    true,
+	"user":        true,
+	"group":       true,
+	"role":        true,
+	"grant":       true,
+	"revoke":      true,
+	"create":      true,
+	"alter":       true,
+	"drop":        true,
+	"truncate":    true,
+	"begin":       true,
+	"commit":      true,
+	"rollback":    true,
+	"savepoint":   true,
+	"transaction": true,
+	"lock":        true,
+	"unlock":      true,
+	"set":         true,
+	"reset":       true,
+	"show":        true,
+	"describe":    true,
+	"explain":     true,
+	"analyze":     true,
+	"vacuum":      true,
+	"cluster":     true,
+	"reindex":     true,
+}
+
+// isPostgresReservedKeyword 检查是否为PostgreSQL保留关键字
+func isPostgresReservedKeyword(keyword string) bool {
+	_, exists := postgresReservedKeywords[strings.ToLower(keyword)]
+	return exists
+}
+
 type ConvertTableDDLResult struct {
-	DDL          string
-	TableComment string
+	DDL            string
+	TableComment   string
+	ColumnNames    map[string]string // 键：原始列名，值：转换后的列名（带双引号格式）
+	ColumnComments map[string]string // 键：原始列名，值：列注释
 }
 
 // ConvertTableDDL 转换MySQL表DDL到PostgreSQL
 func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLResult, error) {
 	// 移除MySQL反引号
 	mysqlDDL = strings.ReplaceAll(mysqlDDL, "`", "")
+
+	// 创建列名映射：原始列名 → 转换后的列名
+	columnNamesMap := make(map[string]string)
+	// 创建列注释映射：原始列名 → 列注释
+	columnCommentsMap := make(map[string]string)
 
 	// 解析表名，先检查是否是临时表
 	var tableNameStart int
@@ -61,19 +137,61 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		tableComment = tableCommentMatch[1]
 	}
 
-	// 使用正则表达式来正确找到表定义的结束位置
-	// 匹配 ) 后跟表级选项（ENGINE, CHARSET, COLLATE, ROW_FORMAT, COMMENT等）的模式
-	// 注意：表注释中的右括号不应该被匹配，所以我们需要更精确的匹配
-	reTableEnd := regexp.MustCompile(`(?i)\)\s*(?:ENGINE\s*=\s*\w+\s*)?(?:DEFAULT\s+(?:CHARSET|CHARACTER\s+SET)\s*=\w+\s*)?(?:COLLATE\s*=\w+\s*)?(?:ROW_FORMAT\s*=\w+\s*)?(?:COMMENT\s*=\s*'[^']*'\s*)?;?\s*$`)
-	tableEndMatch := reTableEnd.FindStringIndex(mysqlDDL)
-	if tableEndMatch != nil {
-		// 找到表定义结束位置
-		columnsEnd = tableEndMatch[0]
-	} else {
-		// 如果没有匹配到表级选项，使用原来的方法（找最后一个右括号）
+	// 使用平衡括号算法来找到表定义的结束位置
+	// 这样可以正确处理注释中的括号和嵌套括号
+	var bracketCount int
+	var inSingleQuote bool
+	var inDoubleQuote bool
+	var escapeNext bool
+
+	// 将MySQL DDL转换为rune数组，以便正确处理中文字符
+	mysqlDDLRunes := []rune(mysqlDDL)
+
+	// 初始括号计数应为1，因为我们已经跳过了表定义的左括号
+	bracketCount = 1
+
+	for i := columnsStart; i < len(mysqlDDLRunes); i++ {
+		char := mysqlDDLRunes[i]
+
+		if escapeNext {
+			escapeNext = false
+			continue
+		}
+
+		switch char {
+		case '\\':
+			escapeNext = true
+		case '\'':
+			if !inDoubleQuote {
+				inSingleQuote = !inSingleQuote
+			}
+		case '"':
+			if !inSingleQuote {
+				inDoubleQuote = !inDoubleQuote
+			}
+		case '(':
+			if !inSingleQuote && !inDoubleQuote {
+				bracketCount++
+			}
+		case ')':
+			if !inSingleQuote && !inDoubleQuote {
+				bracketCount--
+				if bracketCount == 0 {
+					// 找到表定义的结束位置
+					// 将rune索引转换为字节索引
+					columnsEnd = len([]byte(string(mysqlDDLRunes[:i+1])))
+					break
+				}
+			}
+		}
+	}
+
+	if columnsEnd == 0 {
+		// 如果平衡括号算法失败，回退到原来的方法（找最后一个右括号）
 		columnsEnd = strings.LastIndex(mysqlDDL, ")")
 		if columnsEnd == -1 {
-			return nil, fmt.Errorf("无效的CREATE TABLE语句，缺少右括号")
+			// 如果找不到右括号，跳过该表而不是失败整个迁移
+			return nil, nil
 		}
 	}
 
@@ -97,6 +215,8 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " COLLATE=utf8mb4_unicode_ci", "")
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " collate=utf8mb4_general_ci", "")
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " COLLATE=utf8mb4_general_ci", "")
+	columnsDefinition = strings.ReplaceAll(columnsDefinition, " collate=utf8mb4_0900_ai_ci", "")
+	columnsDefinition = strings.ReplaceAll(columnsDefinition, " COLLATE=utf8mb4_0900_ai_ci", "")
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " row_format=compact", "")
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " ROW_FORMAT=COMPACT", "")
 	columnsDefinition = strings.ReplaceAll(columnsDefinition, " row_format=dynamic", "")
@@ -114,33 +234,68 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 	columnNames := make(map[string]string)
 
 	// 处理每一行
+	var incompleteTypeDef bool
+	var partialTypeDef string
+	var partialColumnName string
+	var justRecoveredFromMultiline bool // 移到循环外部，确保作用域正确
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
+		justRecoveredFromMultiline = false
 
-		// 跳过空行、索引定义和外键约束
-		upperTrimmedLine := strings.ToUpper(trimmedLine)
-		// 使用正则表达式更精确地匹配索引定义
-		// 索引定义必须以 KEY/INDEX 开头，索引名后面必须有左括号，且左括号后紧跟列名
-		// 列名必须以字母或下划线开头（不能是类型参数如 20、255 等）
-		indexPattern := regexp.MustCompile(`^(KEY|INDEX|UNIQUE KEY|UNIQUE INDEX)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([a-zA-Z_]`)
-		if trimmedLine == "" ||
-			indexPattern.MatchString(upperTrimmedLine) ||
-			strings.Contains(upperTrimmedLine, "FOREIGN KEY") ||
-			strings.Contains(upperTrimmedLine, "USING BTREE") ||
-			strings.Contains(upperTrimmedLine, "USING HASH") ||
-			// 跳过表级别的引擎和字符集设置
-			strings.Contains(trimmedLine, "engine=") ||
-			strings.Contains(trimmedLine, "ENGINE=") ||
-			strings.Contains(trimmedLine, "charset=") ||
-			strings.Contains(trimmedLine, "CHARSET=") ||
-			strings.Contains(trimmedLine, "collate=") ||
-			strings.Contains(trimmedLine, "COLLATE=") ||
-			// 跳过行格式设置
-			strings.Contains(trimmedLine, "row_format=") ||
-			strings.Contains(trimmedLine, "ROW_FORMAT=") ||
-			// 跳过只有右括号的行
-			trimmedLine == ")" {
-			continue
+		// 处理跨多行的类型定义
+		if incompleteTypeDef {
+			justRecoveredFromMultiline = true
+			// 继续添加到之前的部分类型定义，避免在括号内添加多余空格
+			if strings.HasPrefix(trimmedLine, ")") && strings.HasSuffix(partialTypeDef, "(") {
+				partialTypeDef += trimmedLine // No space between ( and )
+			} else {
+				partialTypeDef += " " + trimmedLine
+			}
+			// 检查是否完成了类型定义（包含了右括号）
+			if strings.Count(partialTypeDef, "(") == strings.Count(partialTypeDef, ")") {
+				// 完整的类型定义已经形成，使用这个完整的定义继续处理
+				// 确保partialColumnName是正确的大小写（根据lowercaseColumns参数）
+				if lowercaseColumns {
+					partialColumnName = strings.ToLower(partialColumnName)
+				}
+				trimmedLine = partialColumnName + " " + partialTypeDef
+				incompleteTypeDef = false
+				partialTypeDef = ""
+				partialColumnName = ""
+			} else {
+				// 类型定义仍然不完整，继续等待下一行
+				continue
+			}
+		}
+
+		// 只有当不是刚刚从多行类型定义恢复时，才检查是否需要跳过
+		// 避免将多行类型定义拼接后的列定义错误地识别为需要跳过的内容
+		if !justRecoveredFromMultiline {
+			// 正常检查是否需要跳过
+			if trimmedLine == "" {
+				continue
+			}
+
+			upperTrimmedLine := strings.ToUpper(trimmedLine)
+			// 使用正则表达式更精确地匹配索引定义
+			// 索引定义必须以 KEY/INDEX 开头，索引名后面必须有左括号，且左括号后紧跟列名
+			// 列名必须以字母或下划线开头（不能是类型参数如 20、255 等）
+			indexPattern := regexp.MustCompile(`^(KEY|INDEX|UNIQUE KEY|UNIQUE INDEX)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([a-zA-Z_]`)
+			// 只跳过明确是索引、外键或表级设置的行
+			// 避免误判列定义为需要跳过的内容
+			if indexPattern.MatchString(upperTrimmedLine) ||
+				strings.HasPrefix(upperTrimmedLine, "FOREIGN KEY") ||
+				strings.HasPrefix(upperTrimmedLine, "CONSTRAINT") ||
+				strings.HasPrefix(upperTrimmedLine, "USING BTREE") ||
+				strings.HasPrefix(upperTrimmedLine, "USING HASH") ||
+				// 跳过表级别的引擎和字符集设置（注意：不要跳过列级别的字符集设置）
+				(strings.Contains(trimmedLine, "engine=") && !strings.Contains(trimmedLine, "`") && !strings.Contains(trimmedLine, " ")) ||
+				(strings.Contains(trimmedLine, "ENGINE=") && !strings.Contains(trimmedLine, "`") && !strings.Contains(trimmedLine, " ")) ||
+				// 列级别的charset和collate会在后面的处理中被移除，所以不要跳过
+				(strings.Contains(trimmedLine, "row_format=") && !strings.Contains(trimmedLine, "`") && !strings.Contains(trimmedLine, " ")) ||
+				(strings.Contains(trimmedLine, "ROW_FORMAT=") && !strings.Contains(trimmedLine, "`") && !strings.Contains(trimmedLine, " ")) {
+				continue
+			}
 		}
 
 		// 处理PRIMARY KEY
@@ -159,11 +314,16 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE utf8_general_ci", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE utf8mb4_bin", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE utf8_bin", "")
+		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE utf8mb3_bin", "")
+		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE utf8mb3_general_ci", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE utf32_bin", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE latin1_bin", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE latin1_swedish_ci", "")
+		trimmedLine = strings.ReplaceAll(trimmedLine, " COLLATE utf8mb4_0900_ai_ci", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " character set utf8", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " CHARACTER SET utf8", "")
+		trimmedLine = strings.ReplaceAll(trimmedLine, " character set utf8mb3", "")
+		trimmedLine = strings.ReplaceAll(trimmedLine, " CHARACTER SET utf8mb3", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " character set latin1", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " CHARACTER SET latin1", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " character set utf16", "")
@@ -172,6 +332,8 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		trimmedLine = strings.ReplaceAll(trimmedLine, " CHARSET=latin1", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " charset=utf16", "")
 		trimmedLine = strings.ReplaceAll(trimmedLine, " CHARSET=utf16", "")
+		trimmedLine = strings.ReplaceAll(trimmedLine, " charset=utf8mb3", "")
+		trimmedLine = strings.ReplaceAll(trimmedLine, " CHARSET=utf8mb3", "")
 
 		// 移除ON UPDATE CURRENT_TIMESTAMP
 		trimmedLine = strings.ReplaceAll(trimmedLine, " ON UPDATE CURRENT_TIMESTAMP", "")
@@ -183,6 +345,16 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		// 解决mysql字段中有commitinfo字段无法转移的问题
 		// 移除COMMENT子句，支持任意位置的COMMENT和转义的单引号
 		reComment := regexp.MustCompile(`(?i)\s+comment\s+'((?:[^']|'')*)'\s*,?\s*|\s+comment\s+"([^"]*)"\s*,?\s*`)
+		commentMatch := reComment.FindStringSubmatch(trimmedLine)
+		var columnComment string
+		if commentMatch != nil {
+			// 捕获单引号或双引号中的注释内容
+			if commentMatch[1] != "" {
+				columnComment = commentMatch[1]
+			} else {
+				columnComment = commentMatch[2]
+			}
+		}
 		trimmedLine = reComment.ReplaceAllString(trimmedLine, "")
 		trimmedLine = strings.TrimSpace(trimmedLine)
 
@@ -190,8 +362,8 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		trimmedLine = strings.TrimSuffix(trimmedLine, ",")
 		trimmedLine = strings.TrimSpace(trimmedLine)
 
-		// 如果处理后行内容为空，跳过
-		if trimmedLine == "" {
+		// 如果处理后行内容为空或者只是右括号，跳过
+		if trimmedLine == "" || trimmedLine == ")" {
 			continue
 		}
 
@@ -207,33 +379,105 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 			if quoteEnd != -1 {
 				columnName = trimmedLine[1 : quoteEnd+1]
 				typeDefinition = strings.TrimSpace(trimmedLine[quoteEnd+2:])
+				// 检查类型定义是否完整（括号是否匹配）
+				if strings.Count(typeDefinition, "(") > strings.Count(typeDefinition, ")") {
+					// 类型定义不完整，需要继续处理下一行
+					incompleteTypeDef = true
+					partialTypeDef = typeDefinition
+					// 确保partialColumnName是正确的大小写（根据lowercaseColumns参数）
+					if lowercaseColumns {
+						partialColumnName = strings.ToLower(columnName)
+					} else {
+						partialColumnName = columnName
+					}
+					continue
+				}
 			}
 		} else {
-			// 没有引号包围的列名，使用正则表达式来解析
-			// 匹配列名（可能包含空格）和类型定义
-			// 假设类型定义以以下关键字之一开头：varchar, char, int, bigint, decimal, timestamp, date, time, text, blob, json, enum
-			re := regexp.MustCompile(`^(.+?)\s+(varchar|char|int|bigint|decimal|timestamp|date|time|text|blob|json|enum|boolean|smallint|double|float|real|bytea|serial|bigserial|integer|smallserial|jsonb|uuid|inet|cidr|macaddr|xml|bit|money|interval|numeric)(.*)$`)
+			// 没有引号包围的列名，使用更健壮的正则表达式来解析
+			// 匹配模式：列名 + 空格 + 类型定义（支持复杂的括号结构）
+			// 这个正则表达式会尽可能精确地分离列名和类型定义
+			re := regexp.MustCompile(`^([a-zA-Z0-9_]+)\s+(.+)$`)
 			match := re.FindStringSubmatch(trimmedLine)
-			if len(match) == 4 {
+			if len(match) == 3 {
 				columnName = strings.TrimSpace(match[1])
-				typeDefinition = match[2] + match[3]
+				typeDefinition = match[2]
+				// 检查类型定义是否完整（括号是否匹配）
+				if strings.Count(typeDefinition, "(") > strings.Count(typeDefinition, ")") {
+					// 类型定义不完整，需要继续处理下一行
+					incompleteTypeDef = true
+					partialTypeDef = typeDefinition
+					// 确保partialColumnName是正确的大小写（根据lowercaseColumns参数）
+					if lowercaseColumns {
+						partialColumnName = strings.ToLower(columnName)
+					} else {
+						partialColumnName = columnName
+					}
+					continue
+				}
 			} else {
 				// 如果正则表达式匹配失败，使用传统的字段分割作为后备方案
 				parts := strings.Fields(trimmedLine)
 				if len(parts) < 2 {
-					continue
+					// 检查是否是PRIMARY KEY定义或其他特殊情况
+					if strings.HasPrefix(strings.ToUpper(trimmedLine), "PRIMARY KEY") {
+						// 处理PRIMARY KEY定义
+						pkMatch := regexp.MustCompile(`PRIMARY KEY\s*\(\s*(\w+)\s*\)`).FindStringSubmatch(trimmedLine)
+						if len(pkMatch) > 1 {
+							primaryKeyColumn = pkMatch[1]
+						}
+						continue
+					} else if strings.HasPrefix(strings.ToUpper(trimmedLine), "KEY") || strings.HasPrefix(strings.ToUpper(trimmedLine), "INDEX") {
+						// 处理索引定义
+						continue
+					} else {
+						// 日志记录匹配失败的行，便于调试
+						log.Printf("警告: 无法解析DDL行的列信息: %s\n", trimmedLine)
+						continue
+					}
 				}
 				columnName = parts[0]
 				typeDefinition = strings.Join(parts[1:], " ")
+				// 检查类型定义是否完整（括号是否匹配）
+				if strings.Count(typeDefinition, "(") > strings.Count(typeDefinition, ")") {
+					// 类型定义不完整，需要继续处理下一行
+					incompleteTypeDef = true
+					partialTypeDef = typeDefinition
+					// 确保partialColumnName是正确的大小写（根据lowercaseColumns参数）
+					if lowercaseColumns {
+						partialColumnName = strings.ToLower(columnName)
+					} else {
+						partialColumnName = columnName
+					}
+					continue
+				}
 			}
 		}
 
-		// 跳过没有类型定义的列
+		// 处理没有类型定义的列
 		if typeDefinition == "" {
-			continue
+			// 为没有类型定义的列提供一个默认类型
+			typeDefinition = "VARCHAR(255)"
+			log.Printf("警告: 为表 %s 的列 %s 使用默认类型 VARCHAR(255)", tableName, columnName)
 		}
 
-		// 存储列名，保持原始大小写
+		// 保存原始列名（在处理大小写之前）
+		originalColumnName := columnName
+
+		// 处理列名大小写（提前处理，确保保存到columnNames映射表的是正确的大小写）
+		if lowercaseColumns {
+			columnName = strings.ToLower(columnName)
+		}
+
+		// 将原始列名和转换后的列名保存到映射中（转换后的列名带有双引号格式）
+		columnNamesMap[originalColumnName] = fmt.Sprintf(`"%s"`, columnName)
+
+		// 如果有列注释，保存到映射中
+		if columnComment != "" {
+			columnCommentsMap[originalColumnName] = columnComment
+		}
+
+		// 存储列名，保持正确的大小写
 		columnNames[strings.ToLower(columnName)] = columnName
 
 		// 处理自增主键（在替换数据类型之前）
@@ -276,19 +520,48 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character set utf8mb4", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character set utf8", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character set utf32", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character set utf8mb3", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character set gb2312", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf8mb4_unicode_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf8mb4_general_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf8_unicode_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf8_general_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf32_bin", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf8mb3_bin", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf8mb3_general_ci", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf8mb3_unicode_ci", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate utf8mb4_0900_ai_ci", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " collate gb2312_chinese_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER SET utf8mb4", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER SET utf8", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER SET utf32", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER SET utf8mb3", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER SET gb2312", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf8mb4_unicode_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf8mb4_general_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf8_unicode_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf8_general_ci", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf32_bin", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf8mb3_bin", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf8mb3_general_ci", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf8mb3_unicode_ci", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE utf8mb4_0900_ai_ci", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " COLLATE gb2312_chinese_ci", "")
+		// 处理没有set关键字的情况
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character utf8mb4", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character utf8", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character utf8mb3", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " character gb2312", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER utf8mb4", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER utf8", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER utf8mb3", "")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " CHARACTER gb2312", "")
+		// 处理直接附加在类型后面的mb3后缀
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, "varchar(", "varchar(")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, "char(", "char(")
+		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, "text", "text")
+		// 移除直接附加在类型后面的mb3
+		lowerTypeDef = regexp.MustCompile(`(varchar\(\d+\)|char\(\d+\)|text)mb3`).ReplaceAllString(lowerTypeDef, "$1")
 
 		// 处理默认值中的等号语法错误
 		// 移除默认值中的多余等号
@@ -383,6 +656,7 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 			"varchar(256)": "VARCHAR(256)",
 			"varchar(64)":  "VARCHAR(64)",
 			"varchar(20)":  "VARCHAR(20)",
+			"varchar(30)":  "VARCHAR(30)",
 			"varchar(100)": "VARCHAR(100)",
 			"varchar(50)":  "VARCHAR(50)",
 			"varchar(128)": "VARCHAR(128)",
@@ -411,23 +685,222 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 			"date":         "DATE",
 			"time":         "TIME",
 			"year":         "INTEGER",
-			// 其他类型
-			"json":  "JSON",
-			"jsonb": "JSONB",
+			// JSON类型 - 确保正确转换
+			"json":       "JSON",
+			"json(1024)": "JSON",
+			"json(2048)": "JSON",
+			"json(4096)": "JSON",
+			"json(8192)": "JSON",
+			"jsonb":      "JSONB",
 			// 处理ENUM类型，转换为VARCHAR
 			"enum": "VARCHAR(255)",
 			// 处理SET类型，转换为VARCHAR
 			"set": "VARCHAR(255)",
+			// 处理BINARY类型
+			"binary(1)":  "BYTEA",
+			"binary(2)":  "BYTEA",
+			"binary(4)":  "BYTEA",
+			"binary(16)": "BYTEA",
+			"binary(32)": "BYTEA",
+			"binary(64)": "BYTEA",
+			// 处理VARBINARY类型
+			"varbinary(1)":    "BYTEA",
+			"varbinary(2)":    "BYTEA",
+			"varbinary(4)":    "BYTEA",
+			"varbinary(8)":    "BYTEA",
+			"varbinary(16)":   "BYTEA",
+			"varbinary(32)":   "BYTEA",
+			"varbinary(6)":    "BYTEA",
+			"varbinary(128)":  "BYTEA",
+			"varbinary(255)":  "BYTEA",
+			"varbinary(512)":  "BYTEA",
+			"varbinary(1024)": "BYTEA",
+			// 处理TEXT类型变体
+			"text(1024)": "TEXT",
+			"text(2048)": "TEXT",
+			"text(4096)": "TEXT",
+			"text(8192)": "TEXT",
+		}
+
+		// 应用类型映射 - 使用有序切片确保处理顺序，先处理更具体的类型
+		typeMappingOrder := []string{
+			// 整数类型 - 先处理带长度的具体类型
+			"bigint(20)", "bigint(11)", "bigint(32)", "bigint(24)", "bigint(128)", "bigint(10)", "bigint(19)", "bigint",
+			"biginteger(20)", "biginteger(255)", "biginteger(19)", "biginteger",
+			"int(11)", "int(4)", "int(2)", "int(5)", "int(10)", "int(20)", "int(255)", "int(32)", "int(8)", "int(60)", "int(3)", "int(25)", "int(22)", "int",
+			"integer(4)", "integer(2)", "integer(10)", "integer(20)", "integer(11)", "integer(22)", "integer",
+			"smallinteger(1)", "smallinteger",
+			"tinyinteger(1)", "tinyinteger",
+			"tinyint(1)", "tinyint(4)", "tinyint(255)", "tinyint",
+			"smallint(6)", "smallint(1)", "smallint",
+			"mediumint(9)", "mediumint",
+			// 浮点数类型 - 保留精度信息
+			"decimal", "double precision", "double", "float",
+			// 字符串类型 - 保留长度信息
+			"char(1)", "varchar(255)", "varchar(256)", "varchar(64)", "varchar(20)", "varchar(30)", "varchar(100)", "varchar(50)", "varchar(128)", "varchar(500)", "varchar(200)", "varchar",
+			"text", "longtext", "mediumtext", "tinytext",
+			// 二进制类型
+			"blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary", "varbinary(64)",
+			// 日期时间类型 - 保留精度信息
+			"datetime(6)", "datetime(3)", "datetime",
+			"timestamp(6)", "timestamp(3)", "timestamp",
+			"date", "time", "year",
+			// JSON类型 - 包含变体
+			"json(1024)", "json(2048)", "json(512)", "json", "jsonb",
+			// 处理ENUM类型，转换为VARCHAR
+			"enum",
+			// 处理SET类型，转换为VARCHAR
+			"set",
 		}
 
 		// 应用类型映射
-		for mysqlType, pgType := range typeMap {
-			if strings.Contains(lowerTypeDef, mysqlType) {
-				// 使用正则表达式确保只替换完整的类型名称
-				re = regexp.MustCompile(`\b` + regexp.QuoteMeta(mysqlType) + `\b`)
+		for _, mysqlType := range typeMappingOrder {
+			pgType, exists := typeMap[mysqlType]
+			if !exists {
+				continue
+			}
+
+			// 特殊处理JSON类型变体（如json(1024)）
+			if strings.HasPrefix(mysqlType, "json") {
+				// 处理带长度的JSON类型变体
+				if strings.Contains(mysqlType, "(") {
+					// 对于具体的json(n)变体，使用精确匹配
+					re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(mysqlType) + `\b`)
+					lowerTypeDef = re.ReplaceAllString(lowerTypeDef, pgType)
+				} else {
+					// 对于json和jsonb，处理所有变体
+					re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(mysqlType) + `\((\d+)\)\b`)
+					lowerTypeDef = re.ReplaceAllString(lowerTypeDef, pgType)
+					// 处理不带精度的JSON类型
+					re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(mysqlType) + `\b`)
+					lowerTypeDef = re.ReplaceAllString(lowerTypeDef, pgType)
+				}
+				// 特殊处理DECIMAL和其他需要保留精度的类型
+			} else if strings.HasPrefix(mysqlType, "decimal") && mysqlType == "decimal" {
+				// 匹配DECIMAL(precision, scale)格式
+				re = regexp.MustCompile(`(?i)\bdecimal\((\d+)(?:,(\d+))?\)\b`)
+				lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
+					match := re.FindStringSubmatch(m)
+					if len(match) >= 2 {
+						if len(match) == 3 && match[2] != "" {
+							// 保留精度和小数位数
+							return fmt.Sprintf("DECIMAL(%s,%s)", match[1], match[2])
+						} else {
+							// 只保留精度
+							return fmt.Sprintf("DECIMAL(%s)", match[1])
+						}
+					}
+					return strings.ToUpper(m)
+				})
+			} else if strings.HasPrefix(mysqlType, "datetime") && mysqlType == "datetime" {
+				// 匹配DATETIME(precision)格式
+				re = regexp.MustCompile(`(?i)\bdatetime\((\d+)\)\b`)
+				lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
+					match := re.FindStringSubmatch(m)
+					if len(match) >= 2 {
+						// 转换为带精度的TIMESTAMP
+						return fmt.Sprintf("TIMESTAMP(%s)", match[1])
+					}
+					return "TIMESTAMP"
+				})
+				// 处理不带精度的DATETIME类型
+				re = regexp.MustCompile(`(?i)\bdatetime\b`)
+				lowerTypeDef = re.ReplaceAllString(lowerTypeDef, "TIMESTAMP")
+			} else if strings.HasPrefix(mysqlType, "timestamp") && mysqlType == "timestamp" {
+				// 匹配TIMESTAMP(precision)格式
+				re = regexp.MustCompile(`(?i)\btimestamp\((\d+)\)\b`)
+				lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
+					match := re.FindStringSubmatch(m)
+					if len(match) >= 2 {
+						// 保留精度
+						return fmt.Sprintf("TIMESTAMP(%s)", match[1])
+					}
+					return "TIMESTAMP"
+				})
+			} else if strings.HasPrefix(mysqlType, "double") || strings.HasPrefix(mysqlType, "float") {
+				// 保留DOUBLE和FLOAT类型的精度信息
+				re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(mysqlType) + `\((\d+)(?:,(\d+))?\)\b`)
+				if re.MatchString(lowerTypeDef) {
+					lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
+						match := re.FindStringSubmatch(m)
+						if len(match) >= 2 {
+							if len(match) == 3 && match[2] != "" {
+								// 保留精度和小数位数
+								if mysqlType == "double" || mysqlType == "double precision" {
+									return fmt.Sprintf("DOUBLE PRECISION(%s,%s)", match[1], match[2])
+								} else {
+									return fmt.Sprintf("REAL(%s,%s)", match[1], match[2])
+								}
+							} else {
+								// 只保留精度
+								if mysqlType == "double" || mysqlType == "double precision" {
+									return fmt.Sprintf("DOUBLE PRECISION(%s)", match[1])
+								} else {
+									return fmt.Sprintf("REAL(%s)", match[1])
+								}
+							}
+						}
+						// 如果没有匹配到精度信息，使用标准类型
+						if mysqlType == "double" || mysqlType == "double precision" {
+							return "DOUBLE PRECISION"
+						} else {
+							return "REAL"
+						}
+					})
+				} else {
+					// 没有精度信息，使用标准类型
+					re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(mysqlType) + `\b`)
+					if mysqlType == "double" || mysqlType == "double precision" {
+						lowerTypeDef = re.ReplaceAllString(lowerTypeDef, "DOUBLE PRECISION")
+					} else {
+						lowerTypeDef = re.ReplaceAllString(lowerTypeDef, "REAL")
+					}
+				}
+			} else if strings.HasPrefix(mysqlType, "varchar") || strings.HasPrefix(mysqlType, "char") {
+				// 保留字符串类型的长度信息
+				re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(mysqlType) + `\b`)
+				lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, strings.ToUpper)
+			} else {
+				// 其他类型使用普通替换
+				re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(mysqlType) + `\b`)
 				lowerTypeDef = re.ReplaceAllString(lowerTypeDef, pgType)
 			}
 		}
+
+		// 修复VARCHAR类型缺少右括号的情况 - 只在确实缺少时添加
+		re = regexp.MustCompile(`(?i)varchar\(\d+`)
+		lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
+			// 查找匹配字符串在原始字符串中的位置
+			index := strings.Index(lowerTypeDef, m)
+			if index == -1 {
+				return m
+			}
+			// 检查匹配字符串后面是否紧跟着右括号
+			nextIndex := index + len(m)
+			if nextIndex < len(lowerTypeDef) && string(lowerTypeDef[nextIndex]) == ")" {
+				// 已经有右括号了，直接返回大写形式
+				return strings.ToUpper(m)
+			}
+			// 没有右括号，添加一个
+			return strings.ToUpper(m) + ")"
+		})
+
+		// 清理类型定义中可能出现的多余空格和括号
+		re = regexp.MustCompile(`([a-zA-Z]+)\((\s*\d+\s*)\)\s*\)`)
+		lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
+			match := re.FindStringSubmatch(m)
+			if len(match) == 3 {
+				return strings.ToUpper(match[1]) + "(" + strings.TrimSpace(match[2]) + ")"
+			}
+			return strings.ToUpper(m)
+		})
+
+		// 处理任意长度的VARCHAR类型（确保所有VARCHAR类型都有正确的闭合括号）
+		re = regexp.MustCompile(`(?i)varchar\(\d+\)`)
+		lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
+			// 将匹配到的varchar(数字)转换为大写的VARCHAR(数字)
+			return strings.ToUpper(m)
+		})
 
 		// 处理ENUM类型的特殊情况（带枚举值的情况）
 		re = regexp.MustCompile(`(?i)enum\(([^)]+)\)`)
@@ -449,6 +922,10 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		re = regexp.MustCompile(`(?i)double precision\(\d+,\d+\)`)
 		lowerTypeDef = re.ReplaceAllString(lowerTypeDef, "DOUBLE PRECISION")
 
+		// 移除REAL类型后的精度指定
+		re = regexp.MustCompile(`(?i)real\(\d+,\d+\)`)
+		lowerTypeDef = re.ReplaceAllString(lowerTypeDef, "REAL")
+
 		// 处理所有整数类型后的精度指定
 		re = regexp.MustCompile(`(?i)(bigint|integer|smallint|int)\(\d+\)`)
 		lowerTypeDef = re.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
@@ -466,6 +943,10 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		// 移除bytea类型后的修饰符（PostgreSQL不允许bytea有修饰符）
 		re = regexp.MustCompile(`(?i)bytea\(\d+\)`)
 		lowerTypeDef = re.ReplaceAllString(lowerTypeDef, "BYTEA")
+
+		// 移除JSON类型后的长度参数（PostgreSQL不允许JSON有长度参数）
+		re = regexp.MustCompile(`(?i)json\(\d+\)`)
+		lowerTypeDef = re.ReplaceAllString(lowerTypeDef, "JSON")
 
 		// 移除默认值为NULL的显式声明
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default null", "")
@@ -485,11 +966,6 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		// 确保所有类型名称大写
 		re = regexp.MustCompile(`(?i)\b(bigint|integer|smallint|int|bigserial|serial|boolean|text|bytea|timestamp|date|time|decimal|double precision|real)\b`)
 		typeDefinition = re.ReplaceAllStringFunc(lowerTypeDef, strings.ToUpper)
-
-		// 处理列名大小写
-		if lowercaseColumns {
-			columnName = strings.ToLower(columnName)
-		}
 
 		// 重新组合列定义
 		newColumnDefinition := fmt.Sprintf(`"%s" %s`, columnName, typeDefinition)
@@ -539,9 +1015,35 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		return nil, fmt.Errorf("生成的DDL无效: %s", finalDDL)
 	}
 
-	// 返回结果，包含DDL和表注释
+	// 返回结果，包含DDL、表注释、列名映射和列注释映射
 	return &ConvertTableDDLResult{
-		DDL:          finalDDL,
-		TableComment: tableComment,
+		DDL:            finalDDL,
+		TableComment:   tableComment,
+		ColumnNames:    columnNamesMap,
+		ColumnComments: columnCommentsMap,
 	}, nil
+}
+
+// GenerateColumnCommentsSQL 生成PostgreSQL列注释SQL,PostgreSQL表名（带双引号）
+func GenerateColumnCommentsSQL(tableName string, columnNamesMap, columnCommentsMap map[string]string) []string {
+	var comments []string
+
+	for originalColName, comment := range columnCommentsMap {
+		// 处理注释中的单引号
+		processedComment := strings.ReplaceAll(comment, "'", "''")
+
+		// 根据映射表获取正确的列名
+		if convertedColName, exists := columnNamesMap[originalColName]; exists {
+			var commentSQL string
+			if strings.HasPrefix(convertedColName, `"`) && strings.HasSuffix(convertedColName, `"`) {
+				// 列名已经包含双引号，直接使用
+				commentSQL = fmt.Sprintf("COMMENT ON COLUMN %s.%s IS '%s';", tableName, convertedColName, processedComment)
+			} else {
+				commentSQL = fmt.Sprintf("COMMENT ON COLUMN %s.\"%s\" IS '%s';", tableName, convertedColName, processedComment)
+			}
+			comments = append(comments, commentSQL)
+		}
+	}
+
+	return comments
 }

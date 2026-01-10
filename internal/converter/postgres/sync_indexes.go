@@ -8,7 +8,7 @@ import (
 )
 
 // ConvertIndexDDL 将MySQL索引DDL转换为PostgreSQL索引DDL
-func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns bool) (string, error) {
+func ConvertIndexDDL(_ string, index mysql.IndexInfo, lowercaseColumns bool) (string, error) {
 	var uniqueClause string
 	if index.IsUnique {
 		uniqueClause = "UNIQUE "
@@ -41,8 +41,9 @@ func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns b
 	lowercaseIndexName := strings.ToLower(index.Name)
 
 	// 为表名和索引名添加双引号，以处理特殊字符和关键字
+	// 使用index.Table而不是传入的tableName参数，确保索引创建在正确的表上
 	pgDDL := fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS \"%s\" ON \"%s\" (%s);",
-		uniqueClause, lowercaseIndexName, tableName, columns)
+		uniqueClause, lowercaseIndexName, index.Table, columns)
 
 	return pgDDL, nil
 }

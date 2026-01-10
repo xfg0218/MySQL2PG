@@ -128,28 +128,26 @@ func (c *Connection) GetTableDataWithPagination(tableName string, columns []stri
 
 // GetTablePrimaryKey 获取表的主键列名
 func (c *Connection) GetTablePrimaryKey(tableName string) (string, error) {
-	// 使用information_schema.STATISTICS系统表查询主键信息，适配MySQL 8.0
-	query := `
-		SELECT COLUMN_NAME 
-		FROM information_schema.STATISTICS 
-		WHERE TABLE_SCHEMA = DATABASE() 
-		  AND TABLE_NAME = ? 
-		  AND INDEX_NAME = 'PRIMARY'
-		LIMIT 1
-	`
+	// 使用SHOW KEYS FROM语句获取主键信息，避免查询information_schema导致的权限问题
+	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
+	query := fmt.Sprintf("SHOW KEYS FROM `%s` WHERE Key_name = 'PRIMARY'", tableName)
 
-	rows, err := c.db.Query(query, tableName)
+	rows, err := c.db.Query(query)
 	if err != nil {
 		return "", fmt.Errorf("获取表主键失败: %w", err)
 	}
 	defer rows.Close()
 
-	var columnName string
-
-	if rows.Next() {
-		if err := rows.Scan(&columnName); err != nil {
+	for rows.Next() {
+		// SHOW KEYS FROM返回的字段顺序：
+		// Table, Non_unique, Key_name, Seq_in_index, Column_name, Collation, Cardinality, Sub_part, Packed, Null, Index_type, Comment, Index_comment, Visible, Expression
+		var table, nonUniqueStr, keyName, seqInIndexStr, columnName string
+		var collation, cardinality, subPart, packed, null, indexType, comment, indexComment, visible, expression sql.NullString
+		if err := rows.Scan(&table, &nonUniqueStr, &keyName, &seqInIndexStr, &columnName, &collation, &cardinality, &subPart, &packed, &null, &indexType, &comment, &indexComment, &visible, &expression); err != nil {
 			return "", fmt.Errorf("扫描主键信息失败: %w", err)
 		}
+
+		// 只返回第一个主键列（如果是复合主键，也只返回第一个）
 		return columnName, nil
 	}
 
@@ -164,24 +162,10 @@ func (c *Connection) EstimateRowSize(tableName string) (int64, error) {
 		return 0, err
 	}
 
-	// 获取表的平均行大小（使用MySQL的information_schema）
-	query := `
-		SELECT AVG_ROW_LENGTH 
-		FROM information_schema.TABLES 
-		WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-	`
-
-	var avgRowLength int64
-	err = c.db.QueryRow(query, c.config.Database, tableName).Scan(&avgRowLength)
-	if err != nil {
-		return 0, fmt.Errorf("获取表平均行大小失败: %w", err)
-	}
-
-	// 如果MySQL没有提供平均行大小，则使用简单估算
-	if avgRowLength == 0 {
-		// 简单估算：假设每列平均占用20字节
-		avgRowLength = int64(len(columns) * 20)
-	}
+	// 直接使用简单估算，避免查询information_schema.TABLES导致的权限问题
+	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
+	// 简单估算：假设每列平均占用20字节
+	avgRowLength := int64(len(columns) * 20)
 
 	return avgRowLength, nil
 }
