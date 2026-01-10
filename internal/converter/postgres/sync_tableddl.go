@@ -279,12 +279,14 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		// 约束定义以 CONSTRAINT 开头，或者是 FOREIGN KEY 约束
 		// 必须在所有处理之前检查并跳过
 		upperTrimmedLine := strings.ToUpper(trimmedLine)
-		// 跳过以CONSTRAINT开头的行
-		if strings.HasPrefix(strings.TrimSpace(upperTrimmedLine), "CONSTRAINT") {
+		// 跳过以CONSTRAINT开头的行，只跳过真正的约束定义（以"CONSTRAINT "开头，注意空格）
+		// 避免跳过列名为"constraints"的列定义
+		if strings.HasPrefix(strings.TrimSpace(upperTrimmedLine), "CONSTRAINT ") {
 			continue
 		}
-		// 跳过包含CONSTRAINT的外键约束定义（需要包含括号结构）
-		if strings.Contains(upperTrimmedLine, "CONSTRAINT") && strings.Contains(trimmedLine, "(") && strings.Contains(trimmedLine, ")") {
+		// 跳过包含CONSTRAINT的外键约束定义（需要包含括号结构，且不是列定义）
+		// 只有当行以CONSTRAINT或FOREIGN KEY开头时才跳过，避免跳过列名为constraint/constraints的列定义
+		if strings.HasPrefix(upperTrimmedLine, "CONSTRAINT") || strings.HasPrefix(upperTrimmedLine, "FOREIGN KEY") {
 			continue
 		}
 
@@ -318,8 +320,9 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 			continue
 		}
 
-		// 处理CONSTRAINT关键字
-		if strings.HasPrefix(strings.ToUpper(trimmedLine), "CONSTRAINT") {
+		// 处理CONSTRAINT关键字，只跳过真正的约束定义（以"CONSTRAINT "开头，注意空格）
+		// 避免跳过列名为"constraints"的列定义
+		if strings.HasPrefix(strings.ToUpper(trimmedLine), "CONSTRAINT ") {
 			continue
 		}
 
@@ -414,7 +417,7 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 			// 检查是否以约束类型关键字开头
 			isConstraintStart := strings.HasPrefix(upperLine, "PRIMARY KEY") ||
 				strings.HasPrefix(upperLine, "FOREIGN KEY") ||
-				strings.HasPrefix(upperLine, "UNIQUE")
+				(strings.HasPrefix(upperLine, "UNIQUE") && strings.Contains(trimmedLine, "("))
 
 			// 特殊处理CONSTRAINT, KEY, INDEX开头的情况
 			if strings.HasPrefix(upperLine, "CONSTRAINT") || strings.HasPrefix(upperLine, "KEY") || strings.HasPrefix(upperLine, "INDEX") {
@@ -490,7 +493,7 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 							primaryKeyColumn = pkMatch[1]
 						}
 						continue
-					} else if strings.HasPrefix(strings.ToUpper(trimmedLine), "KEY") || strings.HasPrefix(strings.ToUpper(trimmedLine), "INDEX") {
+					} else if (strings.HasPrefix(strings.ToUpper(trimmedLine), "KEY") || strings.HasPrefix(strings.ToUpper(trimmedLine), "INDEX")) && strings.Contains(trimmedLine, "(") {
 						// 处理索引定义
 						continue
 					} else {
