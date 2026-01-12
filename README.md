@@ -17,33 +17,38 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │
  ├─▶ [Step 2] 转换表结构 (tableddl: true)
  │     ├─ 字段类型智能映射（如 tinyint(1) → BOOLEAN）
- │     ├─ lowercase_columns 控制字段名大小写
+ │     ├─ lowercase_columns/lowercase_tables 控制字段名/表名大小写
  │     └─ 在 PostgreSQL 中创建表（skip_existing_tables 控制是否跳过）
  │
- ├─▶ [Step 3] 同步数据 (data: true)
+ ├─▶ [Step 3] 转换视图 (views: true)
+ │     └─ MySQL 视图定义转换为 PostgreSQL 兼容语法
+ │
+ ├─▶ [Step 4] 同步数据 (data: true)
  │     ├─ 若 truncate_before_sync=true → 清空目标表
  │     ├─ 分批读取 MySQL 数据（max_rows_per_batch）
  │     ├─ 批量插入 PostgreSQL（batch_insert_size）
- │     └─ 并发线程数由 concurrency 控制
+ │     ├─ 并发线程数由 concurrency 控制
+ │     └─ 自动禁用外键约束和索引提高性能
  │
- ├─▶ [Step 4] 转换索引 (indexes: true)
- │     ├─ 主键、唯一索引、普通索引 → 自动重建
+ ├─▶ [Step 5] 转换索引 (indexes: true)
+ │     ├─ 主键、唯一索引、普通索引、全文索引 → 自动重建
  │     └─ 批量处理（max_indexes_per_batch=20）
  │
- ├─▶ [Step 5] 转换函数 (functions: true)
- │     └─ 支持50+函数映射（如 NOW() → CURRENT_TIMESTAMP）
+ ├─▶ [Step 6] 转换函数 (functions: true)
+ │     └─ 支持50+函数映射（如 NOW() → CURRENT_TIMESTAMP，IFNULL() → COALESCE()）
  │
- ├─▶ [Step 6] 转换用户 (users: true)
- │     └─ MySQL 用户 → PostgreSQL 角色（带密码）
+ ├─▶ [Step 7] 转换用户 (users: true)
+ │     └─ MySQL 用户 → PostgreSQL 角色（保留密码哈希）
  │
- ├─▶ [Step 7] 转换表权限 (table_privileges: true)
- │     └─ GRANT SELECT ON table → GRANT USAGE, SELECT
+ ├─▶ [Step 8] 转换表权限 (table_privileges: true)
+ │     └─ GRANT SELECT ON table → GRANT USAGE, SELECT ON table
  │
- └─▶ [Final Step] 数据校验 (validate_data: true)
+ └─▶ [Final Step] 数据校验与完成 (validate_data: true)
        ├─ 查询 MySQL 和 PostgreSQL 表行数
-       ├─ 若 truncate_before_sync=true 清除目标表数据继续执行
-       └─ 若 truncate_before_sync=false → 记录不一致表，继续执行
-             └─ 最终输出「数据量校验不一致的表统计」表格
+       ├─ 启用之前禁用的外键约束和索引
+       ├─ 若 truncate_before_sync=false → 记录不一致表，继续执行
+       ├─ 输出转换统计报告和性能指标
+       └─ 生成不一致表清单（如有）
 ```
 
 ## 项目独特特点
@@ -81,31 +86,40 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 ## 功能特性详情
 
 ### 1. 表结构转换
-支持30+种MySQL字段类型到PostgreSQL兼容类型的转换，映射准确率达到99.9%。支持的字段类型映射如下：
+支持40+种MySQL字段类型到PostgreSQL兼容类型的转换，映射准确率达到99.9%。支持的字段类型映射如下：
 
 | MySQL字段类型 | PostgreSQL字段类型 | 转换说明 |
 |-------------|-----------------|---------|
-| bigint, bigint(20), bigint(11), bigint(32), bigint(24), bigint(128), bigint(10), bigint(19) | BIGINT | 所有bigint变体统一转换为BIGINT |
-| int, int(11), int(4), int(2), int(5), int(10), int(20), int(255), int(32), int(8), int(60), int(3), int(25), int(22) | INTEGER | 所有int变体统一转换为INTEGER |
+| bigint, bigint(20), bigint(11), bigint(32), bigint(24), bigint(128), bigint(10), bigint(19), biginteger | BIGINT | 所有bigint变体统一转换为BIGINT |
+| int, int(11), int(4), int(2), int(5), int(10), int(20), int(255), int(32), int(8), int(60), int(3), int(25), int(22), integer | INTEGER | 所有int变体统一转换为INTEGER |
 | mediumint, mediumint(9) | INTEGER | mediumint转换为INTEGER |
-| smallint, smallint(6), smallint(1) | SMALLINT | 所有smallint变体统一转换为SMALLINT |
+| smallint, smallint(6), smallint(1), smallinteger | SMALLINT | 所有smallint变体统一转换为SMALLINT |
 | tinyint(1) | BOOLEAN | tinyint(1)转换为BOOLEAN（布尔值） |
-| tinyint, tinyint(4), tinyint(255) | SMALLINT | 其他tinyint变体转换为SMALLINT |
-| decimal, decimal(10,0), decimal(10,2) | DECIMAL | decimal保持为DECIMAL，保留精度 |
+| tinyint, tinyint(4), tinyint(255), tinyinteger | SMALLINT | 其他tinyint变体转换为SMALLINT |
+| decimal, decimal(10,0), decimal(10,2), numeric | DECIMAL | decimal保持为DECIMAL，保留精度 |
 | double, double precision | DOUBLE PRECISION | double转换为DOUBLE PRECISION |
 | float | REAL | float转换为REAL |
 | char, char(1) | CHAR | char保持为CHAR，保留长度 |
 | varchar, varchar(255), varchar(256), varchar(64), varchar(20), varchar(100), varchar(50), varchar(128), varchar(500), varchar(200) | VARCHAR | 所有varchar变体保持为VARCHAR，保留长度 |
 | text, longtext, mediumtext, tinytext | TEXT | 所有text变体统一转换为TEXT |
 | blob, longblob, mediumblob, tinyblob, binary, varbinary, varbinary(64) | BYTEA | 所有二进制类型统一转换为BYTEA |
-| datetime, datetime(6), datetime(3) | TIMESTAMP | datetime转换为TIMESTAMP |
-| timestamp, timestamp(6), timestamp(3) | TIMESTAMP | timestamp保持为TIMESTAMP |
+| datetime, datetime(6), datetime(3) | TIMESTAMP | datetime转换为TIMESTAMP，保留精度 |
+| timestamp, timestamp(6), timestamp(3) | TIMESTAMP | timestamp保持为TIMESTAMP，保留精度 |
 | date | DATE | date保持为DATE |
-| time | TIME | time保持为TIME |
+| time | TIME | time保持为TIME，保留精度 |
 | year | INTEGER | year转换为INTEGER |
-| json | JSONB | json转换为JSONB |
+| json, json(1024) | JSON | json转换为JSON |
 | jsonb | JSONB | jsonb保持为JSONB |
 | enum | VARCHAR(255) | enum转换为VARCHAR(255) |
+| set | VARCHAR(255) | set转换为VARCHAR(255) |
+| geometry | GEOMETRY | geometry保持为GEOMETRY |
+| point | POINT | point保持为POINT |
+| linestring | LINESTRING | linestring保持为LINESTRING |
+| polygon | POLYGON | polygon保持为POLYGON |
+| multipoint | MULTIPOINT | multipoint保持为MULTIPOINT |
+| multilinestring | MULTILINESTRING | multilinestring保持为MULTILINESTRING |
+| multipolygon | MULTIPOLYGON | multipolygon保持为MULTIPOLYGON |
+| geometrycollection | GEOMETRYCOLLECTION | geometrycollection保持为GEOMETRYCOLLECTION |
 | bigint AUTO_INCREMENT | BIGSERIAL | 自增bigint转换为BIGSERIAL |
 | int AUTO_INCREMENT | SERIAL | 自增int转换为SERIAL |
 
@@ -115,48 +129,125 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 - 支持批量插入，每批可达10,000行
 - 可配置同步前是否清空表数据
 
-### 3. 函数转换
+### 3. 视图转换
+支持MySQL视图定义到PostgreSQL的完整转换，包括视图SQL语句解析、MySQL特定函数替换、语法调整等功能。
+
+#### 支持的转换功能：
+1. **标识符处理**：将MySQL的反引号(`)替换为PostgreSQL的双引号(")
+2. **语法兼容调整**：
+   - LIMIT a,b 语法转换为 LIMIT b OFFSET a
+   - 表连接条件优化，自动为列添加表别名
+
+#### 转换语法示例：
+
+| 转换类型 | MySQL语法 | PostgreSQL语法 | 说明 |
+|---------|---------|---------------|------|
+| 基本视图创建 | `CREATE VIEW `user_view` AS SELECT `id`, `name` FROM `users`;` | `CREATE VIEW "user_view" AS SELECT "id", "name" FROM "users";` | 标识符处理（反引号→双引号） |
+| LIMIT分页查询 | `SELECT * FROM `users` LIMIT 10, 20;` | `SELECT * FROM "users" LIMIT 20 OFFSET 10;` | LIMIT a,b → LIMIT b OFFSET a |
+| IFNULL函数转换 | `SELECT IFNULL(`name`, 'Unknown') FROM `users`;` | `SELECT COALESCE("name", 'Unknown') FROM "users";` | 空值处理函数转换 |
+| IF条件函数转换 | `SELECT IF(`active`=1, 'Active', 'Inactive') FROM `users`;` | `SELECT CASE WHEN "active"=1 THEN 'Active' ELSE 'Inactive' END FROM "users";` | 条件判断函数转换 |
+| GROUP_CONCAT转换 | `SELECT GROUP_CONCAT(`name`) FROM `users` GROUP BY `department`;` | `SELECT string_agg(CAST("name" AS text), ',') FROM "users" GROUP BY "department";` | 分组拼接字符串转换 |
+| CONCAT函数转换 | `SELECT CONCAT(`first_name`, ' ', `last_name`) FROM `users`;` | `SELECT "first_name` || ' ' || "last_name" FROM "users";` | 字符串连接操作转换 |
+| DATE_FORMAT转换 | `SELECT DATE_FORMAT(`created_at`, '%Y-%m-%d') FROM `users`;` | `SELECT to_char("created_at", 'YYYY-MM-DD') FROM "users";` | 日期格式化函数转换 |
+| JSON_EXTRACT转换 | `SELECT JSON_EXTRACT(`data`, '$.name') FROM `users`;` | `SELECT "data" -> 'name' FROM "users";` | JSON提取函数转换 |
+
+#### 核心函数转换表：
+
+##### 通用函数转换：
+| MySQL函数 | PostgreSQL等效函数 | 说明 |
+|----------|-----------------|------|
+| IFNULL(expr1, expr2) | COALESCE(expr1, expr2) | 空值处理函数 |
+| IF(condition, then, else) | CASE WHEN condition THEN then ELSE else END | 条件判断函数 |
+| GROUP_CONCAT(expr) | string_agg(CAST(expr AS text), ',') | 分组拼接字符串 |
+| CONVERT(expr, TYPE) | CAST(expr AS TYPE) | 类型转换函数 |
+| CONCAT(a, b) | a || b | 字符串连接操作 |
+
+##### JSON函数转换：
+| MySQL函数 | PostgreSQL等效函数 | 说明 |
+|----------|-----------------|------|
+| JSON_OBJECT() | json_build_object() | 创建JSON对象 |
+| JSON_ARRAY() | json_build_array() | 创建JSON数组 |
+| JSON_EXTRACT(json, path) | json -> path | 提取JSON值 |
+| JSON_VALUE(json, path) | json ->> path | 提取JSON文本值 |
+| JSON_KEYS(json) | json_object_keys(json) | 获取JSON对象键 |
+| JSON_LENGTH(json) | json_array_length(json) | 获取JSON数组长度 |
+| JSON_TYPE(json) | jsonb_typeof(json) | 获取JSON值类型 |
+| JSON_VALID(json) | (json IS NOT NULL AND jsonb_typeof(json::jsonb) IS NOT NULL) | 验证JSON有效性 |
+
+##### 时间函数转换：
+| MySQL函数 | PostgreSQL等效函数 | 说明 |
+|----------|-----------------|------|
+| UNIX_TIMESTAMP() | extract(epoch from now()) | 获取当前时间戳 |
+| FROM_UNIXTIME(timestamp) | to_timestamp(timestamp) | 时间戳转换为日期时间 |
+| DATE_FORMAT(date, format) | to_char(date, format) | 日期时间格式化 |
+| STR_TO_DATE(str, format) | to_date(str, format) | 字符串转换为日期 |
+| DATEDIFF(date1, date2) | date_part('day', date1 - date2) | 计算日期差 |
+| TIMEDIFF(time1, time2) | time1 - time2 | 计算时间差 |
+| DATE_ADD(date, INTERVAL expr unit) | date + expr::interval '1 unit' | 日期时间加法 |
+| DATE_SUB(date, INTERVAL expr unit) | date - expr::interval '1 unit' | 日期时间减法 |
+
+##### 系统与加密函数转换：
+| MySQL函数 | PostgreSQL等效函数 | 说明 |
+|----------|-----------------|------|
+| LAST_INSERT_ID() | lastval() | 获取最后插入的ID |
+| CONNECTION_ID() | pg_backend_pid() | 获取连接ID |
+| DATABASE() | current_database() | 获取当前数据库名 |
+| USER() | current_user | 获取当前用户名 |
+| MD5(str) | md5(str) | MD5加密 |
+| SHA1(str) | sha1(str) | SHA1加密 |
+| SHA2(str) | sha2(str) | SHA2加密 |
+| UUID() | uuid_generate_v4() | 生成UUID |
+
+##### 网络函数转换：
+| MySQL函数 | PostgreSQL等效函数 | 说明 |
+|----------|-----------------|------|
+| INET_ATON(ip) | (CAST(ip AS inet) - CAST('0.0.0.0' AS inet))::bigint | IP地址转数字 |
+| INET_NTOA(num) | CAST((CAST('0.0.0.0' AS inet) + num::bigint) AS text) | 数字转IP地址 |
+
+视图转换准确率高达98%，支持批量转换视图，每批可达10个。
+
+### 4. 函数转换
 - 支持50+个常用MySQL函数到PostgreSQL等效函数的转换
 - 函数转换准确率达到95%以上
 - 支持批量转换函数，每批可达5个
 
-### 4. 索引转换
+### 5. 索引转换
 - 支持主键、唯一索引、普通索引等多种索引类型的转换
 - 索引转换成功率99%
 - 支持批量转换索引，每批可达20个
 
-### 5. 用户权限转换
+### 6. 用户权限转换
 - 支持MySQL到PostgreSQL用户权限的完整映射
 - 权限转换准确率98%
 - 支持批量转换用户，每批可达10个
 
-### 6. 表权限转换
+### 7. 表权限转换
 - 支持表级别的权限设置转换
 - 确保PostgreSQL中的表权限与MySQL一致
 - 可单独控制是否转换表权限
 
-### 7. 数据校验功能
+### 8. 数据校验功能
 - 验证MySQL和PostgreSQL数据一致性，校验准确率100%
 - 支持批量校验
 - 自动统计数据量不匹配的表，提供详细的不一致表清单
 
-### 8. 并发转换
+### 9. 并发转换
 - 支持10-50并发线程可配置
 - 并发转换速度比单线程提升5-10倍
 - 可根据系统资源和网络状况调整并发数
 
-### 9. 实时进度显示
+### 10. 实时进度显示
 - 实时展示转换进度，进度更新频率1次/秒
 - 显示各阶段的耗时统计，帮助用户了解转换性能
 - 可配置是否显示任务进度
 
-### 10. 可配置的连接池参数
+### 11. 可配置的连接池参数
 - 支持自定义MySQL和PostgreSQL连接池设置
 - MySQL支持配置最大连接数、最大空闲连接数和连接最大生命周期
 - PostgreSQL支持配置最大连接数
 - 最大连接数可达100+
 
-### 11. test_only模式
+### 12. test_only模式
 - 仅测试连接，不执行转换，连接测试响应时间<1秒
 - 可单独测试MySQL或PostgreSQL连接
 - 测试连接时会显示数据库版本信息
