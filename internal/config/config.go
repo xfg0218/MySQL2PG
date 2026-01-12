@@ -54,6 +54,7 @@ type OptionsConfig struct {
 	Users              bool     `mapstructure:"users"`
 	TableDDL           bool     `mapstructure:"tableddl"`               // 转换表DDL
 	Data               bool     `mapstructure:"data"`                   // 转换数据
+	View               bool     `mapstructure:"view"`                   // 转换视图
 	Grant              bool     `mapstructure:"grant"`                  // 转换权限
 	TablePrivileges    bool     `mapstructure:"table_privileges"`       // 转换表权限
 	SkipExistingTables bool     `mapstructure:"skip_existing_tables"`   // 跳过已存在的表
