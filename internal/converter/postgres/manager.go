@@ -93,7 +93,7 @@ func (m *Manager) Run() error {
 		m.Log("启用了表列表功能，只同步指定的表")
 
 		// 获取MySQL元数据（只需要表信息）
-		allTables, _, _, _, _, err := m.getMetadata()
+		allTables, _, _, _, _, _, err := m.getMetadata()
 		if err != nil {
 			return err
 		}
@@ -182,16 +182,16 @@ func (m *Manager) Run() error {
 
 	// 正常转换流程
 	// 1. 获取MySQL元数据
-	tables, functions, indexes, users, tablePrivileges, err := m.getMetadata()
+	tables, functions, indexes, views, users, tablePrivileges, err := m.getMetadata()
 	if err != nil {
 		return err
 	}
 
 	// 2. 计算总任务数
-	m.calculateTotalTasks(tables, functions, indexes, users, tablePrivileges)
+	m.calculateTotalTasks(tables, functions, indexes, views, users, tablePrivileges)
 
 	// 3. 执行转换
-	if err := m.executeConversion(tables, functions, indexes, users, tablePrivileges); err != nil {
+	if err := m.executeConversion(tables, functions, indexes, views, users, tablePrivileges); err != nil {
 		return err
 	}
 
@@ -204,10 +204,11 @@ func (m *Manager) Run() error {
 
 // getMetadata 获取MySQL数据库的元数据信息
 // 返回表、函数、索引、用户和表权限信息
-func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysql.IndexInfo, []mysql.UserInfo, []mysql.TablePrivInfo, error) {
+func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysql.IndexInfo, []mysql.ViewInfo, []mysql.UserInfo, []mysql.TablePrivInfo, error) {
 	var tables []mysql.TableInfo
 	var functions []mysql.FunctionInfo
 	var indexes []mysql.IndexInfo
+	var views []mysql.ViewInfo
 	var users []mysql.UserInfo
 	var tablePrivileges []mysql.TablePrivInfo
 	var err error
@@ -215,7 +216,7 @@ func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysq
 	if m.config.Conversion.Options.TableDDL || m.config.Conversion.Options.Indexes || m.config.Conversion.Options.Data || m.config.Conversion.Options.Grant {
 		tables, err = m.mysqlConn.GetTables(m.config.Conversion.Options.SkipUseTableList, m.config.Conversion.Options.SkipTableList)
 		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("获取表信息失败: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取表信息失败: %w", err)
 		}
 
 		// 提取所有索引（排除主键）
@@ -231,33 +232,39 @@ func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysq
 		}
 	}
 
+	// 获取视图信息
+	views, err = m.mysqlConn.GetViews(m.config.MySQL.Database)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取视图信息失败: %w", err)
+	}
+
 	if m.config.Conversion.Options.Functions {
 		functions, err = m.mysqlConn.GetFunctions()
 		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("获取函数信息失败: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取函数信息失败: %w", err)
 		}
 	}
 
 	if m.config.Conversion.Options.Users || m.config.Conversion.Options.Grant {
 		users, err = m.mysqlConn.GetUsers()
 		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("获取用户信息失败: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取用户信息失败: %w", err)
 		}
 	}
 
 	if m.config.Conversion.Options.Grant || m.config.Conversion.Options.TablePrivileges {
 		tablePrivileges, err = m.mysqlConn.GetTablePrivileges()
 		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("获取表权限失败: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取表权限失败: %w", err)
 		}
 	}
 
-	return tables, functions, indexes, users, tablePrivileges, nil
+	return tables, functions, indexes, views, users, tablePrivileges, nil
 }
 
 // calculateTotalTasks 计算转换的总任务数
 // 根据启用的转换选项和对象数量计算总任务数
-func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) {
+func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, views []mysql.ViewInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) {
 	m.totalTasks = 0
 
 	// 根据配置的选项计算任务数
@@ -273,6 +280,9 @@ func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysq
 	if m.config.Conversion.Options.Functions {
 		m.totalTasks += len(functions)
 	}
+	if len(views) > 0 {
+		m.totalTasks += len(views)
+	}
 	if m.config.Conversion.Options.Users {
 		m.totalTasks += len(users)
 	}
@@ -285,8 +295,8 @@ func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysq
 }
 
 // executeConversion 执行完整的转换流程
-// 按照配置的顺序执行表DDL、数据、索引、函数、用户和权限的转换
-func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) error {
+// 按照配置的顺序执行表DDL、数据、索引、函数、视图、用户和权限的转换
+func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, views []mysql.ViewInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) error {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
 	errorChan := make(chan error, 1)
@@ -323,6 +333,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 	// 检查是否所有选项都打开
 	allOptionsEnabled := m.config.Conversion.Options.TableDDL &&
 		m.config.Conversion.Options.Data &&
+		m.config.Conversion.Options.View &&
 		m.config.Conversion.Options.Indexes &&
 		m.config.Conversion.Options.Functions &&
 		m.config.Conversion.Options.Users &&
@@ -333,7 +344,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 		// 1. 首先执行表DDL转换
 		if m.config.Conversion.Options.TableDDL && len(filteredTables) > 0 {
 			if m.config.Run.ShowConsoleLogs {
-				fmt.Println("\n1. 开始转换表结构...")
+				fmt.Println("\n1. 转换表结构...")
 			}
 			// 记录开始时间
 			startTime := time.Now()
@@ -363,6 +374,46 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				StartTime:   startTime,
 				EndTime:     time.Now(),
 				ObjectCount: len(filteredTables),
+			})
+
+			// 检查是否有错误
+			select {
+			case err := <-errorChan:
+				return err
+			default:
+			}
+		}
+
+		// 2.1 执行视图转换（在表DDL之后，数据同步之前）
+		if m.config.Conversion.Options.View && len(views) > 0 {
+			// 记录开始时间
+			startTime := time.Now()
+			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
+			for i := 0; i < len(views); i += batchSize {
+				end := i + batchSize
+				if end > len(views) {
+					end = len(views)
+				}
+
+				batch := views[i:end]
+				wg.Add(1)
+				go func(batch []mysql.ViewInfo) {
+					defer wg.Done()
+					if err := m.convertViews(batch, semaphore); err != nil {
+						select {
+						case errorChan <- err:
+						default:
+						}
+					}
+				}(batch)
+			}
+			wg.Wait() // 等待视图转换完成
+			// 记录结束时间和对象数量
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "转换表视图",
+				StartTime:   startTime,
+				EndTime:     time.Now(),
+				ObjectCount: len(views),
 			})
 
 			// 检查是否有错误
@@ -562,7 +613,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			} else {
 				// 当users: true但没有用户时，添加日志提示
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n5. 开始转换用户...")
+					fmt.Println("\n6. 开始转换用户...")
 					fmt.Println("   未发现任何用户，跳过用户转换")
 				}
 				m.Log("users: true，但未发现任何用户，跳过用户转换")
@@ -573,7 +624,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 		if m.config.Conversion.Options.Grant {
 			if len(filteredTables) > 0 {
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n6. 转换表权限...")
+					fmt.Println("\n7. 转换表权限...")
 				}
 				// 记录开始时间
 				startTime := time.Now()
@@ -645,7 +696,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				} else {
 					// 当table_privileges: true但没有表权限时，添加日志提示
 					if m.config.Run.ShowConsoleLogs {
-						fmt.Println("\n6. 转换表权限...")
+						fmt.Println("\n7. 转换表权限...")
 						fmt.Println("   未发现任何表权限，跳过表权限转换")
 					}
 					m.Log("table_privileges: true，但未发现任何表权限，跳过表权限转换")
@@ -744,10 +795,53 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			}
 		}
 
-		// 第三阶段：执行索引同步（如果启用）
+		// 第二阶段：执行视图转换（如果启用）
+		if m.config.Conversion.Options.View && len(views) > 0 {
+			if m.config.Run.ShowConsoleLogs {
+				fmt.Println("\n3. 转换表视图...")
+			}
+			// 记录开始时间
+			startTime := time.Now()
+			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
+			for i := 0; i < len(views); i += batchSize {
+				end := i + batchSize
+				if end > len(views) {
+					end = len(views)
+				}
+
+				batch := views[i:end]
+				wg.Add(1)
+				go func(batch []mysql.ViewInfo) {
+					defer wg.Done()
+					if err := m.convertViews(batch, semaphore); err != nil {
+						select {
+						case errorChan <- err:
+						default:
+						}
+					}
+				}(batch)
+			}
+			wg.Wait() // 等待视图转换完成
+			// 记录结束时间和对象数量
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "转换表视图",
+				StartTime:   startTime,
+				EndTime:     time.Now(),
+				ObjectCount: len(views),
+			})
+
+			// 检查是否有错误
+			select {
+			case err := <-errorChan:
+				return err
+			default:
+			}
+		}
+
+		// 第四阶段：执行索引同步（如果启用）
 		if m.config.Conversion.Options.Indexes && len(indexes) > 0 {
 			if m.config.Run.ShowConsoleLogs {
-				fmt.Println("\n3. 转换表索引...")
+				fmt.Println("\n4. 转换表索引...")
 			}
 			// 记录开始时间
 			startTime := time.Now()
@@ -787,11 +881,11 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			}
 		}
 
-		// 第四阶段：执行函数同步（如果启用）
+		// 第五阶段：执行函数同步（如果启用）
 		if m.config.Conversion.Options.Functions {
 			if len(functions) > 0 {
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n4. 开始转换函数...")
+					fmt.Println("\n5. 开始转换函数...")
 				}
 				// 记录开始时间
 				startTime := time.Now()
@@ -839,11 +933,11 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			}
 		}
 
-		// 第五阶段：执行用户同步（如果启用）
+		// 第六阶段：执行用户同步（如果启用）
 		if m.config.Conversion.Options.Users {
 			if len(users) > 0 {
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n5. 开始转换用户...")
+					fmt.Println("\n6. 开始转换用户...")
 				}
 				// 记录开始时间
 				startTime := time.Now()
@@ -884,17 +978,17 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			} else {
 				// 当users: true但没有用户时，添加日志提示
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n5. 开始转换用户...")
+					fmt.Println("\n6. 开始转换用户...")
 					fmt.Println("   未发现任何用户，跳过用户转换")
 				}
 				m.Log("users: true，但未发现任何用户，跳过用户转换")
 			}
 		}
 
-		// 第六阶段：执行权限转换（如果启用）
+		// 第七阶段：执行权限转换（如果启用）
 		if m.config.Conversion.Options.Grant && len(tables) > 0 {
 			if m.config.Run.ShowConsoleLogs {
-				fmt.Println("\n6. 转换表权限...")
+				fmt.Println("\n7. 转换表权限...")
 			}
 			// 记录开始时间
 			startTime := time.Now()
@@ -975,6 +1069,57 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 
 	// 生成汇总表格
 	m.generateSummaryTable()
+
+	return nil
+}
+
+// convertViews 转换表视图DDL
+// 将MySQL视图定义转换为PostgreSQL视图定义并执行
+func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) error {
+	currentViewIndex := 0
+
+	for _, view := range views {
+		semaphore <- struct{}{}
+		currentViewIndex++
+
+		pgViewDDL, err := ConvertViewDDL(view.ViewName, view.ViewDefinition)
+		if err != nil {
+			// 记录转换失败的 MySQL 视图的部分转换结果
+			m.Log("转换表视图 %s，MySQL 定义: %s", view.ViewName, view.ViewDefinition)
+			// 记录转换失败的 PostgreSQL 视图的部分转换结果
+			m.Log("转换表视图 %s 失败，PostgreSQL 定义: %s", view.ViewName, pgViewDDL)
+			errMsg := fmt.Sprintf("转换表视图 %s 失败: %v", view.ViewName, err)
+			m.logError(errMsg)
+			<-semaphore
+			m.updateProgress()
+			return err
+		}
+
+		// 执行创建视图的SQL语句
+		if err := m.postgresConn.ExecuteDDL(pgViewDDL); err != nil {
+			errMsg := fmt.Sprintf("创建表视图 %s 失败: %v", view.ViewName, err)
+			m.logError(errMsg)
+			<-semaphore
+			m.updateProgress()
+			return err
+		}
+
+		// 更新进度
+		m.mutex.Lock()
+		m.completedTasks++
+		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		m.mutex.Unlock()
+
+		// 显示转换成功信息（根据配置决定是否在控制台显示）
+		if m.config.Run.ShowConsoleLogs {
+			m.mutex.Lock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表视图 %s 成功\n", progress, m.completedTasks, m.totalTasks, view.ViewName)
+			m.mutex.Unlock()
+		}
+
+		m.Log("转换表视图 %s 完成", view.ViewName)
+		<-semaphore
+	}
 
 	return nil
 }
