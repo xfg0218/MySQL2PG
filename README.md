@@ -126,6 +126,17 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
   - 不需要添加前导问号
   - 不支持compress参数（MySQL驱动未实现）
 
+### PostgreSQL连接参数配置
+- **功能说明**：允许用户自定义PostgreSQL连接参数，以满足特定的连接需求
+- **参数配置**：`pg_connection_params: search_path=public connect_timeout=10`
+- **支持的参数**：
+  - `connect_timeout=10` - 连接超时时间（秒）
+  - `search_path=public` - 默认使用的schema
+- **注意事项**：
+  - 参数格式为key=value&key=value形式
+  - 不需要添加前导问号
+  - 支持PostgreSQL驱动的所有连接参数
+
 ### 表过滤功能
 - **功能说明**：提供两种表过滤方式，灵活控制需要同步的表，属于转换选项配置
 - **白名单模式**（use_table_list）：
