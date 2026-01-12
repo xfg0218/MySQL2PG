@@ -314,10 +314,11 @@ conversion:
   options:
     tableddl: true    # step1: 转换表DDL
     data: true        # step2: 转换数据（先转DDL后转数据）
-    indexes: true     # step3: 转换索引
-    functions: true   # step4: 转换函数
-    users: true       # step5: 转换用户
-    table_privileges: true # step6: 转换用户在表上的权限
+    view: true        # step3: 转换表视图
+    indexes: true     # step4: 转换索引
+    functions: true   # step5: 转换函数
+    users: true       # step6: 转换用户
+    table_privileges: true # step7: 转换用户在表上的权限
     lowercase_columns: true     # 控制表字段是否需要转小写，true为转小写（默认值），false保持与MySQL字段一致
     skip_existing_tables: true  # 如果表在PostgreSQL中已存在则跳过，否则创建
     use_table_list: false       # 是否使用指定的表列表进行数据同步，其他步骤不生效
