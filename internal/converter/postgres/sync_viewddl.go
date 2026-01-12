@@ -71,31 +71,31 @@ var (
 	// 匹配 SUBDATE 函数
 	reSUBDATE = regexp.MustCompile(`(?i)subdate\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 ADDTIME 函数
-	reADDTIME = regexp.MustCompile(`(?i)addtime\s*\(`)
+	reADDTIME = regexp.MustCompile(`(?i)addtime\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 SUBTIME 函数
-	reSUBTIME = regexp.MustCompile(`(?i)subtime\s*\(`)
+	reSUBTIME = regexp.MustCompile(`(?i)subtime\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 DATABASE 函数
-	reDATABASE = regexp.MustCompile(`(?i)database\s*\(`)
+	reDATABASE = regexp.MustCompile(`(?i)database\s*\([^)]*\)`)
 	// 匹配 USER 函数
-	reUSER = regexp.MustCompile(`(?i)user\s*\(`)
+	reUSER = regexp.MustCompile(`(?i)user\s*\([^)]*\)`)
 	// 匹配 VERSION 函数
-	reVERSION = regexp.MustCompile(`(?i)version\s*\(`)
+	reVERSION = regexp.MustCompile(`(?i)version\s*\([^)]*\)`)
 	// 匹配 MD5 函数
-	reMD5 = regexp.MustCompile(`(?i)md5\s*\(`)
+	reMD5 = regexp.MustCompile(`(?i)md5\s*\([^)]*\)`)
 	// 匹配 SHA1 函数
-	reSHA1 = regexp.MustCompile(`(?i)sha1\s*\(`)
+	reSHA1 = regexp.MustCompile(`(?i)sha1\s*\([^)]*\)`)
 	// 匹配 SHA2 函数
-	reSHA2 = regexp.MustCompile(`(?i)sha2\s*\(`)
+	reSHA2 = regexp.MustCompile(`(?i)sha2\s*\([^)]*\)`)
 	// 匹配 UUID 函数
-	reUUID = regexp.MustCompile(`(?i)uuid\s*\(`)
+	reUUID = regexp.MustCompile(`(?i)uuid\s*\([^)]*\)`)
 	// 匹配 INET_ATON 函数
-	reINET_ATON = regexp.MustCompile(`(?i)inet_aton\s*\(`)
+	reINET_ATON = regexp.MustCompile(`(?i)inet_aton\s*\([^)]*\)`)
 	// 匹配 INET_NTOA 函数
-	reINET_NTOA = regexp.MustCompile(`(?i)inet_ntoa\s*\(`)
+	reINET_NTOA = regexp.MustCompile(`(?i)inet_ntoa\s*\([^)]*\)`)
 	// 匹配 UNIX_TIMESTAMP 函数
-	reUNIX_TIMESTAMP = regexp.MustCompile(`(?i)unix_timestamp\s*\(`)
+	reUNIX_TIMESTAMP = regexp.MustCompile(`(?i)unix_timestamp\s*\(\s*([^)]*)\s*\)`)
 	// 匹配 FROM_UNIXTIME 函数
-	reFROM_UNIXTIME = regexp.MustCompile(`(?i)from_unixtime\s*\(`)
+	reFROM_UNIXTIME = regexp.MustCompile(`(?i)from_unixtime\s*\(\s*([^)]*)\s*\)`)
 	// 匹配 DATE_FORMAT 函数
 	reDATE_FORMAT = regexp.MustCompile(`(?i)date_format\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 STR_TO_DATE 函数
@@ -104,25 +104,37 @@ var (
 	reDATEDIFF = regexp.MustCompile(`(?i)datediff\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 TIMEDIFF 函数
 	reTIMEDIFF = regexp.MustCompile(`(?i)timediff\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
+	// 匹配 MySQL INSERT 函数 (字符串插入)
+	reINSERT = regexp.MustCompile(`(?i)insert\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 LAST_INSERT_ID 函数
-	reLAST_INSERT_ID = regexp.MustCompile(`(?i)last_insert_id\s*\(`)
+	reLAST_INSERT_ID = regexp.MustCompile(`(?i)last_insert_id\s*\([^)]*\)`)
 	// 匹配 CONNECTION_ID 函数
-	reCONNECTION_ID = regexp.MustCompile(`(?i)connection_id\s*\(`)
+	reCONNECTION_ID = regexp.MustCompile(`(?i)connection_id\s*\([^)]*\)`)
 	// 匹配 CURRENT_USER 函数
-	reCURRENT_USER = regexp.MustCompile(`(?i)current_user\s*\(`)
+	reCURRENT_USER = regexp.MustCompile(`(?i)current_user\s*\([^)]*\)`)
 	// 匹配 SESSION_USER 函数
-	reSESSION_USER = regexp.MustCompile(`(?i)session_user\s*\(`)
+	reSESSION_USER = regexp.MustCompile(`(?i)session_user\s*\([^)]*\)`)
 	// 匹配 SYSTEM_USER 函数
-	reSYSTEM_USER = regexp.MustCompile(`(?i)system_user\s*\(`)
+	reSYSTEM_USER = regexp.MustCompile(`(?i)system_user\s*\([^)]*\)`)
 	// 匹配 SCHEMA 函数
-	reSCHEMA = regexp.MustCompile(`(?i)schema\s*\(`)
+	reSCHEMA = regexp.MustCompile(`(?i)schema\s*\([^)]*\)`)
 	// 匹配 UUID_SHORT 函数
-	reUUID_SHORT = regexp.MustCompile(`(?i)uuid_short\s*\(`)
+	reUUID_SHORT = regexp.MustCompile(`(?i)uuid_short\s*\([^)]*\)`)
+	// 匹配 RAND 函数 (包括带参数的情况)
+	reRAND = regexp.MustCompile(`(?i)rand\s*\([^)]*\)`)
+	// 匹配表连接模式
+	reJoinPattern = regexp.MustCompile(`(?i)\(([^\s]+)\s+([^\s]+)\s+(?:left|inner|right|full)?\s*join\s+([^\s]+)\s+([^\s]+)\s+on\s*\(+([^)]+)\s*\)+\)`)
+	// 匹配连接条件中的列名
+	reColumns = regexp.MustCompile(`(?i)(["\w]+)\s*=\s*("[\w]+")`)
+	// 匹配SUM函数的正则
+	reSum = regexp.MustCompile(`(?i)sum\s*\(\s*(["\w\.]+)\s*\)`)
+	// 匹配COALESCE函数的正则
+	reCoalesce = regexp.MustCompile(`(?i)coalesce\s*\(\s*("[\w\.]+)\s*,\s*(\d+)\s*\)`)
+	// 匹配 interval 语法 (如 now() + interval 1 day)
+	reInterval = regexp.MustCompile(`(?i)(\S[^+\-]*\S)\s*([+\-])\s*interval\s+([+\-]?\d+)\s+([\w_]+)`)
 )
 
-// ConvertViewDDL 将MySQL的VIEW_DEFINITION转换为PostgreSQL的CREATE VIEW语句
-// - viewName: 视图名（不带schema）
-// - viewDefinition: 从information_schema.VIEWS中读取的VIEW_DEFINITION字段内容
+// ConvertViewDDL 将MySQL的VIEW_DEFINITION转换为PostgreSQL的CREATE VIEW语句,从information_schema.VIEWS中读取的VIEW_DEFINITION字段内容
 func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	if strings.TrimSpace(viewName) == "" {
 		return "", fmt.Errorf("empty view name")
@@ -131,26 +143,25 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("empty view definition for view '%s'", viewName)
 	}
 
-	// 1) 首先将反引号替换为双引号（标识符引用），确保所有后续正则表达式处理正确
+	//  首先将反引号替换为双引号（标识符引用），确保所有后续正则表达式处理正确
 	processed := strings.ReplaceAll(viewDefinition, "`", `"`)
 	if processed == "" {
 		return "", fmt.Errorf("failed to process backticks in view definition for view '%s'", viewName)
 	}
 
-	// 2) 移除数据库名前缀（例如 "db"."table" -> 只保留 "table"）
-	// 仅在出现 "db"."table" 或 "db"."table"."col" 的情况下移除 db 前缀
+	// 移除数据库名前缀（例如 "db"."table" -> 只保留 "table"）,仅在出现 "db"."table" 或 "db"."table"."col" 的情况下移除 db 前缀
 	processed = reDBPrefix.ReplaceAllString(processed, "$1")
 	if processed == "" {
 		return "", fmt.Errorf("failed to remove database prefix in view definition for view '%s'", viewName)
 	}
 
-	// 3) 将IFNULL/ifnull替换为COALESCE
+	// 将IFNULL/ifnull替换为COALESCE
 	processed = reIfnull.ReplaceAllString(processed, "COALESCE(")
 	if processed == "" {
 		return "", fmt.Errorf("failed to replace IFNULL with COALESCE in view definition for view '%s'", viewName)
 	}
 
-	// 4) GROUP_CONCAT -> string_agg 的简单转换，保留 SEPARATOR 和 ORDER BY 的常见用法
+	// GROUP_CONCAT -> string_agg 的简单转换，保留 SEPARATOR 和 ORDER BY 的常见用法
 	processed = reGroupConcat.ReplaceAllStringFunc(processed, func(s string) string {
 		m := reGroupConcat.FindStringSubmatch(s)
 		if len(m) < 2 {
@@ -172,28 +183,25 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to convert GROUP_CONCAT to string_agg in view definition for view '%s'", viewName)
 	}
 
-	// 5) 将IF(expr, then, else)转换为CASE WHEN ... THEN ... ELSE ... END（简单版，不处理嵌套逗号）
+	//  将IF(expr, then, else)转换为CASE WHEN ... THEN ... ELSE ... END（简单版，不处理嵌套逗号）
 	processed = reIf.ReplaceAllString(processed, "CASE WHEN $1 THEN $2 ELSE $3 END")
 	if processed == "" {
 		return "", fmt.Errorf("failed to replace IF with CASE WHEN in view definition for view '%s'", viewName)
 	}
 
-	// 6) 将CONVERT(x, TYPE)转换为CAST(x AS TYPE)（简单替换）
+	// 将CONVERT(x, TYPE)转换为CAST(x AS TYPE)（简单替换）
 	processed = reConvert.ReplaceAllString(processed, "CAST($1 AS $2)")
 	if processed == "" {
 		return "", fmt.Errorf("failed to replace CONVERT with CAST in view definition for view '%s'", viewName)
 	}
 
-	// 7) 将LIMIT a,b转换为LIMIT b OFFSET a
+	// 将LIMIT a,b转换为LIMIT b OFFSET a
 	processed = reLimitOffset.ReplaceAllString(processed, "LIMIT $2 OFFSET $1")
 	if processed == "" {
 		return "", fmt.Errorf("failed to adjust LIMIT syntax in view definition for view '%s'", viewName)
 	}
 
-	// 8) 处理表连接条件中的列名歧义，为连接条件中的列添加表别名
-	// 对于视图中常见的连接模式：(table1 alias1 join table2 alias2 on(...))
-	// 为on子句中的列添加表别名
-	reJoinPattern := regexp.MustCompile(`(?i)\(([^\s]+)\s+([^\s]+)\s+(?:left|inner|right|full)?\s*join\s+([^\s]+)\s+([^\s]+)\s+on\s*\(+([^)]+)\s*\)+\)`)
+	// 处理表连接条件中的列名歧义，为连接条件中的列添加表别名,对于视图中常见的连接模式：(table1 alias1 join table2 alias2 on(...)),为on子句中的列添加表别名
 	processed = reJoinPattern.ReplaceAllStringFunc(processed, func(joinExpr string) string {
 		matches := reJoinPattern.FindStringSubmatch(joinExpr)
 		if len(matches) < 6 {
@@ -211,7 +219,6 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		condition := matches[5]
 
 		// 处理条件中的列名，为没有表别名的列添加表别名
-		reColumns := regexp.MustCompile(`(?i)(["\w]+)\s*=\s*(["\w]+)`)
 		processedCondition := reColumns.ReplaceAllStringFunc(condition, func(colMatch string) string {
 			parts := strings.SplitN(colMatch, "=", 2)
 			if len(parts) != 2 {
@@ -245,7 +252,6 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	}
 
 	// 9.1) 为SUM函数添加类型转换，解决sum(character varying)不存在的问题
-	reSum := regexp.MustCompile(`(?i)sum\s*\(\s*(["\w\.]+)\s*\)`)
 	processed = reSum.ReplaceAllStringFunc(processed, func(m string) string {
 		match := reSum.FindStringSubmatch(m)
 		if len(match) < 2 {
@@ -263,7 +269,6 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	}
 
 	// 9.2) 处理COALESCE函数的参数类型不匹配问题
-	reCoalesce := regexp.MustCompile(`(?i)coalesce\s*\(\s*(["\w\.]+)\s*,\s*(\d+)\s*\)`)
 	processed = reCoalesce.ReplaceAllStringFunc(processed, func(m string) string {
 		match := reCoalesce.FindStringSubmatch(m)
 		if len(match) < 3 {
@@ -283,8 +288,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to fix COALESCE parameter types in view definition for view '%s'", viewName)
 	}
 
-	// 10) 修正常见MySQL函数差异/关键字（可扩展）
-	// JSON函数转换
+	// 修正常见MySQL函数差异/关键字，JSON函数转换
 	processed = reJSONObject.ReplaceAllString(processed, "json_build_object(")
 	processed = reJSONArray.ReplaceAllString(processed, "json_build_array(")
 	processed = reJSONQuote.ReplaceAllString(processed, "jsonb_quote(")
@@ -307,7 +311,6 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	// JSON_ARRAY_APPEND(arr, path, value) -> arr || json_build_array(value)
 	processed = reJSONArrayAppend.ReplaceAllStringFunc(processed, func(m string) string {
 		// 匹配JSON_ARRAY_APPEND(arr, path, value)，简单处理为数组拼接
-		// 注意：这是简化版本，不处理复杂路径
 		parts := strings.SplitN(m[17:len(m)-1], ",", 3)
 		if len(parts) < 3 {
 			return m // 格式不正确，返回原始字符串
@@ -324,31 +327,78 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	processed = reJSONMergePatch.ReplaceAllString(processed, "jsonb_merge_patch(")
 	// JSON_MERGE_PRESERVE -> jsonb_concat
 	processed = reJSONMergePreserve.ReplaceAllString(processed, "jsonb_concat(")
+
+	// MySQL INSERT(str, pos, len, newstr) -> PostgreSQL OVERLAY(str PLACING newstr FROM pos FOR len)
+	processed = reINSERT.ReplaceAllStringFunc(processed, func(m string) string {
+		// 去掉函数名和括号，只保留参数部分，找到第一个'('和最后一个')'的位置
+		openParen := strings.Index(m, "(")
+		closeParen := strings.LastIndex(m, ")")
+		if openParen == -1 || closeParen == -1 || openParen >= closeParen {
+			return m // 格式不正确，返回原始字符串
+		}
+
+		// 提取参数部分
+		paramStr := m[openParen+1 : closeParen]
+
+		// 解析参数，处理嵌套括号（使用已有的splitTopLevelCommas函数）
+		params := splitTopLevelCommas(paramStr)
+		if len(params) != 4 {
+			return m // 参数数量不正确，返回原始字符串
+		}
+
+		// 提取并修剪每个参数
+		str := strings.TrimSpace(params[0])
+		pos := strings.TrimSpace(params[1])
+		len := strings.TrimSpace(params[2])
+		newstr := strings.TrimSpace(params[3])
+
+		// 构建OVERLAY函数调用（PLACING关键字必须大写）
+		return fmt.Sprintf("OVERLAY(%s PLACING %s FROM %s FOR %s)", str, newstr, pos, len)
+	})
+
 	if processed == "" {
 		return "", fmt.Errorf("failed to convert JSON functions in view definition for view '%s'", viewName)
 	}
 
 	// 加密函数转换
-	processed = reMD5.ReplaceAllString(processed, "md5(")
-	processed = reSHA1.ReplaceAllString(processed, "sha1(")
-	processed = reSHA2.ReplaceAllString(processed, "sha2(")
+	processed = reMD5.ReplaceAllStringFunc(processed, func(m string) string {
+		// 提取参数部分
+		params := m[4 : len(m)-1] // 去掉 "md5(" 和 ")"
+		return fmt.Sprintf("md5(%s)", params)
+	})
+	processed = reSHA1.ReplaceAllStringFunc(processed, func(m string) string {
+		// 提取参数部分
+		params := m[5 : len(m)-1] // 去掉 "sha1(" 和 ")"
+		return fmt.Sprintf("sha1(%s)", params)
+	})
+	processed = reSHA2.ReplaceAllStringFunc(processed, func(m string) string {
+		// 提取参数部分
+		params := m[5 : len(m)-1] // 去掉 "sha2(" 和 ")"
+		return fmt.Sprintf("sha2(%s)", params)
+	})
 	if processed == "" {
 		return "", fmt.Errorf("failed to convert encryption functions in view definition for view '%s'", viewName)
 	}
 
 	// UUID函数转换
-	processed = reUUID.ReplaceAllString(processed, "uuid_generate_v4(")
-	processed = reUUID_SHORT.ReplaceAllString(processed, "(extract(epoch from now()) * 1000000)::bigint")
+	processed = reUUID.ReplaceAllStringFunc(processed, func(m string) string {
+		return "uuid_generate_v4()"
+	})
+	processed = reUUID_SHORT.ReplaceAllStringFunc(processed, func(m string) string {
+		return "(extract(epoch from now()) * 1000000)::bigint"
+	})
 	if processed == "" {
 		return "", fmt.Errorf("failed to convert UUID functions in view definition for view '%s'", viewName)
 	}
 
 	// 网络函数转换
 	processed = reINET_ATON.ReplaceAllStringFunc(processed, func(m string) string {
-		// INET_ATON('192.168.1.1') -> (CAST('192.168.1.1' AS inet) - CAST('0.0.0.0' AS inet))::bigint
-		// 安全提取参数
-		params := strings.TrimPrefix(m, "INET_ATON(")
-		params = strings.TrimSuffix(params, ")")
+		// 安全提取参数，找到左括号的位置
+		parenIndex := strings.Index(m, "(")
+		if parenIndex == -1 {
+			return m // 无效格式，返回原始值
+		}
+		params := m[parenIndex+1 : len(m)-1] // 提取括号内的参数
 		var sb strings.Builder
 		sb.WriteString("(CAST(")
 		sb.WriteString(params)
@@ -356,10 +406,12 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return sb.String()
 	})
 	processed = reINET_NTOA.ReplaceAllStringFunc(processed, func(m string) string {
-		// INET_NTOA(3232235777) -> CAST((CAST('0.0.0.0' AS inet) + $1::bigint) AS text)
-		// 安全提取参数
-		params := strings.TrimPrefix(m, "INET_NTOA(")
-		params = strings.TrimSuffix(params, ")")
+		// 安全提取参数，找到左括号的位置
+		parenIndex := strings.Index(m, "(")
+		if parenIndex == -1 {
+			return m // 无效格式，返回原始值
+		}
+		params := m[parenIndex+1 : len(m)-1] // 提取括号内的参数
 		var sb strings.Builder
 		sb.WriteString("CAST((CAST('0.0.0.0' AS inet) + ")
 		sb.WriteString(params)
@@ -372,13 +424,26 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 
 	// 时间函数转换
 	processed = reUNIX_TIMESTAMP.ReplaceAllStringFunc(processed, func(m string) string {
-		if len(m) == 15 { // UNIX_TIMESTAMP() 不带参数
+		// 提取参数部分
+		args := m[15 : len(m)-1] // 去掉 "UNIX_TIMESTAMP(" 和 ")"
+		args = strings.TrimSpace(args)
+		if args == "" { // UNIX_TIMESTAMP() 不带参数
 			return "extract(epoch from now())"
 		}
-		// UNIX_TIMESTAMP(expr) -> extract(epoch from $1)
-		return "extract(epoch from " + m[16:len(m)-1] + ")"
+		// UNIX_TIMESTAMP(expr) -> extract(epoch from expr)
+		return "extract(epoch from " + args + ")"
 	})
-	processed = reFROM_UNIXTIME.ReplaceAllString(processed, "to_timestamp(")
+	// FROM_UNIXTIME(expr) -> to_timestamp(expr)
+	processed = reFROM_UNIXTIME.ReplaceAllStringFunc(processed, func(m string) string {
+		// 提取参数部分
+		args := m[14 : len(m)-1] // 去掉 "FROM_UNIXTIME(" 和 ")"
+		args = strings.TrimSpace(args)
+		if args == "" { // FROM_UNIXTIME() 不带参数
+			return "to_timestamp(extract(epoch from now()))"
+		}
+		// FROM_UNIXTIME(expr) -> to_timestamp(expr)
+		return "to_timestamp(" + args + ")"
+	})
 	processed = reDATE_FORMAT.ReplaceAllString(processed, "to_char($1, $2)")
 	processed = reSTR_TO_DATE.ReplaceAllString(processed, "to_date($1, $2)")
 	processed = reDATEDIFF.ReplaceAllString(processed, "date_part('day', $1 - $2)")
@@ -483,56 +548,88 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to process ADDDATE/SUBDATE functions in view definition for view '%s'", viewName)
 	}
 
-	// ADDTIME/SUBTIME -> + / -
 	// 使用更精确的方式处理ADDTIME和SUBTIME函数，避免影响其他表达式
-	processed = reADDTIME.ReplaceAllStringFunc(processed, func(m string) string {
-		// 匹配 ADDTIME(expr1, expr2) -> expr1 + expr2
-		parts := strings.SplitN(m[8:len(m)-1], ",", 2)
-		if len(parts) < 2 {
-			return m
-		}
-		expr1 := strings.TrimSpace(parts[0])
-		expr2 := strings.TrimSpace(parts[1])
-		var sb strings.Builder
-		sb.WriteString("(")
-		sb.WriteString(expr1)
-		sb.WriteString(" + ")
-		sb.WriteString(expr2)
-		sb.WriteString(")")
-		return sb.String()
-	})
-	processed = reSUBTIME.ReplaceAllStringFunc(processed, func(m string) string {
-		// 匹配 SUBTIME(expr1, expr2) -> expr1 - expr2
-		parts := strings.SplitN(m[8:len(m)-1], ",", 2)
-		if len(parts) < 2 {
-			return m
-		}
-		expr1 := strings.TrimSpace(parts[0])
-		expr2 := strings.TrimSpace(parts[1])
-		var sb strings.Builder
-		sb.WriteString("(")
-		sb.WriteString(expr1)
-		sb.WriteString(" - ")
-		sb.WriteString(expr2)
-		sb.WriteString(")")
-		return sb.String()
-	})
+	processed = reADDTIME.ReplaceAllString(processed, "($1 + $2)")
+	processed = reSUBTIME.ReplaceAllString(processed, "($1 - $2)")
 	if processed == "" {
 		return "", fmt.Errorf("failed to process ADDTIME/SUBTIME functions in view definition for view '%s'", viewName)
 	}
 
 	// 系统函数转换
-	processed = reLAST_INSERT_ID.ReplaceAllString(processed, "lastval()")
-	processed = reCONNECTION_ID.ReplaceAllString(processed, "pg_backend_pid()")
-	processed = reCURRENT_USER.ReplaceAllString(processed, "current_user")
-	processed = reSESSION_USER.ReplaceAllString(processed, "session_user")
-	processed = reSYSTEM_USER.ReplaceAllString(processed, "system_user")
-	processed = reSCHEMA.ReplaceAllString(processed, "current_schema")
-	processed = reDATABASE.ReplaceAllString(processed, "current_database()")
-	processed = reUSER.ReplaceAllString(processed, "current_user")
-	processed = reVERSION.ReplaceAllString(processed, "version()")
+	processed = reLAST_INSERT_ID.ReplaceAllStringFunc(processed, func(m string) string {
+		return "lastval()"
+	})
+	processed = reCONNECTION_ID.ReplaceAllStringFunc(processed, func(m string) string {
+		return "pg_backend_pid()"
+	})
+	processed = reCURRENT_USER.ReplaceAllStringFunc(processed, func(m string) string {
+		return "current_user"
+	})
+	processed = reSESSION_USER.ReplaceAllStringFunc(processed, func(m string) string {
+		return "session_user"
+	})
+	processed = reSYSTEM_USER.ReplaceAllStringFunc(processed, func(m string) string {
+		return "system_user"
+	})
+	processed = reSCHEMA.ReplaceAllStringFunc(processed, func(m string) string {
+		return "current_schema"
+	})
+	processed = reDATABASE.ReplaceAllStringFunc(processed, func(m string) string {
+		return "current_database()"
+	})
+	processed = reUSER.ReplaceAllStringFunc(processed, func(m string) string {
+		return "current_user"
+	})
+	processed = reVERSION.ReplaceAllStringFunc(processed, func(m string) string {
+		return "version()"
+	})
+	// 转换 RAND 函数 (MySQL) 为 random() (PostgreSQL)
+	// 处理 RAND() 和 RAND(seed) 两种情况
+	// PostgreSQL的random()不支持种子参数，所以直接替换整个函数调用
+	processed = reRAND.ReplaceAllString(processed, "random()")
 	if processed == "" {
 		return "", fmt.Errorf("failed to convert system functions in view definition for view '%s'", viewName)
+	}
+
+	// 处理 interval 语法 (如 now() + interval 1 day → now() + interval '1 day')
+	processed = reInterval.ReplaceAllStringFunc(processed, func(m string) string {
+		// 提取捕获组
+		matches := reInterval.FindStringSubmatch(m)
+		if len(matches) != 5 {
+			return m
+		}
+
+		dateExpr := strings.TrimSpace(matches[1])
+		operator := matches[2]
+		number := matches[3]
+		unit := matches[4]
+
+		// 处理负数值的情况
+		var processedOperator string
+		var processedNumber string
+
+		if strings.HasPrefix(number, "-") {
+			// 如果数值是负数，运算符保持正号，数值变为正数
+			processedOperator = "+"
+			processedNumber = strings.TrimPrefix(number, "-")
+		} else {
+			processedOperator = operator
+			processedNumber = number
+		}
+
+		var sb strings.Builder
+		sb.WriteString(dateExpr)
+		sb.WriteString(" ")
+		sb.WriteString(processedOperator)
+		sb.WriteString(" interval '")
+		sb.WriteString(processedNumber)
+		sb.WriteString(" ")
+		sb.WriteString(unit)
+		sb.WriteString("'")
+		return sb.String()
+	})
+	if processed == "" {
+		return "", fmt.Errorf("failed to process interval syntax in view definition for view '%s'", viewName)
 	}
 
 	processed = strings.TrimSpace(processed)
@@ -549,7 +646,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		}
 	}
 
-	// 11) 包装成CREATE OR REPLACE VIEW语句
+	// 包装成CREATE OR REPLACE VIEW语句
 	quotedViewName := quoteIdentifier(viewName)
 	if quotedViewName == "" {
 		return "", fmt.Errorf("failed to quote view name '%s'", viewName)
@@ -559,7 +656,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to generate CREATE VIEW statement for view '%s'", viewName)
 	}
 
-	// 12) 将整个语句转换为小写，确保符合要求
+	// 将整个语句转换为小写，确保符合要求
 	createStmt = strings.ToLower(createStmt)
 	if createStmt == "" {
 		return "", fmt.Errorf("failed to convert CREATE VIEW statement to lowercase for view '%s'", viewName)
@@ -627,23 +724,30 @@ func splitTopLevelCommas(s string) []string {
 
 // replaceConcatExpressions 将 concat(a,b,c) 转成 a || b || c（尽量处理嵌套）
 func replaceConcatExpressions(s string) string {
-	lower := strings.ToLower(s)
 	out := s
 	idx := 0
 	for {
-		pos := strings.Index(lower[idx:], "concat(")
+		// 直接在原字符串中查找 "concat("，不区分大小写
+		pos := -1
+		for i := idx; i <= len(out)-6; i++ {
+			if strings.ToLower(out[i:i+6]) == "concat(" {
+				pos = i
+				break
+			}
+		}
 		if pos == -1 {
 			break
 		}
-		pos += idx
 		// 找到括号开始
-		start := pos + len("concat(")
+		start := pos + 6 // len("concat(")
 		depth := 1
 		end := start
-		for i := start; i < len(s); i++ {
-			if s[i] == '(' {
+		// 找到匹配的右括号
+		for i := start; i < len(out); i++ {
+			switch out[i] {
+			case '(':
 				depth++
-			} else if s[i] == ')' {
+			case ')':
 				depth--
 				if depth == 0 {
 					end = i
@@ -651,12 +755,15 @@ func replaceConcatExpressions(s string) string {
 				}
 			}
 		}
-		if end <= start {
-			// 无法匹配，退出
-			break
+		// 如果找不到匹配的右括号，跳过这个函数调用
+		if depth > 0 {
+			idx = pos + 6
+			continue
 		}
-		argsStr := s[start:end]
+		// 分割参数
+		argsStr := out[start:end]
 		args := splitTopLevelCommas(argsStr)
+		// 构建替换后的字符串
 		var sb strings.Builder
 		sb.WriteString("(")
 		for i, a := range args {
@@ -666,10 +773,11 @@ func replaceConcatExpressions(s string) string {
 			sb.WriteString(strings.TrimSpace(a))
 		}
 		sb.WriteString(")")
-		out = out[:pos] + sb.String() + out[end+1:]
-		// move index forward
-		idx = pos + len(sb.String())
-		lower = strings.ToLower(out)
+		// 替换原字符串中的concat函数调用
+		replacement := sb.String()
+		out = out[:pos] + replacement + out[end+1:]
+		// 更新索引位置
+		idx = pos + len(replacement)
 	}
 	return out
 }
