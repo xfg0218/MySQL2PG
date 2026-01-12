@@ -83,6 +83,77 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 - **清晰的示例输出**：提供多种场景的示例输出，帮助用户理解工具的工作方式
 - **完善的错误处理**：遇到错误时提供详细的错误信息，便于排查问题
 
+## 重要功能说明
+
+### test_only模式
+- **功能说明**：仅测试数据库连接，不执行任何转换操作，连接测试响应时间<1秒
+- **参数配置**：
+  - `mysql.test_only: true` - 仅测试MySQL连接，不执行转换
+  - `postgresql.test_only: true` - 仅测试PostgreSQL连接，不执行转换
+  - 当两者都设置为 `true` 时，工具会测试两个数据库的连接，不执行转换
+- **使用场景**：快速验证数据库连接配置是否正确，无需执行完整的转换流程
+
+### 数据校验
+- **功能说明**：在同步数据后验证MySQL和PostgreSQL的数据一致性，确保数据迁移的完整性
+- **参数配置**：`validate_data: true` - 启用数据校验功能
+- **验证方式**：比较两张表的行数是否一致
+- **处理逻辑**：如果数据校验失败，工具会根据 `truncate_before_sync` 设置决定是否中断执行
+- **使用场景**：确保数据迁移的完整性，特别是在生产环境中进行重要数据迁移时
+
+### truncate_before_sync 选项
+- **功能说明**：控制在同步数据前是否清空PostgreSQL中的表数据，提供灵活的同步策略
+- **参数配置**：
+  - `truncate_before_sync: true` - 同步前清空表数据
+  - `truncate_before_sync: false` - 同步前不清空表数据
+- **处理逻辑**：
+  - 当 `truncate_before_sync: true` 时：
+    - 同步前清空PostgreSQL表数据
+    - 如果数据校验失败（行数不一致），工具会中断执行并返回错误
+  - 当 `truncate_before_sync: false` 时：
+    - 同步前不清空表数据，新数据会追加到表中
+    - 如果数据校验失败（行数不一致），工具会继续执行，但会在日志中显示"数据校验不一致"
+    - 最终会在转换完成后显示数据不一致表的统计信息
+
+### MySQL连接参数配置
+- **功能说明**：允许用户自定义MySQL连接参数，以满足特定的连接需求
+- **参数配置**：`connection_params: charset=utf8mb4&parseTime=false&interpolateParams=true`
+- **支持的参数**：
+  - `charset=utf8mb4` - 使用UTF8MB4字符集，支持表情符号
+  - `parseTime=false` - 禁用时间类型自动解析
+  - `interpolateParams=true` - 启用参数插值，提高安全性
+- **注意事项**：
+  - 参数格式为key=value&key=value形式
+  - 不需要添加前导问号
+  - 不支持compress参数（MySQL驱动未实现）
+
+### 表过滤功能
+- **功能说明**：提供两种表过滤方式，灵活控制需要同步的表，属于转换选项配置
+- **白名单模式**（use_table_list）：
+  - `conversion.options.use_table_list: true` - 仅同步table_list中的表
+  - `conversion.options.table_list: [table1, table2]` - 指定要同步的表列表
+- **黑名单模式**（exclude_use_table_list）：
+  - `conversion.options.exclude_use_table_list: true` - 启用黑名单模式，跳过exclude_table_list中的表
+  - `conversion.options.exclude_table_list: [table3, table4]` - 指定要跳过的表列表
+- **注意事项**：
+  - 白名单和黑名单模式不能同时使用
+  - 当同时设置了白名单和黑名单时，白名单模式优先级更高
+  - 表名区分大小写，请确保与数据库中的实际表名一致
+
+### 连接池配置优化
+- **功能说明**：调整连接池参数，提高连接效率
+- **MySQL连接池**：
+  - `max_open_conns: 100` - 最大连接数从50提升到100
+  - `max_idle_conns: 50` - 最大空闲连接数从20提升到50
+- **PostgreSQL连接池**：
+  - `max_conns: 50` - 最大连接数从20提升到50
+- **优化效果**：提高并发处理能力，减少连接创建和销毁的开销
+
+### 数据不一致表统计
+- **功能说明**：当数据校验失败时，收集并显示所有数据不一致的表信息
+- **显示内容**：以表格形式显示表名、MySQL数据量和PostgreSQL数据量
+- **处理逻辑**：只有当 `truncate_before_sync: false` 时，数据不一致不会中断程序执行，而是会继续执行并在最终显示统计信息
+- **使用场景**：在同步场景中，了解哪些表的数据量不一致，以便后续进行处理
+
 ## 功能特性详情
 
 ### 1. 表结构转换
@@ -361,77 +432,6 @@ run:
 # 或者使用 -c 参数指定配置文件
 ./mysql2pg -c config.yml
 ```
-
-## 重要功能说明
-
-### test_only模式
-- **功能说明**：仅测试数据库连接，不执行任何转换操作，连接测试响应时间<1秒
-- **参数配置**：
-  - `mysql.test_only: true` - 仅测试MySQL连接，不执行转换
-  - `postgresql.test_only: true` - 仅测试PostgreSQL连接，不执行转换
-  - 当两者都设置为 `true` 时，工具会测试两个数据库的连接，不执行转换
-- **使用场景**：快速验证数据库连接配置是否正确，无需执行完整的转换流程
-
-### 数据校验
-- **功能说明**：在同步数据后验证MySQL和PostgreSQL的数据一致性，确保数据迁移的完整性
-- **参数配置**：`validate_data: true` - 启用数据校验功能
-- **验证方式**：比较两张表的行数是否一致
-- **处理逻辑**：如果数据校验失败，工具会根据 `truncate_before_sync` 设置决定是否中断执行
-- **使用场景**：确保数据迁移的完整性，特别是在生产环境中进行重要数据迁移时
-
-### truncate_before_sync 选项
-- **功能说明**：控制在同步数据前是否清空PostgreSQL中的表数据，提供灵活的同步策略
-- **参数配置**：
-  - `truncate_before_sync: true` - 同步前清空表数据
-  - `truncate_before_sync: false` - 同步前不清空表数据
-- **处理逻辑**：
-  - 当 `truncate_before_sync: true` 时：
-    - 同步前清空PostgreSQL表数据
-    - 如果数据校验失败（行数不一致），工具会中断执行并返回错误
-  - 当 `truncate_before_sync: false` 时：
-    - 同步前不清空表数据，新数据会追加到表中
-    - 如果数据校验失败（行数不一致），工具会继续执行，但会在日志中显示"数据校验不一致"
-    - 最终会在转换完成后显示数据不一致表的统计信息
-
-### MySQL连接参数配置
-- **功能说明**：允许用户自定义MySQL连接参数，以满足特定的连接需求
-- **参数配置**：`connection_params: charset=utf8mb4&parseTime=false&interpolateParams=true`
-- **支持的参数**：
-  - `charset=utf8mb4` - 使用UTF8MB4字符集，支持表情符号
-  - `parseTime=false` - 禁用时间类型自动解析
-  - `interpolateParams=true` - 启用参数插值，提高安全性
-- **注意事项**：
-  - 参数格式为key=value&key=value形式
-  - 不需要添加前导问号
-  - 不支持compress参数（MySQL驱动未实现）
-
-### 表过滤功能
-- **功能说明**：提供两种表过滤方式，灵活控制需要同步的表，属于转换选项配置
-- **白名单模式**（use_table_list）：
-  - `conversion.options.use_table_list: true` - 仅同步table_list中的表
-  - `conversion.options.table_list: [table1, table2]` - 指定要同步的表列表
-- **黑名单模式**（exclude_use_table_list）：
-  - `conversion.options.exclude_use_table_list: true` - 启用黑名单模式，跳过exclude_table_list中的表
-  - `conversion.options.exclude_table_list: [table3, table4]` - 指定要跳过的表列表
-- **注意事项**：
-  - 白名单和黑名单模式不能同时使用
-  - 当同时设置了白名单和黑名单时，白名单模式优先级更高
-  - 表名区分大小写，请确保与数据库中的实际表名一致
-
-### 连接池配置优化
-- **功能说明**：调整连接池参数，提高连接效率
-- **MySQL连接池**：
-  - `max_open_conns: 100` - 最大连接数从50提升到100
-  - `max_idle_conns: 50` - 最大空闲连接数从20提升到50
-- **PostgreSQL连接池**：
-  - `max_conns: 50` - 最大连接数从20提升到50
-- **优化效果**：提高并发处理能力，减少连接创建和销毁的开销
-
-### 数据不一致表统计
-- **功能说明**：当数据校验失败时，收集并显示所有数据不一致的表信息
-- **显示内容**：以表格形式显示表名、MySQL数据量和PostgreSQL数据量
-- **处理逻辑**：只有当 `truncate_before_sync: false` 时，数据不一致不会中断程序执行，而是会继续执行并在最终显示统计信息
-- **使用场景**：在同步场景中，了解哪些表的数据量不一致，以便后续进行处理
 
 ## 重要参数详细解释
 
