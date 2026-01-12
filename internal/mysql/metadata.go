@@ -48,6 +48,12 @@ type UserInfo struct {
 	Grants []string
 }
 
+// ViewInfo 视图信息
+type ViewInfo struct {
+	ViewName       string
+	ViewDefinition string
+}
+
 // GetTables 获取所有表信息
 func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string) ([]TableInfo, error) {
 	// 获取当前连接的用户名，以便更好地诊断权限问题
@@ -313,6 +319,36 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	}
 
 	return indexes, nil
+}
+
+// GetViews 获取所有视图信息
+func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
+	// 查询视图定义
+	query := `
+		SELECT table_name, view_definition 
+		FROM INFORMATION_SCHEMA.VIEWS 
+		WHERE table_schema = ?
+	`
+	rows, err := c.db.Query(query, database)
+	if err != nil {
+		return nil, fmt.Errorf("查询视图定义失败: %w", err)
+	}
+	defer rows.Close()
+
+	var views []ViewInfo
+	for rows.Next() {
+		var view ViewInfo
+		if err := rows.Scan(&view.ViewName, &view.ViewDefinition); err != nil {
+			return nil, fmt.Errorf("扫描视图信息失败: %w", err)
+		}
+		views = append(views, view)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历视图结果失败: %w", err)
+	}
+
+	return views, nil
 }
 
 // GetFunctions 获取所有函数信息
