@@ -22,6 +22,15 @@ func NewConnection(config *config.MySQLConfig) (*Connection, error) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4",
 		config.Username, config.Password, config.Host, config.Port, config.Database)
 
+	// 添加连接参数
+	if config.ConnectionParams != "" {
+		// 检查是否需要添加&符号
+		if !strings.HasPrefix(config.ConnectionParams, "&") {
+			dsn += "&"
+		}
+		dsn += config.ConnectionParams
+	}
+
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开MySQL连接失败: %w", err)
