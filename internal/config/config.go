@@ -19,26 +19,27 @@ type Config struct {
 
 // MySQLConfig MySQL连接配置
 type MySQLConfig struct {
-	Host            string        `mapstructure:"host"`
-	Port            int           `mapstructure:"port"`
-	Username        string        `mapstructure:"username"`
-	Password        string        `mapstructure:"password"`
-	Database        string        `mapstructure:"database"`
-	TestOnly        bool          `mapstructure:"test_only"`
-	MaxOpenConns    int           `mapstructure:"max_open_conns"`    // 最大打开连接数
-	MaxIdleConns    int           `mapstructure:"max_idle_conns"`    // 最大空闲连接数
-	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"` // 连接最大生命周期（秒）
+	Host             string        `mapstructure:"host"`
+	Port             int           `mapstructure:"port"`
+	Username         string        `mapstructure:"username"`
+	Password         string        `mapstructure:"password"`
+	Database         string        `mapstructure:"database"`
+	TestOnly         bool          `mapstructure:"test_only"`
+	MaxOpenConns     int           `mapstructure:"max_open_conns"`    // 最大打开连接数
+	MaxIdleConns     int           `mapstructure:"max_idle_conns"`    // 最大空闲连接数
+	ConnMaxLifetime  time.Duration `mapstructure:"conn_max_lifetime"` // 连接最大生命周期（秒）
+	ConnectionParams string        `mapstructure:"connection_params"` // MySQL连接参数
 }
 
-// PostgreSQLConfig PostgreSQL连接配置
 type PostgreSQLConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	Username string `mapstructure:"username"`
-	Password string `mapstructure:"password"`
-	Database string `mapstructure:"database"`
-	TestOnly bool   `mapstructure:"test_only"`
-	MaxConns int    `mapstructure:"max_conns"` // 最大连接数
+	Host               string `mapstructure:"host"`
+	Port               int    `mapstructure:"port"`
+	Username           string `mapstructure:"username"`
+	Password           string `mapstructure:"password"`
+	Database           string `mapstructure:"database"`
+	TestOnly           bool   `mapstructure:"test_only"`
+	MaxConns           int    `mapstructure:"max_conns"`            // 最大连接数
+	PgConnectionParams string `mapstructure:"pg_connection_params"` // PostgreSQL连接参数
 }
 
 // ConversionConfig 转换配置
