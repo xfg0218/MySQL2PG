@@ -318,7 +318,7 @@ conversion:
     indexes: true     # step4: 转换索引
     functions: true   # step5: 转换函数
     users: true       # step6: 转换用户
-    table_privileges: true # step8: 转换用户在表上的权限
+    table_privileges: true # step7: 转换用户在表上的权限
     lowercase_columns: true     # 控制表字段是否需要转小写，true为转小写（默认值），false保持与MySQL字段一致
     skip_existing_tables: true  # 如果表在PostgreSQL中已存在则跳过，否则创建
     use_table_list: false       # 是否使用指定的表列表进行数据同步，其他步骤不生效
@@ -406,14 +406,17 @@ run:
   - 不支持compress参数（MySQL驱动未实现）
 
 ### 表过滤功能
-- **功能说明**：提供两种表过滤方式，灵活控制需要同步的表
+- **功能说明**：提供两种表过滤方式，灵活控制需要同步的表，属于转换选项配置
 - **白名单模式**（use_table_list）：
-  - `use_table_list: true` - 仅同步table_list中的表
-  - `table_list: [table1, table2]` - 指定要同步的表列表
+  - `conversion.options.use_table_list: true` - 仅同步table_list中的表
+  - `conversion.options.table_list: [table1, table2]` - 指定要同步的表列表
 - **黑名单模式**（exclude_use_table_list）：
-  - `exclude_use_table_list: true` - 跳过exclude_table_list中的表
-  - `exclude_table_list: [table3, table4]` - 指定要跳过的表列表
-- **优先级**：白名单模式（use_table_list）优先级高于黑名单模式
+  - `conversion.options.exclude_use_table_list: true` - 启用黑名单模式，跳过exclude_table_list中的表
+  - `conversion.options.exclude_table_list: [table3, table4]` - 指定要跳过的表列表
+- **注意事项**：
+  - 白名单和黑名单模式不能同时使用
+  - 当同时设置了白名单和黑名单时，白名单模式优先级更高
+  - 表名区分大小写，请确保与数据库中的实际表名一致
 
 ### 连接池配置优化
 - **功能说明**：调整连接池参数，提高连接效率
