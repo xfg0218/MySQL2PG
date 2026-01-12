@@ -26,6 +26,11 @@ func NewConnection(config *config.PostgreSQLConfig) (*Connection, error) {
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		config.Host, config.Port, config.Username, config.Password, config.Database)
 
+	// 添加连接参数
+	if config.PgConnectionParams != "" {
+		connStr += " " + config.PgConnectionParams
+	}
+
 	poolConfig, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
 		return nil, fmt.Errorf("解析PostgreSQL连接配置失败: %w", err)
