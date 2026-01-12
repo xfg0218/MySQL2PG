@@ -27,6 +27,7 @@ conversion:
   options:
     tableddl: true    # 转换表DDL
     data: true        # 转换数据（先转DDL后转数据）
+    view: false         # 转换视图
     indexes: true     # 转换索引
     functions: false   # 转换函数
     users: true       # 转换用户
