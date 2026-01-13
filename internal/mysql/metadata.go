@@ -355,7 +355,7 @@ func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
 func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 	// 使用SHOW FUNCTION STATUS获取函数列表，避免查询information_schema导致的权限问题
 	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
-	query := "SHOW FUNCTION STATUS WHERE Db = DATABASE()"
+	query := fmt.Sprintf("SHOW FUNCTION STATUS WHERE Db = '%s'", c.config.Database)
 
 	rows, err := c.db.Query(query)
 	if err != nil {
@@ -363,16 +363,48 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 	}
 	defer rows.Close()
 
+	// 获取列信息，只需要调用一次
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("获取函数状态结果列信息失败: %w", err)
+	}
+
 	var functionNames []string
 	for rows.Next() {
-		// SHOW FUNCTION STATUS返回的字段顺序：
-		// Db, Name, Type, Definer, Modified, Created, Security_type, Comment, Character_set_client, Collation_connection, Database_collation, Body_utf8
-		var db, name, functionType, definer, modified, created, securityType, comment, charsetClient, collationConn, dbCollation, bodyUtf8 string
-		if err := rows.Scan(&db, &name, &functionType, &definer, &modified, &created, &securityType, &comment, &charsetClient, &collationConn, &dbCollation, &bodyUtf8); err != nil {
+		// 创建足够的空指针来存储结果
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range columns {
+			valuePtrs[i] = &values[i]
+		}
+
+		// 扫描结果
+		if err := rows.Scan(valuePtrs...); err != nil {
 			return nil, fmt.Errorf("扫描函数状态信息失败: %w", err)
 		}
 
-		functionNames = append(functionNames, name)
+		// 提取函数名（Name字段在第2个位置）
+		var name string
+		if len(columns) > 1 {
+			// 使用通用的类型转换方法
+			switch v := values[1].(type) {
+			case []byte:
+				name = string(v)
+			case string:
+				name = v
+			default:
+				name = fmt.Sprintf("%v", v)
+			}
+		}
+
+		if name != "" {
+			functionNames = append(functionNames, name)
+		}
+	}
+
+	// 检查是否有错误发生
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代函数列表时发生错误: %w", err)
 	}
 
 	var functions []FunctionInfo
@@ -385,18 +417,61 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 			continue
 		}
 
-		if funcRows.Next() {
-			// SHOW CREATE FUNCTION返回的字段顺序：Function, Create Function
-			var funcName, definition string
-			if err := funcRows.Scan(&funcName, &definition); err != nil {
-				funcRows.Close()
-				continue
+		// 先检查是否有结果行
+		if !funcRows.Next() {
+			funcRows.Close()
+			continue
+		}
+
+		// 使用动态方式处理SHOW CREATE FUNCTION的结果，避免不同MySQL版本返回不同字段数的问题
+		columns, err := funcRows.Columns()
+		if err != nil {
+			funcRows.Close()
+			continue
+		}
+
+		// 创建足够的空指针来存储结果
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range columns {
+			valuePtrs[i] = &values[i]
+		}
+
+		// 扫描结果
+		if err := funcRows.Scan(valuePtrs...); err != nil {
+			funcRows.Close()
+			continue
+		}
+
+		funcRows.Close()
+
+		// 解析结果，寻找Function和Create Function字段
+		var name, definition string
+		for i, col := range columns {
+			var value string
+			if values[i] == nil {
+				value = ""
+			} else if b, ok := values[i].([]byte); ok {
+				value = string(b)
+			} else if v, ok := values[i].(string); ok {
+				value = v
+			} else {
+				value = fmt.Sprintf("%v", values[i])
 			}
 
-			funcRows.Close()
+			// 根据列名确定字段值
+			switch strings.ToLower(col) {
+			case "function":
+				name = value
+			case "create function":
+				definition = value
+			default:
+				// 忽略其他字段
+			}
+		}
 
-			// 简单处理返回类型，这里我们暂时返回空字符串
-			// 要准确解析返回类型，需要更复杂的SQL解析逻辑
+		if name != "" && definition != "" {
+			// 简单处理返回类型
 			returnType := ""
 
 			// 从函数体中解析参数
@@ -422,13 +497,11 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 			}
 
 			functions = append(functions, FunctionInfo{
-				Name:       funcName,
+				Name:       name,
 				DDL:        definition,
 				Parameters: parameters,
 				ReturnType: returnType,
 			})
-		} else {
-			funcRows.Close()
 		}
 	}
 
