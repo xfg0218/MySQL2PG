@@ -29,7 +29,7 @@ func ConvertUserDDL(user mysql.UserInfo) ([]string, error) {
 
 	// 创建用户 - PostgreSQL 不支持 IF NOT EXISTS，所以先检查用户是否存在
 	// 使用引号语法确保特殊字符被正确处理
-	pgDDLs = append(pgDDLs, fmt.Sprintf("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '%s') THEN CREATE USER \"%s\"; END IF; END $$;", pgUserName, pgUserName))
+	pgDDLs = append(pgDDLs, fmt.Sprintf("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN CREATE USER \"%s\"; END IF; END $$;", pgUserName, pgUserName))
 
 	// 转换权限
 	for _, grant := range user.Grants {
