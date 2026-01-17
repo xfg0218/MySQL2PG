@@ -546,7 +546,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				wg.Wait() // 等待函数同步完成
 				// 记录结束时间和对象数量
 				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "开始转换函数",
+					StageName:   "转换函数",
 					StartTime:   startTime,
 					EndTime:     time.Now(),
 					ObjectCount: len(functions),
@@ -911,7 +911,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				wg.Wait() // 等待函数同步完成
 				// 记录结束时间和对象数量
 				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "开始转换函数",
+					StageName:   "转换函数",
 					StartTime:   startTime,
 					EndTime:     time.Now(),
 					ObjectCount: len(functions),
