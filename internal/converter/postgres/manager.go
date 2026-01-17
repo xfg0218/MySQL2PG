@@ -86,7 +86,7 @@ func (m *Manager) Close() error {
 // Run 执行完整的转换流程
 // 根据配置执行表DDL、数据、索引、函数、用户和权限的转换
 func (m *Manager) Run() error {
-	m.Log("开始转换MySQL DDL到PostgreSQL...")
+	m.Log("表MySQL 的DDL、数据、view、索引、函数、用户和权限的转换到 PostgreSQL ...")
 
 	// 检查是否启用了表列表功能
 	if m.config.Conversion.Options.UseTableList && len(m.config.Conversion.Options.TableList) > 0 {
