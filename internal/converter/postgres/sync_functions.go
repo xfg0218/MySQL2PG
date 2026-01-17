@@ -113,14 +113,19 @@ var (
 	reEndLoop        = regexp.MustCompile(`(?i)\bEND\s+LOOP\b`)
 
 	// 杂项修复
-	reIfExit       = regexp.MustCompile(`(?i)IF\s+(\w+)\s*EXIT`)
-	reElsifAssign  = regexp.MustCompile(`(?i)ELSIF\s+([^\s]+?)([a-zA-Z_]+)\s*:=`)
-	reElseAssign   = regexp.MustCompile(`(?i)ELSE\s*([a-zA-Z_]+)\s*:=`)
-	rePId          = regexp.MustCompile(`(?i)p__id`)
-	reExit         = regexp.MustCompile(`(?i)(\w+)\s*:=\s*exit`)
-	rePDate        = regexp.MustCompile(`(?i)p__date`)
-	reMiscComment  = regexp.MustCompile(`(?i)\s+--`)
-	reThenExitThen = regexp.MustCompile(`(?i)then\s+exit\s+then`)
+	reIfExit         = regexp.MustCompile(`(?i)IF\s+(\w+)\s*EXIT`)
+	reElsifAssign    = regexp.MustCompile(`(?i)ELSIF\s+([^\s]+?)([a-zA-Z_]+)\s*:=`)
+	reElseAssign     = regexp.MustCompile(`(?i)ELSE\s*([a-zA-Z_]+)\s*:=`)
+	rePId            = regexp.MustCompile(`(?i)p__id`)
+	reExit           = regexp.MustCompile(`(?i)(\w+)\s*:=\s*exit`)
+	rePDate          = regexp.MustCompile(`(?i)p__date`)
+	reMiscComment    = regexp.MustCompile(`(?i)\s+--`)
+	reThenExitThen   = regexp.MustCompile(`(?i)then\s+exit\s+then`)
+	reRowCountAssign = regexp.MustCompile(`(?i)(\w+)\s*:=\s*ROW_COUNT\(\)\s*;?`)
+
+	// 类型修饰符清理
+	reUnsigned = regexp.MustCompile(`(?i)\s+UNSIGNED`)
+	reZerofill = regexp.MustCompile(`(?i)\s+ZEROFILL`)
 )
 
 // =================================================================================================
@@ -233,6 +238,14 @@ func (c *FunctionConverter) parseParameters() error {
 	params := ddl[startIdx+1 : endIdx]
 	params = strings.ReplaceAll(params, "`", "\"")
 	params = reDateTime.ReplaceAllString(params, "TIMESTAMP")
+	params = reTinyInt.ReplaceAllString(params, "SMALLINT") // 参数中的 TINYINT 也要转
+	params = reUnsigned.ReplaceAllString(params, "")
+	params = reZerofill.ReplaceAllString(params, "")
+	// 简单清理参数中的字符集设置，虽然可能不够完美，但能处理大部分情况
+	params = regexp.MustCompile(`(?i)\s+CHARACTER\s+SET\s+\w+`).ReplaceAllString(params, "")
+	params = regexp.MustCompile(`(?i)\s+CHARSET\s+\w+`).ReplaceAllString(params, "")
+	params = regexp.MustCompile(`(?i)\s+COLLATE\s+\w+`).ReplaceAllString(params, "")
+
 	c.parameters = params
 	return nil
 }
@@ -288,6 +301,12 @@ func (c *FunctionConverter) parseReturnType() error {
 	}
 	rawType = strings.TrimSpace(rawType)
 	upperRawType = strings.TrimSpace(upperRawType)
+
+	// 清理 UNSIGNED 和 ZEROFILL
+	rawType = reUnsigned.ReplaceAllString(rawType, "")
+	rawType = reZerofill.ReplaceAllString(rawType, "")
+	rawType = strings.TrimSpace(rawType)
+	upperRawType = strings.ToUpper(rawType)
 
 	// 处理特殊类型转换
 	if strings.HasPrefix(upperRawType, "DATETIME") {
@@ -426,6 +445,8 @@ func (c *FunctionConverter) convertDataTypes() {
 	c.body = reTinyInt.ReplaceAllString(c.body, "SMALLINT")
 	c.body = reDateTime.ReplaceAllString(c.body, "TIMESTAMP")
 	c.body = strings.ReplaceAll(c.body, "`", "\"")
+	c.body = reUnsigned.ReplaceAllString(c.body, "")
+	c.body = reZerofill.ReplaceAllString(c.body, "")
 }
 
 // convertBuiltinFunctions 转换内置函数
@@ -506,6 +527,11 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 	for re, repl := range replacements {
 		body = re.ReplaceAllString(body, repl)
 	}
+
+	// ROW_COUNT() 处理
+	// MySQL: v_count := ROW_COUNT();
+	// PG: GET DIAGNOSTICS v_count = ROW_COUNT;
+	body = reRowCountAssign.ReplaceAllString(body, "GET DIAGNOSTICS $1 = ROW_COUNT;")
 
 	// 6. 简单的字符串替换
 	simpleReplacements := []struct {
