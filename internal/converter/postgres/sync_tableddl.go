@@ -940,6 +940,16 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00 00:00:00.000'", "")
 		lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00'", "")
 
+		// 处理生成的列 (GENERATED ALWAYS AS ... VIRTUAL) -> STORED
+		// 同时移除 _utf8mb4 等字符集前缀
+		if strings.Contains(strings.ToUpper(lowerTypeDef), "GENERATED ALWAYS AS") {
+			// 1. 移除 _utf8mb4, _utf8 等前缀
+			// 使用 \b 确保只匹配独立的字符集标识符（如 _utf8），避免匹配到列名的一部分（如 cost_name 中的 _name）
+			lowerTypeDef = regexp.MustCompile(`(?i)\b_\w+(['"])`).ReplaceAllString(lowerTypeDef, "$1")
+			// 2. 将 VIRTUAL 替换为 STORED (PG 只支持 STORED)
+			lowerTypeDef = regexp.MustCompile(`(?i)\s+VIRTUAL`).ReplaceAllString(lowerTypeDef, " STORED")
+		}
+
 		// 清理多余的逗号
 		if strings.HasSuffix(lowerTypeDef, ",") {
 			lowerTypeDef = strings.TrimSuffix(lowerTypeDef, ",")
