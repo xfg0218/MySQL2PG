@@ -8,26 +8,27 @@ import (
 	"github.com/yourusername/mysql2pg/internal/mysql"
 )
 
-// 使用MustCompile编译正则表达式，确保编译错误在程序启动时被捕获
+// =================================================================================================
+// 正则表达式定义
+// =================================================================================================
+
 var (
+	// 数据类型相关
 	reTinyInt  = regexp.MustCompile(`(?i)TINYINT`)
 	reDateTime = regexp.MustCompile(`(?i)DATETIME`)
 
-	reIfNull     = regexp.MustCompile(`(?i)IFNULL\s*\(([^,]+?),\s*([^,)]+?)\)`)
-	reIfFunction = regexp.MustCompile(`(?i)IF\s*\(([^,]+?),\s*([^,]+?),\s*([^)]+?)\)`)
-	reConcat     = regexp.MustCompile(`(?i)CONCAT\(`)
-	reCharLength = regexp.MustCompile(`(?i)CHAR_LENGTH\s*\(([^)]+?)\)`)
-	reRegexp     = regexp.MustCompile(`(?i)REGEXP`)
-
-	reSetVar = regexp.MustCompile(`(?i)\bSET\s+(\w+)\s*=\s*`)
-
-	reNow        = regexp.MustCompile(`(?i)NOW\(\)`)
-	reSysDate    = regexp.MustCompile(`(?i)SYSDATE\(\)`)
-	reUnixTime   = regexp.MustCompile(`(?i)UNIX_TIMESTAMP\(\)`)
-	reUnixTime2  = regexp.MustCompile(`(?i)UNIX_TIMESTAMP\s*\(([^)]+?)\)`)
-	reFromUnix   = regexp.MustCompile(`(?i)FROM_UNIXTIME\s*\(([^)]+?)\)`)
-	reDateFormat = regexp.MustCompile(`(?i)DATE_FORMAT\s*\(([^,]+?),\s*'([^']+?)'\)`)
-
+	// 函数相关
+	reIfNull       = regexp.MustCompile(`(?i)IFNULL\s*\(([^,]+?),\s*([^,)]+?)\)`)
+	reIfFunction   = regexp.MustCompile(`(?i)IF\s*\(([^,]+?),\s*([^,]+?),\s*([^)]+?)\)`)
+	reConcat       = regexp.MustCompile(`(?i)CONCAT\(`)
+	reCharLength   = regexp.MustCompile(`(?i)CHAR_LENGTH\s*\(([^)]+?)\)`)
+	reRegexp       = regexp.MustCompile(`(?i)REGEXP`)
+	reNow          = regexp.MustCompile(`(?i)NOW\(\)`)
+	reSysDate      = regexp.MustCompile(`(?i)SYSDATE\(\)`)
+	reUnixTime     = regexp.MustCompile(`(?i)UNIX_TIMESTAMP\(\)`)
+	reUnixTime2    = regexp.MustCompile(`(?i)UNIX_TIMESTAMP\s*\(([^)]+?)\)`)
+	reFromUnix     = regexp.MustCompile(`(?i)FROM_UNIXTIME\s*\(([^)]+?)\)`)
+	reDateFormat   = regexp.MustCompile(`(?i)DATE_FORMAT\s*\(([^,]+?),\s*'([^']+?)'\)`)
 	reConcatWs     = regexp.MustCompile(`(?i)CONCAT_WS\s*\(([^,]+?),\s*([^)]+?)\)`)
 	reSubstringIdx = regexp.MustCompile(`(?i)SUBSTRING_INDEX\s*\(([^,]+?),\s*'([^']+?)',\s*(-?\d+)\)`)
 	reLeft         = regexp.MustCompile(`(?i)LEFT\s*\(([^,]+?),\s*(\d+)\)`)
@@ -35,7 +36,10 @@ var (
 	reSubstring1   = regexp.MustCompile(`(?i)SUBSTRING\s*\(([^,]+?),\s*(\d+)\)`)
 	reSubstring2   = regexp.MustCompile(`(?i)SUBSTRING\s*\(([^,]+?),\s*(\d+),\s*(\d+)\)`)
 	reReplace      = regexp.MustCompile(`(?i)REPLACE\s*\(([^,]+?),\s*'([^']+?)',\s*'([^']+?)'\)`)
+	reIsNull       = regexp.MustCompile(`(?i)ISNULL\s*\(([^)]+?)\)`)
+	reNullIf       = regexp.MustCompile(`(?i)NULLIF\s*\(([^,]+?),\s*([^)]+?)\)`)
 
+	// 数学函数
 	reCeiling = regexp.MustCompile(`(?i)CEILING\s*\(([^)]+?)\)`)
 	reFloor   = regexp.MustCompile(`(?i)FLOOR\s*\(([^)]+?)\)`)
 	reRound   = regexp.MustCompile(`(?i)ROUND\s*\(([^)]+?)\)`)
@@ -49,314 +53,496 @@ var (
 	reCos     = regexp.MustCompile(`(?i)COS\s*\(([^)]+?)\)`)
 	reTan     = regexp.MustCompile(`(?i)TAN\s*\(([^)]+?)\)`)
 
+	// 流程控制相关
 	reLeave   = regexp.MustCompile(`(?i)LEAVE\s*\w+;`)
 	reIterate = regexp.MustCompile(`(?i)ITERATE\s*\w+;`)
 	reRepeat  = regexp.MustCompile(`(?i)REPEAT\s*`)
 	reUntil   = regexp.MustCompile(`(?i)UNTIL\s+([^\n]+?)\s*END\s+REPEAT;`)
+	reSetVar  = regexp.MustCompile(`(?i)\bSET\s+(\w+)\s*=\s*`)
+	reReturn  = regexp.MustCompile(`(?i)RETURN\s+`)
 
-	reIsNull = regexp.MustCompile(`(?i)ISNULL\s*\(([^)]+?)\)`)
-	reNullIf = regexp.MustCompile(`(?i)NULLIF\s*\(([^,]+?),\s*([^)]+?)\)`)
-
+	// 游标相关
 	reCursorDeclare = regexp.MustCompile(`(?i)DECLARE\s+(\w+)\s+CURSOR\s+FOR\s+([^;]+?);`)
 	reFetch         = regexp.MustCompile(`(?i)FETCH\s+(\w+)\s+INTO\s+([^;]+?);`)
 	reClose         = regexp.MustCompile(`(?i)CLOSE\s+(\w+);`)
 
+	// 语法修复相关
 	reDoubleSemicolon = regexp.MustCompile(`;;`)
 	reEmptyLines      = regexp.MustCompile(`(?i)\n\s*\n`)
-	// 匹配RETURN关键字，确保其后面有正确的空格
-	reReturn = regexp.MustCompile(`(?i)RETURN\s+`)
-	// 修复语法问题的正则表达式
-	reDoubleThen     = regexp.MustCompile(`(?i)THEN\s+THEN`)
-	reIfAssignment   = regexp.MustCompile(`(?i)IF\s+([^=]+?)([a-zA-Z_]+)\s*:=`)
-	reUpdateThen     = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+THEN\s+([a-zA-Z_]+)\s*:=`)
-	reUpdateThenEq   = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+THEN\s+([a-zA-Z_]+)\s*=`)
-	reIsNullSyntax   = regexp.MustCompile(`(?i)IS\s+NOT\s+THEN\s+NULL`)
-	reVarAfterBegin  = regexp.MustCompile(`(?i)begin([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;`)
-	reVarBeforeBegin = regexp.MustCompile(`(?i)([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;begin`)
-	reEndIfIf        = regexp.MustCompile(`(?i)END\s+IF;\s*END\s+IF;`)
-	reEndLoopLoop    = regexp.MustCompile(`(?i)END\s+LOOP;\s*END\s+LOOP;`)
-	reTooManyEnds    = regexp.MustCompile(`(?i)(end\s+){3,}`)
+	reDoubleThen      = regexp.MustCompile(`(?i)THEN\s+THEN`)
+	reIfAssignment    = regexp.MustCompile(`(?i)IF\s+([^=]+?)([a-zA-Z_]+)\s*:=`)
+	reUpdateThen      = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+THEN\s+([a-zA-Z_]+)\s*:=`)
+	reUpdateThenEq    = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+THEN\s+([a-zA-Z_]+)\s*=`)
+	reIsNullSyntax    = regexp.MustCompile(`(?i)IS\s+NOT\s+THEN\s+NULL`)
+	reEndIfIf         = regexp.MustCompile(`(?i)END\s+IF;\s*END\s+IF;`)
+	reEndLoopLoop     = regexp.MustCompile(`(?i)END\s+LOOP;\s*END\s+LOOP;`)
+	reTooManyEnds     = regexp.MustCompile(`(?i)(end\s+){3,}`)
+	// 增强变量声明匹配，支持更多类型和格式
+	reVarDecl = regexp.MustCompile(`(?i)\s*(\w+)\s+(INT|VARCHAR|TEXT|DECIMAL|DATE|TIME|TIMESTAMP|BOOLEAN|FLOAT|DOUBLE|CHAR|REFCURSOR|TINYINT|BIGINT|MEDIUMINT|SMALLINT)\s*(?:UNSIGNED)?\s*(?:\((\d+(?:,\d+)?)\))?\s*(?:DEFAULT\s+([^;]+))?;`)
+
+	// 基础清理相关
+	reBegin           = regexp.MustCompile(`(?i)BEGIN\s*`)
+	reEnd             = regexp.MustCompile(`(?i)\s*END\s*(?:\$\$|;)*\s*$`)
+	reDeclare         = regexp.MustCompile(`(?i)DECLARE\s*`)
+	reLabel           = regexp.MustCompile(`(?i)\w+:\s*`)
+	reHandler         = regexp.MustCompile(`(?i)DECLARE\s+(CONTINUE|EXIT)\s+HANDLER\s+FOR\s+[^;]+?;`)
+	reHandlerSpecific = regexp.MustCompile(`(?i)DECLARE\s+(CONTINUE|EXIT)\s+HANDLER\s+FOR\s+NOT\s+FOUND\s+.*?;`)
+	reCommentVar      = regexp.MustCompile(`(?i)--\s*声明变量`)
+	reCommentCursor   = regexp.MustCompile(`(?i)--\s*声明游标.*`)
+
+	// 简单函数替换
+	reLower = regexp.MustCompile(`(?i)LOWER\s*\(([^)]+?)\)`)
+	reUpper = regexp.MustCompile(`(?i)UPPER\s*\(([^)]+?)\)`)
+	reTrim  = regexp.MustCompile(`(?i)TRIM\s*\(([^)]+?)\)`)
+	reLTrim = regexp.MustCompile(`(?i)LTRIM\s*\(([^)]+?)\)`)
+	reRTrim = regexp.MustCompile(`(?i)RTRIM\s*\(([^)]+?)\)`)
+
+	// IF 语法修复
+	reIfSemi     = regexp.MustCompile(`(?i)IF\s+([^;]+?);`)
+	reElseIfSemi = regexp.MustCompile(`(?i)ELSEIF\s+([^;]+?);`)
+	reElseSemi   = regexp.MustCompile(`(?i)ELSE\s*;`)
+	reElseThen   = regexp.MustCompile(`(?i)ELSE\s+THEN`)
+	reThenEndIf  = regexp.MustCompile(`(?i)THEN\s+END\s+IF`)
+
+	// LOOP 语法修复
+	reEndLoopArgs    = regexp.MustCompile(`(?i)\s*END\s+LOOP(?:[ \t]+(\w+))?[ \t]*;?`)
+	reLoopSemi       = regexp.MustCompile(`(?i)LOOP\s*;`)
+	reLoopFetch      = regexp.MustCompile(`(?i)loop\s+fetch;\s+next\s+from`)
+	reLoopLoop       = regexp.MustCompile(`(?i)LOOP\s+LOOP`)
+	reEndLoopEndLoop = regexp.MustCompile(`(?i)END\s+LOOP\s+END\s+LOOP`)
+	reEndLoop        = regexp.MustCompile(`(?i)\bEND\s+LOOP\b`)
+
+	// 杂项修复
+	reIfExit       = regexp.MustCompile(`(?i)IF\s+(\w+)\s*EXIT`)
+	reElsifAssign  = regexp.MustCompile(`(?i)ELSIF\s+([^\s]+?)([a-zA-Z_]+)\s*:=`)
+	reElseAssign   = regexp.MustCompile(`(?i)ELSE\s*([a-zA-Z_]+)\s*:=`)
+	rePId          = regexp.MustCompile(`(?i)p__id`)
+	reExit         = regexp.MustCompile(`(?i)(\w+)\s*:=\s*exit`)
+	rePDate        = regexp.MustCompile(`(?i)p__date`)
+	reMiscComment  = regexp.MustCompile(`(?i)\s+--`)
+	reThenExitThen = regexp.MustCompile(`(?i)then\s+exit\s+then`)
 )
 
-// fixIfStatementSyntax 修复IF语句的语法问题
-func fixIfStatementSyntax(funcBody string) string {
-	// 预处理IF语句结构
-	funcBody = regexp.MustCompile(`(?i)\s*THEN\s*`).ReplaceAllString(funcBody, "")
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^;]+?);`).ReplaceAllString(funcBody, "IF $1 THEN")
-	funcBody = regexp.MustCompile(`(?i)ELSEIF\s+([^;]+?);`).ReplaceAllString(funcBody, "ELSIF $1 THEN")
-	funcBody = regexp.MustCompile(`(?i)ELSE\s*;`).ReplaceAllString(funcBody, "ELSE")
+// =================================================================================================
+// 转换器结构体定义
+// =================================================================================================
 
-	// 移除所有可能的END IF结构
-	funcBody = regexp.MustCompile(`(?i)\s*END\s+IF\s*;?`).ReplaceAllString(funcBody, "")
-
-	// 修复IF语句中的语法问题
-	// 修复ELSE THEN组合
-	funcBody = regexp.MustCompile(`(?i)ELSE\s+THEN`).ReplaceAllString(funcBody, "ELSE")
-	// 修复双THEN问题
-	funcBody = reDoubleThen.ReplaceAllString(funcBody, "THEN")
-	funcBody = regexp.MustCompile(`(?i)IF;`).ReplaceAllString(funcBody, "")
-
-	// 确保每个IF都有对应的END IF
-	var result strings.Builder // 用于构建处理后的函数体
-	var ifStack []int          // 存储IF语句的位置，用于跟踪嵌套深度
-	var inString bool          // 是否在字符串内部（避免匹配字符串中的关键字）
-	var inComment bool         // 是否在注释内部（避免匹配注释中的关键字）
-
-	for i, char := range funcBody {
-		if char == '"' && (i == 0 || funcBody[i-1] != '\\') {
-			inString = !inString
-		}
-
-		if !inString && char == '/' && i+1 < len(funcBody) && funcBody[i+1] == '*' {
-			inComment = true
-			result.WriteRune(char)
-			continue
-		}
-
-		if !inString && inComment && char == '*' && i+1 < len(funcBody) && funcBody[i+1] == '/' {
-			inComment = false
-			result.WriteRune(char)
-			continue
-		}
-
-		result.WriteRune(char)
-
-		if inString || inComment {
-			continue
-		}
-
-		if i+2 < len(funcBody) && strings.ToUpper(string(funcBody[i:i+3])) == "IF " {
-			ifStack = append(ifStack, i)
-		}
-
-		if i+3 < len(funcBody) && strings.ToUpper(string(funcBody[i:i+4])) == "ELSE" {
-			if len(ifStack) > 0 {
-				current := result.String()
-				result.Reset()
-				result.WriteString(current[:i])
-				result.WriteString("\nEND IF;")
-				result.WriteString(current[i:])
-				ifStack = ifStack[:len(ifStack)-1]
-			}
-		}
-	}
-
-	for range ifStack {
-		result.WriteString("\nEND IF;")
-	}
-
-	funcBody = result.String()
-
-	// 修复剩余的语法问题
-	funcBody = reEmptyLines.ReplaceAllString(funcBody, "\n")
-	funcBody = regexp.MustCompile(`(?i)THEN\s+END\s+IF`).ReplaceAllString(funcBody, "THEN\nEND IF")
-
-	// 确保函数体中没有多余的分号
-	funcBody = reDoubleSemicolon.ReplaceAllString(funcBody, ";")
-
-	return funcBody
+// FunctionConverter 负责将 MySQL 函数转换为 PostgreSQL 函数
+type FunctionConverter struct {
+	mysqlFunc   mysql.FunctionInfo
+	parameters  string
+	returnType  string
+	body        string
+	varDecls    []string // 变量声明列表
+	cursorDecls []string // 游标声明列表
+	volatility  string   // IMMUTABLE | STABLE | VOLATILE
+	security    string   // SECURITY DEFINER | SECURITY INVOKER
+	comment     string   // 函数注释
 }
 
-// fixLoopSyntax 修复LOOP语句的语法问题
-func fixLoopSyntax(funcBody string) string {
-	// 首先，移除所有可能的END LOOP结构，然后重新构建
-	funcBody = regexp.MustCompile(`(?i)\s*END\s+LOOP\s*\w*\s*;?`).ReplaceAllString(funcBody, "")
-
-	funcBody = regexp.MustCompile(`(?i)LOOP\s*;`).ReplaceAllString(funcBody, "LOOP")
-
-	// 修复fetch语句问题
-	funcBody = regexp.MustCompile(`(?i)loop\s+fetch;\s+next\s+from`).ReplaceAllString(funcBody, "\nFETCH NEXT FROM")
-
-	// 现在，我们需要确保每个LOOP都有对应的END LOOP
-	var loopResult strings.Builder
-	var loopStack []int
-
-	for i, char := range funcBody {
-		loopResult.WriteRune(char)
-
-		if i+4 < len(funcBody) && strings.ToUpper(string(funcBody[i:i+5])) == "LOOP " {
-			inString := false
-			inComment := false
-			for j := 0; j < i; j++ {
-				if funcBody[j] == '"' && (j == 0 || funcBody[j-1] != '\\') {
-					inString = !inString
-				}
-				if !inString && j+1 < len(funcBody) && funcBody[j] == '/' && funcBody[j+1] == '*' {
-					inComment = true
-				}
-				if !inString && inComment && j+1 < len(funcBody) && funcBody[j] == '*' && funcBody[j+1] == '/' {
-					inComment = false
-				}
-			}
-			if !inString && !inComment {
-				loopStack = append(loopStack, i)
-			}
-		}
-	}
-
-	for range loopStack {
-		loopResult.WriteString("\nEND LOOP;")
-	}
-
-	funcBody = loopResult.String()
-
-	// 修复剩余的LOOP语法问题
-	funcBody = regexp.MustCompile(`(?i)LOOP\s+LOOP`).ReplaceAllString(funcBody, "LOOP")
-	funcBody = regexp.MustCompile(`(?i)END\s+LOOP\s+END\s+LOOP`).ReplaceAllString(funcBody, "END LOOP")
-
-	// 修复特定的loop标签
-	funcBody = regexp.MustCompile(`(?i)loop\s+main_;`).ReplaceAllString(funcBody, "END LOOP main_loop;")
-	funcBody = regexp.MustCompile(`(?i)loop\s+read_;`).ReplaceAllString(funcBody, "END LOOP read_loop;")
-	funcBody = regexp.MustCompile(`(?i)loop\s+fetch_;`).ReplaceAllString(funcBody, "END LOOP fetch_loop;")
-
-	return funcBody
-}
-
+// ConvertFunctionDDL 转换入口函数
 func ConvertFunctionDDL(mysqlFunc mysql.FunctionInfo) (string, error) {
-	parameters := ""
-	returnType := "VOID"
+	converter := NewFunctionConverter(mysqlFunc)
+	return converter.Convert()
+}
 
-	// 解析函数参数部分
-	if paramsStartIdx := strings.Index(mysqlFunc.DDL, "("); paramsStartIdx != -1 {
-		parenthesesCount := 1
-		paramsEndIdx := paramsStartIdx + 1
-		for paramsEndIdx < len(mysqlFunc.DDL) {
-			if mysqlFunc.DDL[paramsEndIdx] == '(' {
-				parenthesesCount++
-			} else if mysqlFunc.DDL[paramsEndIdx] == ')' {
-				parenthesesCount--
-				if parenthesesCount == 0 {
+// NewFunctionConverter 创建新的转换器实例
+func NewFunctionConverter(mysqlFunc mysql.FunctionInfo) *FunctionConverter {
+	return &FunctionConverter{
+		mysqlFunc:   mysqlFunc,
+		varDecls:    make([]string, 0),
+		cursorDecls: make([]string, 0),
+		volatility:  "VOLATILE",         // 默认为 VOLATILE
+		security:    "SECURITY INVOKER", // 默认为 SECURITY INVOKER
+	}
+}
+
+// Convert 执行转换流程
+func (c *FunctionConverter) Convert() (string, error) {
+	// 1. 解析签名（参数和返回类型）
+	if err := c.parseParameters(); err != nil {
+		return "", err
+	}
+	if err := c.parseReturnType(); err != nil {
+		return "", err
+	}
+
+	// 2. 解析函数特性（DETERMINISTIC, SECURITY, COMMENT 等）
+	if err := c.parseCharacteristics(); err != nil {
+		return "", err
+	}
+
+	// 3. 提取并预处理函数体
+	if err := c.extractBody(); err != nil {
+		return "", err
+	}
+
+	// 4. 应用特定函数的特殊补丁（如 complex_join_function）
+	c.applySpecificPatches()
+
+	// 5. 转换数据类型
+	c.convertDataTypes()
+
+	// 6. 转换内置函数
+	c.convertBuiltinFunctions()
+
+	// 7. 处理游标
+	c.handleCursors()
+
+	// 8. 处理变量声明
+	c.handleVariables()
+
+	// 9. 修复语法
+	c.fixSyntax()
+
+	// 10. 生成最终 DDL
+	return c.generateDDL(), nil
+}
+
+// =================================================================================================
+// 解析与提取方法
+// =================================================================================================
+
+// parseParameters 解析函数参数
+func (c *FunctionConverter) parseParameters() error {
+	ddl := c.mysqlFunc.DDL
+	startIdx := strings.Index(ddl, "(")
+	if startIdx == -1 {
+		return fmt.Errorf("无法解析函数 %s 的参数: 找不到左括号", c.mysqlFunc.Name)
+	}
+
+	// 寻找匹配的右括号
+	depth := 0
+	endIdx := -1
+	for i := startIdx + 1; i < len(ddl); i++ {
+		if ddl[i] == '(' {
+			depth++
+		} else if ddl[i] == ')' {
+			if depth == 0 {
+				endIdx = i
+				break
+			}
+			depth--
+		}
+	}
+
+	if endIdx == -1 {
+		return fmt.Errorf("无法解析函数 %s 的参数: 找不到匹配的右括号", c.mysqlFunc.Name)
+	}
+
+	params := ddl[startIdx+1 : endIdx]
+	params = strings.ReplaceAll(params, "`", "\"")
+	params = reDateTime.ReplaceAllString(params, "TIMESTAMP")
+	c.parameters = params
+	return nil
+}
+
+// parseReturnType 解析返回类型
+func (c *FunctionConverter) parseReturnType() error {
+	ddl := c.mysqlFunc.DDL
+	upperDDL := strings.ToUpper(ddl)
+	returnsIdx := strings.Index(upperDDL, "RETURNS")
+	if returnsIdx == -1 {
+		return fmt.Errorf("无法解析函数 %s 的返回类型: 找不到 RETURNS 关键字", c.mysqlFunc.Name)
+	}
+
+	// 提取 RETURNS 之后的内容直到 BEGIN 或特性描述
+	start := returnsIdx + 7
+	// 跳过空白
+	for start < len(ddl) && ddl[start] == ' ' {
+		start++
+	}
+
+	// 简单的括号匹配提取类型
+	end := start
+	depth := 0
+	for end < len(ddl) {
+		char := ddl[end]
+		if char == '(' {
+			depth++
+		} else if char == ')' {
+			depth--
+		} else if char == ' ' && depth == 0 {
+			break
+		}
+		end++
+	}
+
+	// 截取类型字符串
+	rawType := ddl[start:end]
+	// 同时获取大写版本用于检查，避免重复转换
+	upperRawType := upperDDL[start:end]
+
+	// 移除可能存在的 CHARSET/COLLATE
+	// 例如: VARCHAR(255) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
+	if charsetIdx := strings.Index(upperRawType, "CHARACTER SET"); charsetIdx != -1 {
+		rawType = rawType[:charsetIdx]
+		upperRawType = upperRawType[:charsetIdx]
+	} else if charsetIdx := strings.Index(upperRawType, "CHARSET"); charsetIdx != -1 {
+		rawType = rawType[:charsetIdx]
+		upperRawType = upperRawType[:charsetIdx]
+	}
+	if collateIdx := strings.Index(upperRawType, "COLLATE"); collateIdx != -1 {
+		rawType = rawType[:collateIdx]
+		upperRawType = upperRawType[:collateIdx]
+	}
+	rawType = strings.TrimSpace(rawType)
+	upperRawType = strings.TrimSpace(upperRawType)
+
+	// 处理特殊类型转换
+	if strings.HasPrefix(upperRawType, "DATETIME") {
+		if strings.Contains(rawType, "(") {
+			precision := rawType[strings.Index(rawType, "("):]
+			c.returnType = "TIMESTAMP" + precision
+		} else {
+			c.returnType = "TIMESTAMP"
+		}
+	} else {
+		c.returnType = rawType
+	}
+
+	if c.returnType == "" {
+		c.returnType = "VOID"
+	}
+
+	return nil
+}
+
+// parseCharacteristics 解析函数特性（DETERMINISTIC, SECURITY, COMMENT 等）
+func (c *FunctionConverter) parseCharacteristics() error {
+	ddl := c.mysqlFunc.DDL
+	upperDDL := strings.ToUpper(ddl)
+
+	// 截取 RETURNS ... 和 BEGIN 之间的部分
+	returnsIdx := strings.Index(upperDDL, "RETURNS")
+	beginIdx := strings.Index(upperDDL, "BEGIN")
+
+	if returnsIdx == -1 || beginIdx == -1 {
+		// 如果找不到标准结构，可能不是标准函数，或者已经提取过了
+		return nil
+	}
+
+	// 从 RETURNS 之后开始找，跳过返回类型，直到 BEGIN
+	// 由于 parseReturnType 已经解析了 returnType，我们可以尝试从那里推断，
+	// 但更安全的是直接在 RETURNS 和 BEGIN 之间搜索关键字
+
+	characteristicsPart := ddl[returnsIdx+7 : beginIdx]
+	upperChars := strings.ToUpper(characteristicsPart)
+
+	// 1. 解析 Deterministic
+	if strings.Contains(upperChars, "NOT DETERMINISTIC") {
+		c.volatility = "VOLATILE"
+	} else if strings.Contains(upperChars, "DETERMINISTIC") {
+		c.volatility = "IMMUTABLE"
+	} else {
+		// 检查数据访问权限
+		if strings.Contains(upperChars, "NO SQL") {
+			c.volatility = "IMMUTABLE"
+		} else if strings.Contains(upperChars, "READS SQL DATA") {
+			c.volatility = "STABLE"
+		} else if strings.Contains(upperChars, "MODIFIES SQL DATA") {
+			c.volatility = "VOLATILE"
+		}
+		// 默认为 VOLATILE
+	}
+
+	// 2. 解析 SQL Security
+	if strings.Contains(upperChars, "SQL SECURITY DEFINER") {
+		c.security = "SECURITY DEFINER"
+	} else if strings.Contains(upperChars, "SQL SECURITY INVOKER") {
+		c.security = "SECURITY INVOKER"
+	}
+
+	// 3. 解析 Comment
+	commentIdx := strings.Index(upperChars, "COMMENT")
+	if commentIdx != -1 {
+		// 提取 COMMENT 后的字符串
+		// COMMENT 'string'
+		remaining := characteristicsPart[commentIdx+7:]
+		remaining = strings.TrimSpace(remaining)
+		if len(remaining) > 0 && (remaining[0] == '\'' || remaining[0] == '"') {
+			quote := remaining[0]
+			// 简单的字符串提取，不支持转义引号的复杂情况，但在 DDL 中通常足够
+			endQuoteIdx := -1
+			for i := 1; i < len(remaining); i++ {
+				if remaining[i] == quote && remaining[i-1] != '\\' {
+					endQuoteIdx = i
 					break
 				}
 			}
-			paramsEndIdx++
-		}
-		if paramsEndIdx < len(mysqlFunc.DDL) {
-			parameters = mysqlFunc.DDL[paramsStartIdx+1 : paramsEndIdx]
-			parameters = strings.ReplaceAll(parameters, "`", "\"")
-			parameters = reDateTime.ReplaceAllString(parameters, "TIMESTAMP")
-		} else {
-			return "", fmt.Errorf("无法解析函数 %s 的参数: 找不到匹配的右括号", mysqlFunc.Name)
-		}
-	} else {
-		return "", fmt.Errorf("无法解析函数 %s 的参数: 找不到左括号", mysqlFunc.Name)
-	}
-
-	// 解析函数返回类型
-	if returnsIdx := strings.Index(strings.ToUpper(mysqlFunc.DDL), "RETURNS"); returnsIdx != -1 {
-		returnTypeStart := returnsIdx + 7 // "RETURNS"的长度
-		for returnTypeStart < len(mysqlFunc.DDL) && mysqlFunc.DDL[returnTypeStart] == ' ' {
-			returnTypeStart++
-		}
-
-		returnTypeEnd := returnTypeStart
-		inParentheses := false
-
-		for returnTypeEnd < len(mysqlFunc.DDL) {
-			char := mysqlFunc.DDL[returnTypeEnd]
-
-			if char == '(' {
-				inParentheses = true
-			} else if char == ')' {
-				inParentheses = false
-			} else if char == ' ' && !inParentheses {
-				break // 找到返回类型的结束
+			if endQuoteIdx != -1 {
+				c.comment = remaining[1:endQuoteIdx]
 			}
-
-			returnTypeEnd++
 		}
-
-		if returnTypeEnd > returnTypeStart {
-			returnType = mysqlFunc.DDL[returnTypeStart:returnTypeEnd]
-			if strings.HasPrefix(strings.ToUpper(returnType), "DATETIME") {
-				if len(returnType) > 8 && returnType[8] == '(' {
-					precision := returnType[8:]
-					returnType = "TIMESTAMP" + precision
-				} else {
-					returnType = "TIMESTAMP"
-				}
-			}
-		} else {
-			return "", fmt.Errorf("无法解析函数 %s 的返回类型", mysqlFunc.Name)
-		}
-	} else {
-		return "", fmt.Errorf("无法解析函数 %s 的返回类型: 找不到 RETURNS 关键字", mysqlFunc.Name)
 	}
 
-	// 解析函数体
-	funcBody := mysqlFunc.DDL
-	if beginIdx := strings.Index(strings.ToUpper(funcBody), "BEGIN"); beginIdx != -1 {
-		funcBody = funcBody[beginIdx+5:] // "BEGIN"的长度
-	} else {
-		return "", fmt.Errorf("无法解析函数 %s 的函数体: 找不到 BEGIN 关键字", mysqlFunc.Name)
+	return nil
+}
+
+// extractBody 提取函数体
+func (c *FunctionConverter) extractBody() error {
+	ddl := c.mysqlFunc.DDL
+	beginIdx := reBegin.FindStringIndex(strings.ToUpper(ddl))
+	if beginIdx == nil {
+		return fmt.Errorf("无法解析函数 %s 的函数体: 找不到 BEGIN 关键字", c.mysqlFunc.Name)
 	}
-	// 移除结束标记
-	funcBody = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(funcBody, "END$$", ""), "END;", ""))
-	funcBody = strings.TrimSuffix(funcBody, ";")
 
-	funcBody = reReturn.ReplaceAllString(funcBody, "RETURN ")
+	body := ddl[beginIdx[0]+5:] // 跳过 "BEGIN"
+	// 移除结束标记，仅移除末尾的 END
+	body = reEnd.ReplaceAllString(body, "")
 
-	if strings.Contains(mysqlFunc.Name, "complex_join_function") {
+	c.body = body
+	return nil
+}
+
+// =================================================================================================
+// 转换逻辑方法
+// =================================================================================================
+
+// applySpecificPatches 应用针对特定函数的补丁
+func (c *FunctionConverter) applySpecificPatches() {
+	// 通用补丁：移除 MySQL 特有的 Handler 语句
+	c.body = reHandlerSpecific.ReplaceAllString(c.body, "")
+
+	if strings.Contains(c.mysqlFunc.Name, "complex_join_function") {
 		// 修复缺少END IF的问题
-		funcBody = regexp.MustCompile(`(?i)if\s+v_done\s+then\s+exit;\s*else\s+v_count\s*:=\s+v_count\s*\+\s*1;\s*--\s*条件判断`).ReplaceAllString(funcBody, "if v_done then exit;\n\telse\n\tv_count := v_count + 1; -- 条件判断")
+		c.body = regexp.MustCompile(`(?i)if\s+v_done\s+then\s+exit;\s*else\s+v_count\s*:=\s+v_count\s*\+\s*1;\s*--\s*条件判断`).ReplaceAllString(c.body, "if v_done then exit;\n\telse\n\tv_count := v_count + 1; -- 条件判断")
 
 		// 修复return update_count但实际返回变量是v_result的问题
-		funcBody = regexp.MustCompile(`(?i)close\s+cur;\s*return\s+update_count;`).ReplaceAllString(funcBody, "close cur;\n\treturn v_result;")
+		c.body = regexp.MustCompile(`(?i)close\s+cur;\s*return\s+update_count;`).ReplaceAllString(c.body, "close cur;\n\treturn v_result;")
 
 		// 确保函数体末尾有正确的END IF
-		if strings.Contains(funcBody, "end loop;") && !strings.Contains(funcBody, "end if;\nend loop;") {
-			loopIndex := strings.LastIndex(funcBody, "end loop;")
+		if strings.Contains(c.body, "end loop;") && !strings.Contains(c.body, "end if;\nend loop;") {
+			loopIndex := strings.LastIndex(c.body, "end loop;")
 			if loopIndex != -1 {
-				funcBody = funcBody[:loopIndex] + "end if;\n" + funcBody[loopIndex:]
+				c.body = c.body[:loopIndex] + "end if;\n" + c.body[loopIndex:]
 			}
 		}
 	}
+}
 
-	funcBody = reTinyInt.ReplaceAllString(funcBody, "SMALLINT")
-	funcBody = reDateTime.ReplaceAllString(funcBody, "TIMESTAMP")
+// convertDataTypes 转换基本数据类型
+func (c *FunctionConverter) convertDataTypes() {
+	c.body = reTinyInt.ReplaceAllString(c.body, "SMALLINT")
+	c.body = reDateTime.ReplaceAllString(c.body, "TIMESTAMP")
+	c.body = strings.ReplaceAll(c.body, "`", "\"")
+}
 
-	// 这个正则表达式会匹配IFNULL函数调用，确保只匹配两个参数
-	// 确保在处理CONCAT之前处理IFNULL，这样CONCAT内部的IFNULL也会被处理
+// convertBuiltinFunctions 转换内置函数
+func (c *FunctionConverter) convertBuiltinFunctions() {
+	body := c.body
+
+	// 1. RETURN 关键字标准化
+	body = reReturn.ReplaceAllString(body, "RETURN ")
+
+	// 2. IFNULL -> COALESCE
 	for {
-		newFuncBody := reIfNull.ReplaceAllString(funcBody, "COALESCE($1, $2)")
-		if newFuncBody == funcBody {
+		newBody := reIfNull.ReplaceAllString(body, "COALESCE($1, $2)")
+		if newBody == body {
 			break
 		}
-		funcBody = newFuncBody
+		body = newBody
 	}
 
+	// 3. IF(expr1, expr2, expr3) -> CASE WHEN
 	for {
-		newFuncBody := reIfFunction.ReplaceAllStringFunc(funcBody, func(match string) string {
+		newBody := reIfFunction.ReplaceAllStringFunc(body, func(match string) string {
 			parts := reIfFunction.FindStringSubmatch(match)
 			if len(parts) == 4 {
-				condition := strings.TrimSpace(parts[1])
-				result1 := strings.TrimSpace(parts[2])
-				result2 := strings.TrimSpace(parts[3])
-				return fmt.Sprintf("CASE WHEN %s THEN %s ELSE %s END", condition, result1, result2)
+				return fmt.Sprintf("CASE WHEN %s THEN %s ELSE %s END",
+					strings.TrimSpace(parts[1]),
+					strings.TrimSpace(parts[2]),
+					strings.TrimSpace(parts[3]))
 			}
 			return match
 		})
-		if newFuncBody == funcBody {
+		if newBody == body {
 			break
 		}
-		funcBody = newFuncBody
+		body = newBody
 	}
 
-	// 处理CONCAT函数，使用循环确保所有CONCAT都被处理
-	// 此转换需要特别注意嵌套括号和字符串内容，以确保正确解析参数列表
+	// 4. CONCAT 处理
+	body = c.processConcat(body)
+
+	// 5. 字符串和数学函数替换
+	replacements := map[*regexp.Regexp]string{
+		reCharLength:   "LENGTH($1)",
+		reRegexp:       "~",
+		reSetVar:       "$1 := ",
+		reNow:          "CURRENT_TIMESTAMP",
+		reSysDate:      "CURRENT_TIMESTAMP",
+		reUnixTime:     "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)",
+		reUnixTime2:    "EXTRACT(EPOCH FROM $1)",
+		reFromUnix:     "TO_TIMESTAMP($1)",
+		reDateFormat:   "TO_CHAR($1, '$2')",
+		reConcatWs:     "ARRAY_TO_STRING(ARRAY[$2], $1)",
+		reSubstringIdx: "SPLIT_PART($1, '$2', $3)",
+		reLeft:         "LEFT($1, $2)",
+		reRight:        "RIGHT($1, $2)",
+		reSubstring1:   "SUBSTRING($1 FROM $2)",
+		reSubstring2:   "SUBSTRING($1 FROM $2 FOR $3)",
+		reReplace:      "REPLACE($1, '$2', '$3')",
+		reCeiling:      "CEIL($1)",
+		reFloor:        "FLOOR($1)",
+		reRound:        "ROUND($1)",
+		reAbs:          "ABS($1)",
+		rePower:        "POWER($1, $2)",
+		reSqrt:         "SQRT($1)",
+		reExp:          "EXP($1)",
+		reLn:           "LN($1)",
+		reLog10:        "LOG10($1)",
+		reSin:          "SIN($1)",
+		reCos:          "COS($1)",
+		reTan:          "TAN($1)",
+		reLeave:        "EXIT;",
+		reIterate:      "CONTINUE;",
+		reRepeat:       "LOOP",
+		reUntil:        "EXIT WHEN $1; END LOOP;",
+		reIsNull:       "($1 IS NULL)",
+		reNullIf:       "NULLIF($1, $2)",
+	}
+
+	for re, repl := range replacements {
+		body = re.ReplaceAllString(body, repl)
+	}
+
+	// 6. 简单的字符串替换
+	simpleReplacements := []struct {
+		re   *regexp.Regexp
+		repl string
+	}{
+		{reLower, "LOWER($1)"},
+		{reUpper, "UPPER($1)"},
+		{reTrim, "TRIM($1)"},
+		{reLTrim, "LTRIM($1)"},
+		{reRTrim, "RTRIM($1)"},
+	}
+	for _, r := range simpleReplacements {
+		body = r.re.ReplaceAllString(body, r.repl)
+	}
+
+	c.body = body
+}
+
+// processConcat 处理 CONCAT 函数
+// 该函数解析嵌套的 CONCAT 调用，并将其转换为 PostgreSQL 的 || 操作符
+// 例如: CONCAT(a, b, CONCAT(c, d)) -> a || b || c || d
+func (c *FunctionConverter) processConcat(body string) string {
 	for {
-		concatStart := strings.Index(strings.ToUpper(funcBody), "CONCAT(")
+		concatStart := strings.Index(strings.ToUpper(body), "CONCAT(")
 		if concatStart == -1 {
 			break
 		}
 
-		depth := 0 // 用于跟踪括号嵌套深度
+		// 寻找匹配的右括号
+		depth := 0
 		concatEnd := -1
-		for i := concatStart + 7; i < len(funcBody); i++ { // +7 跳过 "CONCAT("
-			if funcBody[i] == '(' {
-				depth++ // 遇到左括号，深度+1
-			} else if funcBody[i] == ')' {
-				depth-- // 遇到右括号，深度-1
+		for i := concatStart + 7; i < len(body); i++ {
+			if body[i] == '(' {
+				depth++
+			} else if body[i] == ')' {
+				depth--
 				if depth == -1 {
 					concatEnd = i
 					break
@@ -368,15 +554,15 @@ func ConvertFunctionDDL(mysqlFunc mysql.FunctionInfo) (string, error) {
 			break
 		}
 
-		concatExpr := funcBody[concatStart : concatEnd+1]
+		concatExpr := body[concatStart : concatEnd+1]
+		paramsStr := body[concatStart+7 : concatEnd]
 
-		paramsStr := funcBody[concatStart+7 : concatEnd]
-
-		var params []string     // 存储解析后的参数列表
-		var currentParam string // 当前正在解析的参数
-		depth = 0               // 重置括号嵌套深度
-		inString := false       // 是否在字符串内部
-		stringChar := byte(0)   // 当前字符串使用的引号类型（'或"）
+		// 解析参数列表，处理引号和嵌套括号
+		var params []string
+		var currentParam string
+		depth = 0
+		inString := false
+		stringChar := byte(0)
 
 		for _, char := range paramsStr {
 			if char == '"' || char == '\'' {
@@ -397,848 +583,365 @@ func ConvertFunctionDDL(mysqlFunc mysql.FunctionInfo) (string, error) {
 			}
 
 			if char == '(' {
-				depth++ // 进入子表达式，深度+1
+				depth++
 				currentParam += string(char)
 			} else if char == ')' {
-				depth-- // 退出子表达式，深度-1
+				depth--
 				currentParam += string(char)
 			} else if char == ',' && depth == 0 {
-				params = append(params, strings.TrimSpace(currentParam)) // 添加当前参数到列表
-				currentParam = ""                                        // 重置当前参数
+				params = append(params, strings.TrimSpace(currentParam))
+				currentParam = ""
 			} else {
 				currentParam += string(char)
 			}
 		}
-
 		params = append(params, strings.TrimSpace(currentParam))
 
-		newExpr := ""
-		for i, param := range params {
-			if i > 0 {
-				newExpr += " || " // 参数之间添加||连接符
-			}
-			newExpr += param // 添加参数内容
-		}
-
-		// 使用Replace而不是ReplaceAll，确保只替换当前找到的这个CONCAT函数
-		funcBody = strings.Replace(funcBody, concatExpr, newExpr, 1)
+		// 使用 || 连接所有参数
+		newExpr := strings.Join(params, " || ")
+		body = strings.Replace(body, concatExpr, newExpr, 1)
 	}
+	return body
+}
 
-	funcBody = reCharLength.ReplaceAllString(funcBody, "LENGTH($1)")
-	funcBody = reRegexp.ReplaceAllString(funcBody, "~")
-	funcBody = strings.ReplaceAll(funcBody, "`", "\"")
-
-	funcBody = reSetVar.ReplaceAllString(funcBody, "$1 := ")
-
-	funcBody = reNow.ReplaceAllString(funcBody, "CURRENT_TIMESTAMP")
-	funcBody = reSysDate.ReplaceAllString(funcBody, "CURRENT_TIMESTAMP")
-	funcBody = reUnixTime.ReplaceAllString(funcBody, "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)")
-	funcBody = reUnixTime2.ReplaceAllString(funcBody, "EXTRACT(EPOCH FROM $1)")
-	funcBody = reFromUnix.ReplaceAllString(funcBody, "TO_TIMESTAMP($1)")
-	funcBody = reDateFormat.ReplaceAllString(funcBody, "TO_CHAR($1, '$2')")
-
-	funcBody = reConcatWs.ReplaceAllString(funcBody, "ARRAY_TO_STRING(ARRAY[$2], $1)")
-	funcBody = reSubstringIdx.ReplaceAllString(funcBody, "SPLIT_PART($1, '$2', $3)")
-	funcBody = regexp.MustCompile(`(?i)LOWER\s*\(([^)]+?)\)`).ReplaceAllString(funcBody, "LOWER($1)")
-	funcBody = regexp.MustCompile(`(?i)UPPER\s*\(([^)]+?)\)`).ReplaceAllString(funcBody, "UPPER($1)")
-	funcBody = regexp.MustCompile(`(?i)TRIM\s*\(([^)]+?)\)`).ReplaceAllString(funcBody, "TRIM($1)")
-	funcBody = regexp.MustCompile(`(?i)LTRIM\s*\(([^)]+?)\)`).ReplaceAllString(funcBody, "LTRIM($1)")
-	funcBody = regexp.MustCompile(`(?i)RTRIM\s*\(([^)]+?)\)`).ReplaceAllString(funcBody, "RTRIM($1)")
-	funcBody = reLeft.ReplaceAllString(funcBody, "LEFT($1, $2)")
-	funcBody = reRight.ReplaceAllString(funcBody, "RIGHT($1, $2)")
-	funcBody = reSubstring1.ReplaceAllString(funcBody, "SUBSTRING($1 FROM $2)")
-	funcBody = reSubstring2.ReplaceAllString(funcBody, "SUBSTRING($1 FROM $2 FOR $3)")
-	funcBody = reReplace.ReplaceAllString(funcBody, "REPLACE($1, '$2', '$3')")
-
-	funcBody = reCeiling.ReplaceAllString(funcBody, "CEIL($1)")
-	funcBody = reFloor.ReplaceAllString(funcBody, "FLOOR($1)")
-	funcBody = reRound.ReplaceAllString(funcBody, "ROUND($1)")
-	funcBody = reAbs.ReplaceAllString(funcBody, "ABS($1)")
-	funcBody = rePower.ReplaceAllString(funcBody, "POWER($1, $2)")
-	funcBody = reSqrt.ReplaceAllString(funcBody, "SQRT($1)")
-	funcBody = reExp.ReplaceAllString(funcBody, "EXP($1)")
-	funcBody = reLn.ReplaceAllString(funcBody, "LN($1)")
-	funcBody = reLog10.ReplaceAllString(funcBody, "LOG10($1)")
-	funcBody = reSin.ReplaceAllString(funcBody, "SIN($1)")
-	funcBody = reCos.ReplaceAllString(funcBody, "COS($1)")
-	funcBody = reTan.ReplaceAllString(funcBody, "TAN($1)")
-
-	funcBody = reLeave.ReplaceAllString(funcBody, "EXIT;")
-	funcBody = reIterate.ReplaceAllString(funcBody, "CONTINUE;")
-	funcBody = reRepeat.ReplaceAllString(funcBody, "LOOP")
-	funcBody = reUntil.ReplaceAllString(funcBody, "EXIT WHEN $1; END LOOP;")
-
-	funcBody = reIsNull.ReplaceAllString(funcBody, "($1 IS NULL)")
-	funcBody = reNullIf.ReplaceAllString(funcBody, "NULLIF($1, $2)")
-
+// handleCursors 处理游标
+func (c *FunctionConverter) handleCursors() {
+	body := c.body
 	cursorSelectMap := make(map[string]string)
-	cursorDeclarations := make([]string, 0)
-	matches := reCursorDeclare.FindAllStringSubmatch(funcBody, -1)
+
+	// 提取并移除游标声明
+	matches := reCursorDeclare.FindAllStringSubmatch(body, -1)
 	for _, match := range matches {
 		if len(match) >= 3 {
 			cursorName := match[1]
 			selectStmt := match[2]
-			cursorDecl := fmt.Sprintf("%s refcursor;", cursorName)
-			cursorDeclarations = append(cursorDeclarations, cursorDecl)
+			c.cursorDecls = append(c.cursorDecls, fmt.Sprintf("%s refcursor;", cursorName))
 			cursorSelectMap[cursorName] = selectStmt
-			funcBody = strings.Replace(funcBody, match[0], "", 1)
+			body = strings.Replace(body, match[0], "", 1)
 		}
 	}
 
+	// 替换 OPEN 语句
 	for cursorName, selectStmt := range cursorSelectMap {
 		openPattern := fmt.Sprintf(`(?i)OPEN\s+%s;`, regexp.QuoteMeta(cursorName))
-		funcBody = regexp.MustCompile(openPattern).ReplaceAllString(funcBody, fmt.Sprintf("OPEN %s FOR %s;", cursorName, selectStmt))
+		body = regexp.MustCompile(openPattern).ReplaceAllString(body, fmt.Sprintf("OPEN %s FOR %s;", cursorName, selectStmt))
 	}
 
-	funcBody = reFetch.ReplaceAllString(funcBody, "FETCH NEXT FROM $1 INTO $2;")
+	// 替换 FETCH 和 CLOSE
+	// 使用更稳健的 FETCH 处理逻辑，兼容 MySQL 的 done 变量模式
+	// 将 FETCH cur INTO var1; 转换为 FETCH NEXT FROM cur INTO var1; IF NOT FOUND THEN done := true; END IF;
+	// 这样可以适配后续的 IF done THEN EXIT; 逻辑
+	body = reFetch.ReplaceAllStringFunc(body, func(m string) string {
+		parts := reFetch.FindStringSubmatch(m)
+		if len(parts) >= 3 {
+			return fmt.Sprintf("FETCH NEXT FROM %s INTO %s; IF NOT FOUND THEN done := true; END IF;", parts[1], parts[2])
+		}
+		return m
+	})
 
-	funcBody = reClose.ReplaceAllString(funcBody, "CLOSE $1;")
+	body = reClose.ReplaceAllString(body, "CLOSE $1;")
 
-	if len(cursorDeclarations) > 0 {
-		cursorDeclStr := strings.Join(cursorDeclarations, "\n\t")
-		funcBody = cursorDeclStr + "\n" + funcBody
-	}
+	c.body = body
+}
 
-	// 预处理函数体，移除多余的内容
-	// 移除所有的DECLARE关键字（包括嵌套的）
-	funcBody = regexp.MustCompile(`(?i)DECLARE\s*`).ReplaceAllString(funcBody, "")
+// handleVariables 处理变量声明
+func (c *FunctionConverter) handleVariables() {
+	body := c.body
 
-	// 移除函数体中可能存在的标签
-	funcBody = regexp.MustCompile(`(?i)\w+:\s*`).ReplaceAllString(funcBody, "")
+	// 1. 移除 DECLARE 和 标签
+	body = reDeclare.ReplaceAllString(body, "")
+	body = reLabel.ReplaceAllString(body, "")
+	body = reHandler.ReplaceAllString(body, "")
 
-	funcBody = regexp.MustCompile(`(?i)DECLARE\s+(CONTINUE|EXIT)\s+HANDLER\s+FOR\s+[^;]+?;`).ReplaceAllString(funcBody, "")
+	// 2. 提取变量声明
+	processedDeclarations := make(map[string]bool)
 
-	// 修复IF语句的语法问题
-	funcBody = fixIfStatementSyntax(funcBody)
+	// 添加 done 变量，用于游标控制（如果还没有的话）
+	// c.varDecls = append(c.varDecls, "done boolean default false;")
+	// ^ 不需要强制添加，如果原代码有 done 变量，会被自动提取。如果没有，可能不需要。
 
-	// 修复LOOP语句的语法问题
-	funcBody = fixLoopSyntax(funcBody)
+	for {
+		matches := reVarDecl.FindAllStringSubmatch(body, -1)
+		if len(matches) == 0 {
+			break
+		}
 
-	funcBody = regexp.MustCompile(`(?i)REPEAT\s*;`).ReplaceAllString(funcBody, "LOOP")
-	funcBody = regexp.MustCompile(`(?i)UNTIL\s+([^\n]+?);`).ReplaceAllString(funcBody, "EXIT WHEN $1;")
-
-	// 移除所有的分号前的空格
-	funcBody = regexp.MustCompile(`\s+;`).ReplaceAllString(funcBody, ";")
-
-	// 确保函数体以BEGIN开始并以END结束
-	// 首先移除所有的BEGIN和END
-	funcBody = regexp.MustCompile(`(?i)BEGIN\s*`).ReplaceAllString(funcBody, "")
-	funcBody = regexp.MustCompile(`(?i)\s*END;?`).ReplaceAllString(funcBody, "")
-
-	funcBody = fmt.Sprintf("begin\n%s\nend;", strings.TrimSpace(funcBody))
-
-	beginIdx := strings.Index(strings.ToUpper(funcBody), "BEGIN") + 5
-	endIdx := strings.LastIndex(strings.ToUpper(funcBody), "END")
-	if beginIdx > 0 && endIdx > beginIdx {
-		bodyContent := funcBody[beginIdx:endIdx]
-
-		varDeclarations := make([]string, 0)
-
-		varRegex := regexp.MustCompile(`(?i)(\w+)\s+(INT|VARCHAR|TEXT|DECIMAL|DATE|TIME|TIMESTAMP|BOOLEAN|FLOAT|DOUBLE|CHAR|REFCURSOR|TINYINT|BIGINT|MEDIUMINT)\s*(?:UNSIGNED)?\s*(?:\((\d+(?:,\d+)?))?\s*(?:DEFAULT\s+([^;]+))?;`)
-		matches := varRegex.FindAllStringSubmatch(bodyContent, -1)
-
-		processedDeclarations := make(map[string]bool)
-
+		foundNew := false
 		for _, match := range matches {
-			if len(match) >= 3 {
-				fullDecl := match[0]
-				if processedDeclarations[fullDecl] {
-					continue
-				}
-				processedDeclarations[fullDecl] = true
+			fullDecl := match[0]
+			if processedDeclarations[fullDecl] {
+				continue
+			}
 
-				varName := match[1]
-				varType := match[2]
-				varSize := match[3]
-				varDefault := match[4]
+			varName := match[1]
+			varType := match[2]
+			varSize := match[3]
+			varDefault := match[4]
 
-				switch varType {
-				case "INT":
-					varType = "INTEGER"
-				case "DOUBLE":
-					varType = "DOUBLE PRECISION"
-				case "DATETIME":
-					varType = "TIMESTAMP"
-				case "TINYINT":
-					varType = "SMALLINT"
-				case "BIGINT":
-					varType = "BIGINT"
-				case "MEDIUMINT":
-					varType = "INTEGER"
-				}
+			// 类型映射
+			pgType := mapTypeToPG(varType)
 
-				varDecl := varName
-				if varType == "VARCHAR" || varType == "CHAR" || varType == "DECIMAL" {
-					if varSize != "" {
-						varDecl += fmt.Sprintf(" %s(%s)", varType, varSize)
-					} else {
-						varDecl += fmt.Sprintf(" %s", varType)
+			// 特殊处理 done 变量，通常用于游标循环，强制转为 BOOLEAN
+			if strings.ToLower(varName) == "done" && (pgType == "INTEGER" || pgType == "SMALLINT" || pgType == "BIGINT") {
+				pgType = "BOOLEAN"
+			}
+
+			// 构建 PG 声明
+			varDecl := varName + " " + pgType
+			if (pgType == "VARCHAR" || pgType == "CHAR" || pgType == "DECIMAL") && varSize != "" {
+				varDecl += fmt.Sprintf("(%s)", varSize)
+			}
+			if varDefault != "" {
+				// 处理 boolean 的 default 0/1 问题
+				if strings.ToUpper(pgType) == "BOOLEAN" {
+					if varDefault == "0" {
+						varDefault = "false"
+					} else if varDefault == "1" {
+						varDefault = "true"
 					}
 				} else {
-					varDecl += fmt.Sprintf(" %s", varType)
-				}
+					// 处理数值类型的 default FALSE/TRUE 问题
+					upperType := strings.ToUpper(pgType)
+					if upperType == "INTEGER" || upperType == "SMALLINT" || upperType == "BIGINT" ||
+						upperType == "DECIMAL" || upperType == "NUMERIC" ||
+						upperType == "FLOAT" || upperType == "DOUBLE PRECISION" {
 
-				if varDefault != "" {
-					varDecl += fmt.Sprintf(" DEFAULT %s", varDefault)
-				}
-
-				varDecl += ";"
-				varDeclarations = append(varDeclarations, varDecl)
-
-				// 从函数体中移除变量声明
-				bodyContent = strings.Replace(bodyContent, fullDecl, "", 1)
-			}
-		}
-
-		if len(varDeclarations) == 0 {
-			if strings.Contains(strings.ToUpper(returnType), "VARCHAR") || strings.Contains(strings.ToUpper(returnType), "TEXT") {
-				varDeclarations = append(varDeclarations, "v_result varchar(1000) default '';")
-			} else if strings.Contains(strings.ToUpper(returnType), "INT") || strings.Contains(strings.ToUpper(returnType), "INTEGER") {
-				varDeclarations = append(varDeclarations, "v_result int default 0;")
-			} else if strings.Contains(strings.ToUpper(returnType), "DECIMAL") || strings.Contains(strings.ToUpper(returnType), "NUMERIC") {
-				varDeclarations = append(varDeclarations, "v_result decimal(20,6) default 0.0;")
-			} else if strings.Contains(strings.ToUpper(returnType), "DATE") {
-				varDeclarations = append(varDeclarations, "v_result date;")
-			} else if strings.Contains(strings.ToUpper(returnType), "TIME") {
-				varDeclarations = append(varDeclarations, "v_result time;")
-			} else if strings.Contains(strings.ToUpper(returnType), "DATETIME") || strings.Contains(strings.ToUpper(returnType), "TIMESTAMP") {
-				varDeclarations = append(varDeclarations, "v_result timestamp;")
-			} else if strings.Contains(strings.ToUpper(returnType), "BOOLEAN") {
-				varDeclarations = append(varDeclarations, "v_result boolean default false;")
-			} else {
-				varDeclarations = append(varDeclarations, "v_result text default '';")
-			}
-		}
-
-		// 移除所有剩余的变量声明（防止遗漏）
-		varRegex2 := regexp.MustCompile(`(?i)(\w+)\s+(INT|VARCHAR|TEXT|DECIMAL|DATE|TIME|TIMESTAMP|BOOLEAN|FLOAT|DOUBLE|CHAR|REFCURSOR|TINYINT|BIGINT|MEDIUMINT)\s*(?:UNSIGNED)?\s*(?:\((\d+(?:,\d+)?))?\s*(?:DEFAULT\s+([^;]+))?;`)
-
-		for {
-			remainingVars := varRegex2.FindAllString(bodyContent, -1)
-			if len(remainingVars) == 0 {
-				break
-			}
-
-			for _, varDecl := range remainingVars {
-				bodyContent = strings.Replace(bodyContent, varDecl, "", 1)
-
-				matches := varRegex2.FindStringSubmatch(varDecl)
-				if len(matches) >= 3 {
-					varName := matches[1]
-					varType := matches[2]
-					varSize := matches[3]
-					varDefault := matches[4]
-
-					varExists := false
-					for _, decl := range varDeclarations {
-						if strings.HasPrefix(decl, varName+" ") || strings.HasPrefix(decl, varName+";"+" ") {
-							varExists = true
-							break
+						if strings.EqualFold(varDefault, "FALSE") {
+							varDefault = "0"
+						} else if strings.EqualFold(varDefault, "TRUE") {
+							varDefault = "1"
 						}
 					}
-
-					if !varExists {
-						switch varType {
-						case "INT":
-							varType = "INTEGER"
-						case "DOUBLE":
-							varType = "DOUBLE PRECISION"
-						case "DATETIME":
-							varType = "TIMESTAMP"
-						case "TINYINT":
-							varType = "SMALLINT"
-						case "BIGINT":
-							varType = "BIGINT"
-						case "MEDIUMINT":
-							varType = "INTEGER"
-						}
-
-						newDecl := varName
-						if varType == "VARCHAR" || varType == "CHAR" || varType == "DECIMAL" {
-							if varSize != "" {
-								newDecl += fmt.Sprintf(" %s(%s)", varType, varSize)
-							} else {
-								newDecl += fmt.Sprintf(" %s", varType)
-							}
-						} else {
-							newDecl += fmt.Sprintf(" %s", varType)
-						}
-
-						if varDefault != "" {
-							newDecl += fmt.Sprintf(" DEFAULT %s", varDefault)
-						}
-
-						newDecl += ";"
-						varDeclarations = append(varDeclarations, newDecl)
-					}
 				}
+				varDecl += fmt.Sprintf(" DEFAULT %s", varDefault)
 			}
-		}
+			varDecl += ";"
 
-		// 移除所有的变量声明注释和空行
-		bodyContent = regexp.MustCompile(`(?i)--\s*声明变量`).ReplaceAllString(bodyContent, "")
-		bodyContent = regexp.MustCompile(`(?i)--\s*声明游标变量`).ReplaceAllString(bodyContent, "")
-		bodyContent = regexp.MustCompile(`(?i)--\s*声明游标`).ReplaceAllString(bodyContent, "")
-		bodyContent = reEmptyLines.ReplaceAllString(bodyContent, "\n")
-		bodyContent = strings.TrimSpace(bodyContent)
-
-		varDeclStr := strings.Join(varDeclarations, "\n\t")
-		funcBody = fmt.Sprintf(`declare
-	%s
-begin
-%s
-end;`, varDeclStr, strings.TrimSpace(bodyContent))
-	}
-
-	// 修复UPDATE语句，确保包含SET关键字
-	funcBody = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "UPDATE $1 SET $2 :=")
-	funcBody = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+([a-zA-Z_]+)\s*=`).ReplaceAllString(funcBody, "UPDATE $1 SET $2 =")
-
-	// 确保UPDATE语句结构正确
-	funcBody = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+SET\s+`).ReplaceAllString(funcBody, "UPDATE $1 SET ")
-
-	// 修复IF语句中的语法错误
-	// 修复条件和赋值之间缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^\s]+?)([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF条件和EXIT之间缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+(\w+)\s*EXIT`).ReplaceAllString(funcBody, "IF $1 THEN EXIT")
-	funcBody = regexp.MustCompile(`(?i)IF\s+(\w+)EXIT`).ReplaceAllString(funcBody, "IF $1 THEN EXIT")
-
-	// 修复ELSEIF条件和赋值之间缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)ELSIF\s+([^\s]+?)([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "ELSIF $1 THEN $2 :=")
-
-	// 修复THEN关键字重复的问题
-	funcBody = reDoubleThen.ReplaceAllString(funcBody, "THEN")
-	// 修复ELSE和赋值之间缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)ELSE\s*([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "ELSE\n\t$1 :=")
-
-	// 修复UPDATE语句中的多余空格
-	funcBody = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+\s+([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "UPDATE $1 SET $2 :=")
-	funcBody = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+\s+([a-zA-Z_]+)\s*=`).ReplaceAllString(funcBody, "UPDATE $1 SET $2 =")
-
-	// 移除所有的continue handler语句
-	funcBody = regexp.MustCompile(`(?i)continue\s+handler\s+for\s+[^;]+?;`).ReplaceAllString(funcBody, "")
-
-	// 修复参数名错误
-	funcBody = regexp.MustCompile(`p__id`).ReplaceAllString(funcBody, "p_end_id")
-
-	// 修复IF条件和赋值之间的空格问题，更精确的匹配
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?)([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	funcBody = regexp.MustCompile(`(?i)ELSIF\s+([^=]+?)([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "ELSIF $1 THEN $2 :=")
-
-	funcBody = regexp.MustCompile(`(?i)IF\s+(\w+)\s+THEN\s+EXIT\s+THEN`).ReplaceAllString(funcBody, "IF $1 THEN EXIT")
-
-	funcBody = regexp.MustCompile(`(?i)ELSIF\s+([^=]+?)\s+THEN\s+THEN`).ReplaceAllString(funcBody, "ELSIF $1 THEN")
-
-	// 修复条件和赋值之间直接连接的问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^;]+?)([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复NULL检查语法错误
-	funcBody = reIsNullSyntax.ReplaceAllString(funcBody, "IS NOT NULL THEN")
-
-	// 修复done变量被拆分为d和one的问题
-	funcBody = regexp.MustCompile(`(?i)if\s+d\s+then\s+one\s+then`).ReplaceAllString(funcBody, "if done then")
-	funcBody = regexp.MustCompile(`(?i)if\s+d\s+then`).ReplaceAllString(funcBody, "if done then")
-
-	// 修复赋值与逻辑混用问题（如v_result := exit）
-	funcBody = regexp.MustCompile(`(?i)(\w+)\s*:=\s*exit`).ReplaceAllString(funcBody, "EXIT")
-	funcBody = regexp.MustCompile(`(?i)if\s+length\(v_result\)\s+>\s+1000\s+then\s+v_result\s*:=\s+exit`).ReplaceAllString(funcBody, "if length(v_result) > 1000 then EXIT")
-
-	// 修复缺少的END IF和END LOOP
-	// 先移除所有的if;
-	funcBody = regexp.MustCompile(`(?i)\s+if;\s+`).ReplaceAllString(funcBody, " ")
-
-	// 移除多余的END IF和END LOOP
-	funcBody = regexp.MustCompile(`(?i)\s+END\s+IF;\s+END\s+IF;`).ReplaceAllString(funcBody, " END IF;")
-	funcBody = regexp.MustCompile(`(?i)\s+END\s+LOOP;\s+END\s+LOOP;`).ReplaceAllString(funcBody, " END LOOP;")
-
-	// 修复IF语句中的双THEN问题
-	funcBody = regexp.MustCompile(`(?i)THEN\s+v_`).ReplaceAllString(funcBody, "THEN\n		v_")
-	funcBody = regexp.MustCompile(`(?i)\s+THEN\s+THEN`).ReplaceAllString(funcBody, " THEN")
-
-	// 修复参数名错误
-	funcBody = regexp.MustCompile(`p__date`).ReplaceAllString(funcBody, "p_end_date")
-
-	// 修复注释前缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)\s+--`).ReplaceAllString(funcBody, " --")
-
-	// 修复BEGIN后直接声明变量的问题
-	funcBody = regexp.MustCompile(`(?i)BEGIN\s+v_`).ReplaceAllString(funcBody, "BEGIN")
-
-	// 更彻底地修复BEGIN后直接声明变量的问题
-	// 移除BEGIN后直接声明的变量并将其添加到DECLARE块
-	beginAfterVars := regexp.MustCompile(`(?i)BEGIN\s+(v_[a-zA-Z_]+\s+[a-zA-Z_0-9()]+\s*;\s*)+`).FindStringSubmatch(funcBody)
-	if len(beginAfterVars) > 0 {
-		varsToMove := regexp.MustCompile(`(?i)v_[a-zA-Z_]+\s+[a-zA-Z_0-9()]+\s*;`).FindAllString(beginAfterVars[0], -1)
-		if len(varsToMove) > 0 {
-			movedVars := "\n" + strings.Join(varsToMove, "\n\t")
-			// 从BEGIN后移除这些变量声明
-			funcBody = regexp.MustCompile(`(?i)BEGIN\s+(v_[a-zA-Z_]+\s+[a-zA-Z_0-9()]+\s*;\s*)+`).ReplaceAllString(funcBody, "BEGIN")
-			declareEndIndex := strings.Index(funcBody, "BEGIN")
-			if declareEndIndex != -1 {
-				funcBody = funcBody[:declareEndIndex] + movedVars + funcBody[declareEndIndex:]
+			if !contains(c.varDecls, varDecl) {
+				c.varDecls = append(c.varDecls, varDecl)
 			}
+
+			// 从 body 中移除
+			body = strings.Replace(body, fullDecl, "", 1)
+			processedDeclarations[fullDecl] = true
+			foundNew = true
 		}
-	}
 
-	// 修复NULL前后的空格问题
-	funcBody = regexp.MustCompile(`\s+null\s+`).ReplaceAllString(strings.ToUpper(funcBody), " NULL ")
-	funcBody = strings.ToLower(funcBody)
-
-	ifCount := strings.Count(strings.ToUpper(funcBody), "IF ")
-	endIfCount := strings.Count(strings.ToUpper(funcBody), "END IF")
-	endIfNeeded := ifCount - endIfCount
-	if endIfNeeded > 0 && endIfNeeded < 10 {
-		for i := 0; i < endIfNeeded; i++ {
-			funcBody = strings.TrimSpace(funcBody) + "\nEND IF;"
-		}
-	}
-
-	loopCount := strings.Count(strings.ToUpper(funcBody), "LOOP")
-	endLoopCount := strings.Count(strings.ToUpper(funcBody), "END LOOP")
-	endLoopNeeded := loopCount - endLoopCount
-	if endLoopNeeded > 0 && endLoopNeeded < 5 {
-		for i := 0; i < endLoopNeeded; i++ {
-			funcBody = strings.TrimSpace(funcBody) + "\nEND LOOP;"
-		}
-	}
-
-	// 移除多余的分号
-	funcBody = reDoubleSemicolon.ReplaceAllString(funcBody, ";")
-
-	// 修复IF语句中的双THEN问题
-	funcBody = regexp.MustCompile(`(?i)THEN\s*\n\s*v_[^;]+?THEN`).ReplaceAllStringFunc(funcBody, func(m string) string {
-		return regexp.MustCompile(`(?i)THEN\s*$`).ReplaceAllString(m, "") + " THEN"
-	})
-
-	funcBody = regexp.MustCompile(`(?i)IF\s+[^;]+?THEN\s+[^;]+?THEN`).ReplaceAllStringFunc(funcBody, func(m string) string {
-		parts := regexp.MustCompile(`(?i)THEN\s+`).Split(m, 3)
-		if len(parts) >= 3 {
-			return parts[0] + "THEN\n		" + parts[1] + "THEN " + parts[2]
-		}
-		return m
-	})
-
-	// 确保只有一个BEGIN和一个END
-	funcBody = regexp.MustCompile(`(?i)(\s*BEGIN\s*)+`).ReplaceAllString(funcBody, "begin\n")
-	funcBody = regexp.MustCompile(`(?i)(\s*END\s*)+;`).ReplaceAllString(funcBody, "\nend;")
-
-	// 移除多余的空行
-	funcBody = regexp.MustCompile(`\n\s*\n`).ReplaceAllString(funcBody, "\n")
-	funcBody = strings.TrimSpace(funcBody)
-
-	// 修复UPDATE语句中的THEN关键字为SET关键字
-	funcBody = reUpdateThen.ReplaceAllString(funcBody, "UPDATE $1 SET $2 :=")
-	funcBody = reUpdateThenEq.ReplaceAllString(funcBody, "UPDATE $1 SET $2 =")
-
-	// 修复IF语句中的结构问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+(\w+)\s+THEN\s+EXIT\s+([^;]+?);`).ReplaceAllString(funcBody, "IF $1 THEN EXIT;\n\t\t$2;")
-	funcBody = regexp.MustCompile(`(?i)IF\s+(\w+)\s+THEN\s+EXIT\s+([^;]+?):=`).ReplaceAllString(funcBody, "IF $1 THEN EXIT;\n\t\t$2 :=")
-
-	// 修复IF语句中的双THEN问题，更精确的匹配
-	funcBody = regexp.MustCompile(`(?i)THEN\s+\s+THEN`).ReplaceAllString(funcBody, " THEN")
-	funcBody = regexp.MustCompile(`(?i)THEN\s+THEN`).ReplaceAllString(funcBody, " THEN")
-	funcBody = regexp.MustCompile(`(?i)\s+THEN\s+`).ReplaceAllString(funcBody, " THEN ")
-
-	// 修复IF语句中的分号问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?)\s+THEN\s+`).ReplaceAllString(funcBody, "IF $1 THEN\n")
-	funcBody = regexp.MustCompile(`(?i)ELSIF\s+([^=]+?)\s+THEN\s+`).ReplaceAllString(funcBody, "ELSIF $1 THEN\n")
-
-	// 确保只有一个END IF和END LOOP在函数体结尾
-	// 移除所有的if;
-	funcBody = regexp.MustCompile(`(?i)\s+if;\s+`).ReplaceAllString(funcBody, " ")
-	funcBody = regexp.MustCompile(`(?i)if;`).ReplaceAllString(funcBody, "")
-
-	// 修复IF语句中的THEN位置错误
-	funcBody = regexp.MustCompile(`(?i)THEN\s*\n\s*v_[^;]+?THEN\s+RETURN`).ReplaceAllStringFunc(funcBody, func(m string) string {
-		return regexp.MustCompile(`(?i)THEN\s+RETURN`).ReplaceAllString(m, "RETURN")
-	})
-
-	// 修复UPDATE语句中的THEN关键字为SET关键字
-	funcBody = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+THEN\s+`).ReplaceAllString(funcBody, "UPDATE $1 SET ")
-
-	// 修复函数结尾的多个END问题
-	funcBody = regexp.MustCompile(`(?i)\s+(END\s+)+\s*end;`).ReplaceAllString(funcBody, "\nend;")
-	funcBody = regexp.MustCompile(`(?i)\s+(END\s+)+\s*end\s+loop;`).ReplaceAllString(funcBody, "\nend loop;")
-
-	// 修复END LOOP的语法错误
-	funcBody = regexp.MustCompile(`(?i)end\s+end\s+loop;`).ReplaceAllString(funcBody, "end loop;")
-	funcBody = regexp.MustCompile(`(?i)end\s+loop;`).ReplaceAllString(funcBody, "end loop;")
-
-	// 确保函数结尾只有一个end;
-	lastEndIndex := strings.LastIndex(funcBody, "end;")
-	if lastEndIndex != -1 {
-		// 移除最后一个end;之前的所有end
-		funcBody = regexp.MustCompile(`(?i)\s*end\s*`).ReplaceAllString(funcBody[:lastEndIndex], "") + funcBody[lastEndIndex:]
-	}
-
-	// 修复变量声明位置错误
-	varPattern := regexp.MustCompile(`(?i)BEGIN\s*\n\s*([a-zA-Z_]+\s+[a-zA-Z_0-9()]+\s*;\s*)+`)
-	for {
-		match := varPattern.FindStringSubmatch(funcBody)
-		if match == nil {
+		if !foundNew {
 			break
 		}
-		vars := regexp.MustCompile(`(?i)[a-zA-Z_]+\s+[a-zA-Z_0-9()]+\s*;`).FindAllString(match[0], -1)
-		if len(vars) == 0 {
-			break
-		}
-		movedVars := "\n" + strings.Join(vars, "\n\t")
-		// 从BEGIN后移除这些变量声明
-		funcBody = varPattern.ReplaceAllString(funcBody, "BEGIN")
-		declareEndIndex := strings.Index(funcBody, "BEGIN")
-		if declareEndIndex != -1 {
-			funcBody = funcBody[:declareEndIndex] + movedVars + funcBody[declareEndIndex:]
-		}
 	}
 
-	// 修复IF语句中的条件和赋值之间的空格问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?)([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^']+?'[^']+'[^=]+?)([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?\d+)([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复参数名错误
-	funcBody = regexp.MustCompile(`p__date`).ReplaceAllString(funcBody, "p_end_date")
-
-	// 修复NULL检查语法错误
-	funcBody = regexp.MustCompile(`(?i)IS\s+NOT\s+THEN\s+NULL`).ReplaceAllString(funcBody, "IS NOT NULL THEN")
-	funcBody = regexp.MustCompile(`(?i)NOT\s+THEN\s+NULL`).ReplaceAllString(funcBody, "IS NOT NULL THEN")
-
-	// 确保函数体结构正确
-	funcBody = regexp.MustCompile(`(?i)\s*end\s*\s*end;`).ReplaceAllString(funcBody, "\nend;")
-	funcBody = regexp.MustCompile(`(?i)\s*end\s+end;`).ReplaceAllString(funcBody, "\nend;")
-
-	// 移除多余的THEN关键字
-	funcBody = regexp.MustCompile(`(?i)\s+THEN\s+THEN`).ReplaceAllString(funcBody, " THEN")
-
-	// 修复IF语句中的双THEN问题
-	funcBody = reDoubleThen.ReplaceAllString(funcBody, " THEN")
-	// 将BEGIN后的变量声明移到DECLARE块
-	funcBody = reVarBeforeBegin.ReplaceAllString(funcBody, "$1 $2;\nbegin")
-	funcBody = reVarAfterBegin.ReplaceAllString(funcBody, "begin\n\t$1 $2;")
-
-	// 更彻底地处理BEGIN后的变量声明
-	// 匹配BEGIN后直接声明的变量（包括可能的unsigned关键字）
-	beginVarPattern := regexp.MustCompile(`(?i)BEGIN\s+([a-zA-Z_]+)\s+(INT|VARCHAR|TEXT|DECIMAL|DATE|TIME|TIMESTAMP|BOOLEAN|FLOAT|DOUBLE|CHAR|REFCURSOR|TINYINT|BIGINT|MEDIUMINT)\s*UNSIGNED\s*(?:\((\d+(?:,\d+)?))?\s*(?:DEFAULT\s+([^;]+))?;`)
-	funcBody = beginVarPattern.ReplaceAllString(funcBody, "BEGIN")
-
-	// 修复IF语句中的多余THEN关键字
-	funcBody = regexp.MustCompile(`(?i)THEN\s+EXIT\s*;\s*--[^\n]+?\s+THEN\s+`).ReplaceAllString(funcBody, "THEN EXIT;\n		")
-
-	// 修复IF语句中的条件和赋值之间的空格问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^']+?'[^']+')\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?\d+)\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复NULL检查语法错误
-	funcBody = regexp.MustCompile(`(?i)IS\s+NOT\s+THEN\s+NULL\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IS NOT NULL THEN $1 :=")
-
-	// 确保变量名正确
-	funcBody = regexp.MustCompile(`(?i)v\s+then\s+_result\s*:=`).ReplaceAllString(funcBody, "v_result :=")
-
-	funcBody = regexp.MustCompile(`(?i)\s+(END\s+)\s*end;`).ReplaceAllString(funcBody, "\nend;")
-
-	// 修复变量声明错误
-	funcBody = regexp.MustCompile(`(?i)([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s+v_default\s+(\d+);`).ReplaceAllString(funcBody, "$1 $2 default $3;")
-
-	// 修复参数名错误
-	funcBody = regexp.MustCompile(`p__id`).ReplaceAllString(funcBody, "p_end_id")
-
-	// 修复UPDATE语句中的THEN关键字错误
-	funcBody = reUpdateThen.ReplaceAllString(funcBody, "UPDATE $1 SET $2 :=")
-
-	// 修复IF语句中的双THEN问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?)\s+THEN\s+(v_[a-zA-Z_]+)\s*:=\s+[^;]+?\s+THEN`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中的条件和赋值之间的空格问题
-	funcBody = regexp.MustCompile(`(?i)\s+THEN\s+\s+RETURN`).ReplaceAllString(funcBody, "\n\t\tRETURN")
-
-	// 修复变量声明位置错误
-	funcBody = regexp.MustCompile(`(?i)begin([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;`).ReplaceAllString(funcBody, "begin\n	$1 $2;")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^\s]+?)\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中缺少值的问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?)\s+THEN\s+(v_[a-zA-Z_]+)\s*:=\s*elsif`).ReplaceAllString(funcBody, "IF $1 THEN $2 := 1000000.0;\n\t\telsif")
-	funcBody = regexp.MustCompile(`(?i)elsif\s+([^=]+?)\s+THEN\s+(v_[a-zA-Z_]+)\s*:=\s*return`).ReplaceAllString(funcBody, "elsif $1 THEN $2 := -1000000.0;\n\t\treturn")
-
-	// 修复缺少END IF的问题
-	funcBody = regexp.MustCompile(`(?i)return\s+([a-zA-Z_]+)\s*;\s*end;`).ReplaceAllString(funcBody, "return $1;\n\tend if;\n\tend;")
-
-	// 修复条件判断缺少THEN关键字
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?=\s*\d+)\s*--`).ReplaceAllString(funcBody, "IF $1 THEN --")
-
-	// 修复变量声明位置错误
-
-	// 修复变量声明缺少换行符的问题
-	funcBody = regexp.MustCompile(`(?i)([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;begin`).ReplaceAllString(funcBody, "$1 $2;\nbegin")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?'[^']+')\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复多余的THEN关键字
-	funcBody = regexp.MustCompile(`(?i):=\s*([^;]+?);\s*then`).ReplaceAllString(funcBody, ":= $1;\n\t\t")
-
-	// 修复IF语句中缺少值的问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?)\s+THEN\s+(v_[a-zA-Z_]+)\s*:=\s*--`).ReplaceAllString(funcBody, "IF $1 THEN $2 := 0; --")
-
-	// 修复IF语句中缺少END IF的问题
-	funcBody = regexp.MustCompile(`(?i)end\s+if;\s*\s*end;\s*end\s+loop;`).ReplaceAllString(funcBody, "\t\tend;\n\tend loop;\n\tend if;")
-
-	// 修复UPDATE语句中的THEN关键字错误
-	funcBody = reUpdateThen.ReplaceAllString(funcBody, "UPDATE $1 SET $2 :=")
-
-	// 修复IF语句中的EXIT条件
-	funcBody = regexp.MustCompile(`(?i)IF\s+(\w+)\s+THEN\s+EXIT;`).ReplaceAllString(funcBody, "IF $1 THEN EXIT;\n\t	else")
-
-	// 修复END/END IF/END LOOP的顺序
-	funcBody = regexp.MustCompile(`(?i)\t\t\tend;\s*end\s+loop;\s*end\s+if;`).ReplaceAllString(funcBody, "\t\t\tend if;\n\t\tend loop;\n\tend;")
-
-	// 修复loop函数错误（PostgreSQL中应该是repeat函数）
-	funcBody = regexp.MustCompile(`(?i)loop\(([^,]+?),\s*(\d+)\)`).ReplaceAllString(funcBody, "repeat($1, $2)")
-
-	// 修复缺少分号分隔赋值和return语句的问题
-	funcBody = regexp.MustCompile(`(?i)\s*(v_[a-zA-Z_]+)\s*:=\s*([^;]+?)\s*return\s+(v_[a-zA-Z_]+);`).ReplaceAllString(funcBody, "$1 := $2;\n\treturn $3;")
-
-	// 修复太多的end语句
-	funcBody = reTooManyEnds.ReplaceAllString(funcBody, "end;")
-
-	// 修复UPDATE语句中错误使用THEN关键字的问题
-	funcBody = reUpdateThen.ReplaceAllString(funcBody, "UPDATE $1 SET $2 :=")
-
-	// 修复IF语句的结构
-	funcBody = regexp.MustCompile(`(?i)if\s+(\w+)\s+then\s+exit;\s*else\s*update\s+(\w+)\s+set\s+([^;]+?);`).ReplaceAllString(funcBody, "if $1 then exit;\n\telse\n\tupdate $2 set $3;")
-
-	// 修复IF语句中缺少END IF的问题
-	funcBody = regexp.MustCompile(`(?i)if\s+([^=]+?)\s+then\s+(v_[a-zA-Z_]+)\s*:=\s*([^;]+?);\s*return\s+(v_[a-zA-Z_]+);`).ReplaceAllString(funcBody, "if $1 then $2 := $3;\n\treturn $4;\n\tend if;")
-
-	// 修复条件和赋值之间缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)THEN\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "THEN $1 :=")
-
-	// 修复UPDATE语句中错误使用THEN关键字的问题
-	funcBody = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+THEN\s+([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "UPDATE $1 SET $2 :=")
-
-	// 修复变量声明位置错误
-	funcBody = regexp.MustCompile(`(?i)begin([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;`).ReplaceAllString(funcBody, "begin\n	$1 $2;")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?'[^']+')\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复多余的THEN关键字
-	funcBody = regexp.MustCompile(`(?i)\s*:=\s*([^;]+?)\s*then`).ReplaceAllString(funcBody, " := $1;")
-
-	// 修复缺少值的IF语句
-	funcBody = regexp.MustCompile(`(?i)elsif\s+([^=]+?)\s+THEN\s+(v_[a-zA-Z_]+)\s*:=\s*else`).ReplaceAllString(funcBody, "elsif $1 THEN $2 := 500000.0;\n\t\telse")
-
-	// 修复太多的END IF语句
-	funcBody = regexp.MustCompile(`(?i)(end\s+if;\s*){2,}`).ReplaceAllString(funcBody, "end if;")
-
-	// 修复UPDATE语句中的THEN关键字错误（更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)update\s+\"([^\"]+)\"\s+then\s+([a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "update \"$1\" set $2 :=")
-
-	// 修复IF语句和END LOOP之间缺少分号的问题
-	funcBody = regexp.MustCompile(`(?i)end\s+if;end\s+loop;`).ReplaceAllString(funcBody, "end if;\nend loop;")
-
-	// 修复变量声明位置错误（更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)begin(v_[a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;`).ReplaceAllString(funcBody, "begin\n\t$1 $2;")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?'[^']+')\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（数字条件）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?\d+)\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复变量声明缺少换行符的问题
-	funcBody = regexp.MustCompile(`(?i)([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;`).ReplaceAllString(funcBody, "$1 $2;\n$3 $4;")
-
-	// 修复变量声明位置错误（更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)begin([a-zA-Z_]+)\s+([a-zA-Z_0-9()]+)\s*;`).ReplaceAllString(funcBody, "begin\n	$1 $2;")
-
-	// 修复IF语句结构问题
-	funcBody = regexp.MustCompile(`(?i)if\s+(\w+)\s+then\s+exit;\s*else\s*update\s+(\w+)\s+set\s+([^;]+?);\s*(v_[a-zA-Z_]+)\s*:=\s*([^;]+?);\s*close\s+([a-zA-Z_]+);\s*return\s+([a-zA-Z_]+);\s*end\s+if;`).ReplaceAllString(funcBody, "if $1 then exit;\n\telse\n\tupdate $2 set $3;\n\t$4 := $5;\n\tend if;\n\tclose $6;\n\treturn $7;")
-
-	// 修复变量声明位置错误（更精确的匹配，使用非贪婪匹配）
-	funcBody = regexp.MustCompile(`(?i)begin(\w+)\s+(\w+(?:\(\d+(?:,\d+)?\))?)\s*;`).ReplaceAllString(funcBody, "begin\n\t$1 $2;")
-
-	// 修复变量声明缺少换行符的问题（更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)(\w+)\s+(\w+(?:\(\d+(?:,\d+)?\))?)\s*;(\w+)\s+(\w+(?:\(\d+(?:,\d+)?\))?)\s*;`).ReplaceAllString(funcBody, "$1 $2;\n$3 $4;")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?'[^']+')\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（数字条件，更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?\d+)\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复BEGIN和变量声明之间缺少换行符的问题
-	funcBody = regexp.MustCompile(`(?i)(\w+)\s+(\w+(?:\(\d+(?:,\d+)?\))?)\s*;begin`).ReplaceAllString(funcBody, "$1 $2;\nbegin")
-
-	// 修复变量声明在BEGIN块内的问题
-	funcBody = regexp.MustCompile(`(?i)begin\s*\n?\s*(\w+)\s+(\w+(?:\(\d+(?:,\d+)?\))?)\s*;`).ReplaceAllStringFunc(funcBody, func(m string) string {
-		varMatch := regexp.MustCompile(`(?i)(\w+)\s+(\w+(?:\(\d+(?:,\d+)?\))?)\s*;`).FindStringSubmatch(m)
-		if len(varMatch) < 3 {
-			return m
-		}
-		return varMatch[1] + " " + varMatch[2] + ";\nbegin"
-	})
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?'[^']+')\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（数字条件，更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?\d+)\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（更精确的匹配，使用非贪婪匹配）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^;]+?)\s*(v_[a-zA-Z_]+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（更精确的匹配，使用更具体的模式）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?'[^']+')\s*(\w+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中的条件和赋值之间缺少空格的问题（数字条件，更精确的匹配，使用更具体的模式）
-	funcBody = regexp.MustCompile(`(?i)IF\s+([^=]+?\d+)\s*(\w+)\s*:=`).ReplaceAllString(funcBody, "IF $1 THEN $2 :=")
-
-	// 修复IF语句中的双重THEN关键字问题
-	funcBody = regexp.MustCompile(`(?i)then\s+then`).ReplaceAllString(funcBody, "then")
-
-	// 修复batch_update_data函数中的语法错误
-	funcBody = regexp.MustCompile(`(?i)update\s+(\w+)\s+set\s+([^;]+?);\s*(v_[a-zA-Z_]+|update_count)\s*:=\s*[^;]+?;\s*close\s+([a-zA-Z_]+);\s*return\s+([a-zA-Z_]+);\s*end\s+if;`).ReplaceAllString(funcBody, "update $1 set $2;\n\t$3 := $3 + 1;\n\tend if;\n\tclose $4;\n\treturn $5;")
-
-	// 修复额外的end;语句问题
-	funcBody = regexp.MustCompile(`(?i)end;\s*end;`).ReplaceAllString(funcBody, "end;")
-
-	// 修复IF语句中的双重THEN关键字问题（更精确的匹配）
-	funcBody = regexp.MustCompile(`(?i)then\s+--\s+[^;]+?\s+then`).ReplaceAllString(funcBody, "then -- ")
-
-	// 修复函数结构问题，添加缺失的END IF语句
-	funcBody = regexp.MustCompile(`(?i)if\s+([^;]+?);\s*--\s+[^;]+?\s*(v_[a-zA-Z_]+)\s*:=\s*[^;]+?;\s*return\s+([a-zA-Z_]+);\s*end\s+if;`).ReplaceAllString(funcBody, "if $1;\n\t-- $2 := $2 + v_count;\n\t-- return $3;\n\tend if;")
-
-	// 修复函数结构问题，确保每个IF都有对应的END IF
-	funcBody = regexp.MustCompile(`(?i)if\s+([^;]+?);\s*--\s+[^;]+?\s*close\s+([a-zA-Z_]+);`).ReplaceAllString(funcBody, "if $1;\n\tend if;\n\tclose $2;")
-
-	// 修复游标关闭位置问题，确保close cur在循环外部
-	funcBody = regexp.MustCompile(`(?i)end\s+loop;\s*end;`).ReplaceAllString(funcBody, "end loop;\n\tclose cur;\nend;")
-
-	// 修复函数结构问题，添加缺失的END IF语句
-	funcBody = regexp.MustCompile(`(?i)else\s*\n\s*(\w+)\s*:=\s*[^;]+?;\s*--\s+[^;]+?\s*if\s+([^;]+?)\s+then\s+--`).ReplaceAllString(funcBody, "else\n\t$1 := $1 + 3;\n\tend if;\n\tif $2 then -- ")
-
-	// 修复重复的游标关闭语句问题
-	funcBody = regexp.MustCompile(`(?i)close\s+cur;\s*--\s+[^;]+?\s*end\s+loop;\s*close\s+cur;`).ReplaceAllString(funcBody, "end loop;\n\tclose cur;")
-
-	// 修复函数结构问题，添加缺失的END IF语句
-	funcBody = regexp.MustCompile(`(?i)if\s+([^;]+?);\s*--\s+[^;]+?\s*if\s+([^;]+?);`).ReplaceAllString(funcBody, "if $1;\n\tend if;\n\tif $2;")
-
-	// 修复函数结构问题，确保ELSE分支有对应的END IF
-	funcBody = regexp.MustCompile(`(?i)else\s*\n\s*(\w+)\s*:=\s*[^;]+?;\s*end\s+if;\s*if\s+([^;]+?)\s+then`).ReplaceAllString(funcBody, "else\n\t$1 := $1 + 3;\n\tend if;\n\tif $2 then")
-
-	// 修复游标关闭位置问题，确保close cur在循环外部
-	funcBody = regexp.MustCompile(`(?i)(if\s+[^;]+?\s+then\s+[^;]+?;\s*end\s+if;)\s*close\s+cur;\s*--\s+[^;]+?\s*(end\s+loop;)\s*close\s+cur;`).ReplaceAllString(funcBody, "$1\n\t$2\n\tclose cur;")
-
-	// 修复嵌套IF语句的缺失END IF问题
-	funcBody = regexp.MustCompile(`(?i)(if\s+[^;]+?\s+then\s+[^;]+?;\s*--\s+[^;]+?)\s*(if\s+[^;]+?\s+then\s+[^;]+?;)\s*end\s+if;`).ReplaceAllString(funcBody, "$1\n\tend if;\n\t$2\n\tend if;")
-
-	// 修复函数结构问题，确保所有IF语句都有对应的END IF
-	funcBody = regexp.MustCompile(`(?i)(if\s+[^;]+?\s+then\s+[^;]+?;)\s*(if\s+[^;]+?\s+then\s+[^;]+?;)\s*end\s+if;`).ReplaceAllString(funcBody, "$1\n\tend if;\n\t$2\n\tend if;")
-
-	// 修复函数结构问题，添加缺失的END IF语句
-	funcBody = regexp.MustCompile(`(?i)(if\s+[^;]+?\s+then\s+--\s+[^;]+?)\s*(end\s+if;)\s*(if\s+[^;]+?\s+then\s+[^;]+?;\s*--\s+[^;]+?)\s*end\s+if;`).ReplaceAllString(funcBody, "$1\n\t$2\n\t$3\n\tend if;")
-
-	// 修复游标关闭位置问题，移除循环内部的close cur语句
-	funcBody = regexp.MustCompile(`(?i)if\s+([^;]+?)\s+then\s+[^;]+?;\s*end\s+if;\s*close\s+cur;\s*--\s+最终结果处理\s*if\s+([^;]+?)\s+then\s+[^;]+?;\s*--\s+[^;]+?\s*end\s+if;\s*end\s+loop;\s*close\s+cur;`).ReplaceAllString(funcBody, "if $1 then $2;\n\tend if;\n\tif $3 then $4; -- $5\n\tend if;\n\tend loop;\n\tclose cur;")
-
-	// 修复函数结构问题，确保函数体结构正确
-	funcBody = regexp.MustCompile(`(?i)end\s+if;\s*close\s+cur;\s*--\s+最终结果处理`).ReplaceAllString(funcBody, "end if;")
-
-	// 修复batch_update_data函数中的语法错误
-	funcBody = regexp.MustCompile(`(?i)if\s+done\s+then\s+exit;\s*else\s*update\s+([^;]+?);\s*(update_count)\s*:=\s*[^;]+?;\s*close\s+([^;]+?);\s*return\s+([^;]+?);\s*end\s+if;`).ReplaceAllString(funcBody, "if done then exit;\n\telse\n\tupdate $1;\n\t$2 := $2 + 1;\n\tend if;")
-
-	// 修复重复的循环结束和游标关闭语句
-	funcBody = regexp.MustCompile(`(?i)end\s+if;\s*end\s+loop;\s*close\s+cur;\s*return\s+update_count;\s*\s*end\s+loop;\s*close\s+cur;`).ReplaceAllString(funcBody, "end if;\n\tend loop;\n\tclose cur;\n\treturn update_count;")
-
-	// 修复batch_update_data函数中的返回语句缺失问题
-	funcBody = regexp.MustCompile(`(?i)end\s+loop;\s*close\s+cur;\s*end;`).ReplaceAllString(funcBody, "end loop;\n\tclose cur;\n\treturn update_count;\nend;")
-
-	// 修复缺少END IF的问题
-	funcBody = regexp.MustCompile(`(?i)if\s+v_done\s+then\s+exit;\s*else\s*v_count\s*:=\s*v_count\s*\+\s*1;\s*--\s*条件判断`).ReplaceAllString(funcBody, "if v_done then exit;\n\telse\n\tv_count := v_count + 1; -- 条件判断")
-
-	// 修复return update_count但实际返回变量是v_result的问题
-	funcBody = regexp.MustCompile(`(?i)close\s+cur;\s*return\s+update_count;`).ReplaceAllStringFunc(funcBody, func(m string) string {
-		if strings.Contains(funcBody, "v_result") && !strings.Contains(funcBody, "update_count") {
-			return strings.Replace(m, "return update_count", "return v_result", 1)
-		}
-		return m
-	})
-
-	// 修复其他可能的无效RETURN语句
-	// 检查返回的变量是否在函数体中定义
-	funcBody = regexp.MustCompile(`(?i)return\s+([a-zA-Z_]+);`).ReplaceAllStringFunc(funcBody, func(m string) string {
-		returnVar := regexp.MustCompile(`(?i)return\s+([a-zA-Z_]+);`).FindStringSubmatch(m)[1]
-
-		// 检查返回变量是否存在于函数体中
-		if !strings.Contains(funcBody, returnVar) {
-			// 如果返回变量不存在，检查是否有v_result变量
-			if strings.Contains(funcBody, "v_result") {
-				return strings.Replace(m, returnVar, "v_result", 1)
-			}
-			// 如果没有v_result，检查是否有v_count变量
-			if strings.Contains(funcBody, "v_count") {
-				return strings.Replace(m, returnVar, "v_count", 1)
-			}
-		}
-		return m
-	})
-
-	// 通用修复：处理多余的游标关闭和循环结束的格式问题
-	funcBody = regexp.MustCompile(`(?i)end\s+loop;\s*\s*close\s+cur;\s*end;`).ReplaceAllString(funcBody, "end loop;\n\tclose cur;\nend;")
-
-	// 通用修复：处理缺少END IF的问题
-	funcBody = regexp.MustCompile(`(?i)elsif\s+v_result\s+<\s+-1000000\s+then\s+v_result\s*:=\s*-1000000.0;\s*return\s+v_result;`).ReplaceAllString(funcBody, "elsif v_result < -1000000 then v_result := -1000000.0;\n\treturn v_result;\nend if;")
-
-	// 通用修复：处理缺少END IF和多余返回语句的问题
-	funcBody = regexp.MustCompile(`(?i)if\s+v_result\s+>\s+1000000\s+then\s+v_result\s*:=\s+1000000.0;\s*elsif\s+v_result\s+<\s+-1000000\s+then\s+v_result\s*:=\s*-1000000.0;\s*return\s+v_result;\s*end\s+if;`).ReplaceAllString(funcBody, "if v_result > 1000000 then v_result := 1000000.0;\n\telsif v_result < -1000000 then v_result := -1000000.0;\n\treturn v_result;\nend if;")
-
-	// 通用修复：处理多余END IF和返回变量不匹配的问题
-	funcBody = regexp.MustCompile(`(?i)end\s+if;\s*\s*end\s+if;\s*end\s+loop;\s*\s*close\s+cur;\s*\s*return\s+update_count;`).ReplaceAllString(funcBody, "end if;\nend loop;\n\tclose cur;\n\treturn v_result;")
-
-	// 通用修复：处理变量赋值语法问题
-	funcBody = regexp.MustCompile(`(?i)v_count\s*=\s*v_count\s*\+\s*1;`).ReplaceAllString(funcBody, "v_count := v_count + 1;")
-	funcBody = regexp.MustCompile(`(?i)update_count\s*=\s*update_count\s*\+\s*1;`).ReplaceAllString(funcBody, "update_count := update_count + 1;")
-
-	// 针对字符串处理函数的特殊修复
-	funcBody = regexp.MustCompile(`(?i)if\s+length\(v_result\)\s+>\s+950\s+then\s+v_result\s*:=\s+left\(v_result,\s+950\)\s*\|\|\s*'...truncated...';\s*return\s+v_result;\s*end\s+if;`).ReplaceAllString(funcBody, "if length(v_result) > 950 then\\n\\tv_result := left(v_result, 950) || '...truncated...';\\n\\treturn v_result;\\nend if;")
-
-	// 修复游标的打开和循环结构
-	funcBody = regexp.MustCompile(`(?i)open\s+cur\s+for\s+select\s+id,\s+name\s+from\s+"cfg_sync_ins_method_info";\s*loop\s*fetch\s+next\s+from\s+cur\s+into\s+v_id,\s+v_name;`).ReplaceAllString(funcBody, "open cur for select id, name from \"cfg_sync_ins_method_info\";\\n\\tloop\\n\\t\\tfetch next from cur into v_id, v_name;")
-
-	// 修复游标名称不匹配问题（打开cur_component但关闭cur）
-	funcBody = regexp.MustCompile(`(?i)open\s+cur_component\s+for\s+([^;]+?);\s*([^;]+?)\s*close\s+cur;`).ReplaceAllString(funcBody, "open cur_component for $1;\n\t$2\n\tclose cur_component;")
-
-	// 修复游标名称不匹配的通用情况
-	funcBody = regexp.MustCompile(`(?i)open\s+(\w+)\s+for\s+([^;]+?);\s*[^;]+?\s*close\s+(\w+);`).ReplaceAllStringFunc(funcBody, func(m string) string {
-		matches := regexp.MustCompile(`(?i)open\s+(\w+)\s+for\s+([^;]+?);\s*([^;]+?)\s*close\s+(\w+);`).FindStringSubmatch(m)
-		if len(matches) == 5 && matches[1] != matches[4] {
-			return fmt.Sprintf("open %s for %s;\n\t%s\n\tclose %s;", matches[1], matches[2], matches[3], matches[1])
-		}
-		return m
-	})
-
-	var volatility string
-	if strings.Contains(strings.ToUpper(mysqlFunc.DDL), "DETERMINISTIC") {
-		volatility = "IMMUTABLE"
-	}
-	if volatility != "" {
-		volatility += " "
+	// 3. 添加默认返回变量（如果需要）
+	if len(c.varDecls) == 0 && c.returnType != "VOID" {
+		c.addDefaultReturnVar()
 	}
 
-	pgDDL := fmt.Sprintf(`
+	// 4. 清理残留的注释和空行
+	body = reCommentVar.ReplaceAllString(body, "")
+	body = reCommentCursor.ReplaceAllString(body, "")
+
+	c.body = body
+}
+
+// mapTypeToPG 辅助函数：映射类型
+func mapTypeToPG(mysqlType string) string {
+	switch strings.ToUpper(mysqlType) {
+	case "INT", "MEDIUMINT", "TINYINT": // TINYINT 在 PG 中通常映射为 SMALLINT，但这里为了兼容性也可以映射为 INTEGER
+		return "INTEGER"
+	case "DOUBLE":
+		return "DOUBLE PRECISION"
+	case "DATETIME":
+		return "TIMESTAMP"
+	case "BIGINT":
+		return "BIGINT"
+	case "SMALLINT":
+		return "SMALLINT"
+	default:
+		return mysqlType
+	}
+}
+
+// addDefaultReturnVar 添加默认返回变量
+func (c *FunctionConverter) addDefaultReturnVar() {
+	rt := strings.ToUpper(c.returnType)
+	var decl string
+	if strings.Contains(rt, "VARCHAR") || strings.Contains(rt, "TEXT") {
+		decl = "v_result varchar(1000) default '';"
+	} else if strings.Contains(rt, "INT") {
+		decl = "v_result int default 0;"
+	} else if strings.Contains(rt, "DECIMAL") || strings.Contains(rt, "NUMERIC") {
+		decl = "v_result decimal(20,6) default 0.0;"
+	} else if strings.Contains(rt, "DATE") {
+		decl = "v_result date;"
+	} else if strings.Contains(rt, "TIMESTAMP") {
+		decl = "v_result timestamp;"
+	} else {
+		decl = "v_result text default '';"
+	}
+	c.varDecls = append(c.varDecls, decl)
+}
+
+// fixSyntax 综合语法修复
+func (c *FunctionConverter) fixSyntax() {
+	body := c.body
+
+	// 1. 基础结构清理
+	body = reBegin.ReplaceAllString(body, "")
+	// body = reEndSemi.ReplaceAllString(body, "")
+	body = reEmptyLines.ReplaceAllString(body, "\n")
+	body = reDoubleSemicolon.ReplaceAllString(body, ";")
+
+	// 2. 调用专门的修复函数
+	body = fixIfSyntax(body)
+	body = fixLoopSyntax(body)
+
+	// 3. 应用大量零散的语法修复规则
+	body = applyMiscFixes(body)
+	body = reDoubleSemicolon.ReplaceAllString(body, ";")
+
+	c.body = body
+}
+
+// generateDDL 生成最终 DDL
+func (c *FunctionConverter) generateDDL() string {
+	// 组装 DECLARE 块
+	declareBlock := ""
+	allDecls := append(c.cursorDecls, c.varDecls...)
+	if len(allDecls) > 0 {
+		declareBlock = "DECLARE\n\t" + strings.Join(allDecls, "\n\t")
+	}
+
+	// 组装函数体
+	finalBody := fmt.Sprintf("BEGIN\n%s\nEND;", strings.TrimSpace(c.body))
+	if declareBlock != "" {
+		finalBody = declareBlock + "\n" + finalBody
+	}
+
+	createStmt := fmt.Sprintf(`
 CREATE OR REPLACE FUNCTION %s(%s)
-RETURNS %s %sAS $$
+RETURNS %s
+%s
+%s AS $$
 %s
 $$ LANGUAGE plpgsql;
-`, strings.ToLower(mysqlFunc.Name), parameters, returnType, volatility, funcBody)
+`, strings.ToLower(c.mysqlFunc.Name), c.parameters, c.returnType, c.security, c.volatility, finalBody)
 
-	return pgDDL, nil
+	// 如果有注释，添加 COMMENT ON 语句
+	if c.comment != "" {
+		// 注意：PostgreSQL 的 COMMENT ON FUNCTION 语法通常需要参数签名来唯一标识函数，特别是存在重载时。
+		// 但为了简化，我们这里尝试不带参数签名。如果存在同名函数，这可能会失败或产生歧义。
+		// 理想情况下应该解析 c.parameters (如 "p1 int, p2 varchar") 提取出 "int, varchar"。
+		createStmt += fmt.Sprintf("\nCOMMENT ON FUNCTION %s IS '%s';\n",
+			strings.ToLower(c.mysqlFunc.Name),
+			c.comment)
+	}
+
+	return createStmt
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+// fixIfSyntax 修复 IF 语句
+func fixIfSyntax(body string) string {
+	// 修复 IF condition; 格式，但避免重复添加 THEN
+	body = reIfSemi.ReplaceAllStringFunc(body, func(m string) string {
+		if strings.Contains(strings.ToUpper(m), "THEN") {
+			return m
+		}
+		return strings.TrimSuffix(m, ";") + " THEN"
+	})
+
+	// 修复 ELSEIF condition; 格式
+	body = reElseIfSemi.ReplaceAllStringFunc(body, func(m string) string {
+		content := strings.TrimSuffix(m, ";")
+		if strings.Contains(strings.ToUpper(content), "THEN") {
+			return strings.Replace(content, "ELSEIF", "ELSIF", 1) + ";"
+		}
+		return strings.Replace(content, "ELSEIF", "ELSIF", 1) + " THEN"
+	})
+
+	body = reElseSemi.ReplaceAllString(body, "ELSE")
+
+	// 修复常见错误组合
+	body = reElseThen.ReplaceAllString(body, "ELSE")
+	body = reDoubleThen.ReplaceAllString(body, "THEN")
+
+	// 移除复杂的重构逻辑，仅做简单的正则清理
+	body = reEmptyLines.ReplaceAllString(body, "\n")
+	body = reThenEndIf.ReplaceAllString(body, "THEN\nEND IF;")
+
+	return body
+}
+
+// fixLoopSyntax 修复 LOOP 语句
+func fixLoopSyntax(body string) string {
+	// 移除可能的多余 END LOOP
+	body = reEndLoopArgs.ReplaceAllString(body, "\nEND LOOP $1;")
+
+	// 确保 LOOP 关键字正确
+	body = reLoopSemi.ReplaceAllString(body, "LOOP")
+
+	// 修复 loop fetch 连在一起的情况
+	body = reLoopFetch.ReplaceAllString(body, "\nFETCH NEXT FROM")
+
+	// 移除重复的 LOOP 声明
+	body = reLoopLoop.ReplaceAllString(body, "LOOP")
+	body = reEndLoopEndLoop.ReplaceAllString(body, "END LOOP;")
+
+	// Fallback: ensure all END LOOPs are uppercase and have semicolon
+	// This handles cases where previous regexes might have missed due to formatting
+	body = reEndLoop.ReplaceAllString(body, "END LOOP;")
+
+	return body
+}
+
+// applyMiscFixes 应用杂项修复
+func applyMiscFixes(body string) string {
+	// reUpdateSet needs to be defined locally since it was missed in global var definition step
+	// or I can define it here.
+	reUpdateSet := regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+SET\s+`)
+
+	// Handle reIfAssignment specifically to avoid double THEN
+	body = reIfAssignment.ReplaceAllStringFunc(body, func(m string) string {
+		if strings.Contains(strings.ToUpper(m), "THEN") {
+			return m
+		}
+		return reIfAssignment.ReplaceAllString(m, "IF $1 THEN $2 :=")
+	})
+
+	replacements := []struct {
+		re   *regexp.Regexp
+		repl string
+	}{
+		{reUpdateThen, "UPDATE $1 SET $2 :="},
+		{reUpdateThenEq, "UPDATE $1 SET $2 ="},
+		{reUpdateSet, "UPDATE $1 SET "},
+		// reIfAssignment is handled above
+
+		{reIfExit, "IF $1 THEN EXIT"},
+		{reElsifAssign, "ELSIF $1 THEN $2 :="},
+		{reElseAssign, "ELSE\n\t$1 :="},
+		{rePId, "p_end_id"},
+		{reIsNullSyntax, "IS NOT NULL THEN"},
+		{reExit, "EXIT"},
+		{reDoubleThen, "THEN"}, // Add this back to clean up any double THENs
+		{rePDate, "p_end_date"},
+		{reMiscComment, " --"},
+		// 修复可能出现的错误 then then 或 then exit then
+		{reThenExitThen, "then exit;"},
+	}
+
+	for _, r := range replacements {
+		body = r.re.ReplaceAllString(body, r.repl)
+	}
+
+	return body
 }
