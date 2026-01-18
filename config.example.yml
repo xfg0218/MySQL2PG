@@ -20,6 +20,7 @@ postgresql:
   database: test_db
   test_only: false  # 仅测试连接，不执行转换
   max_conns: 50     # 连接池配置的最大连接数，从20提升到50
+  pg_connection_params: search_path=public connect_timeout=10 # PostgreSQL连接参数
 
 # 转换配置
 conversion:
@@ -27,6 +28,7 @@ conversion:
   options:
     tableddl: true    # 转换表DDL
     data: true        # 转换数据（先转DDL后转数据）
+    view: false         # 转换视图
     indexes: true     # 转换索引
     functions: false   # 转换函数
     users: true       # 转换用户

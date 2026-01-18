@@ -8,7 +8,17 @@ import (
 )
 
 // ConvertIndexDDL 将MySQL索引DDL转换为PostgreSQL索引DDL
-func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns bool) (string, error) {
+func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns bool, columnNamesMap map[string]string) (string, error) {
+	// 检查索引名称是否有效
+	if index.Name == "" {
+		return "", fmt.Errorf("索引名称为空，表：%s", index.Table)
+	}
+
+	// 检查表名是否有效
+	if index.Table == "" {
+		return "", fmt.Errorf("索引所属表名为空，索引：%s", index.Name)
+	}
+
 	var uniqueClause string
 	if index.IsUnique {
 		uniqueClause = "UNIQUE "
@@ -20,6 +30,18 @@ func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns b
 		// 处理pri_key特殊情况
 		if strings.ToLower(column) == "pri_key" {
 			continue
+		}
+
+		// 检查列名是否有效
+		if column == "" {
+			return "", fmt.Errorf("索引列名为空，索引：%s，表：%s", index.Name, index.Table)
+		}
+
+		// 使用列名映射获取转换后的列名
+		if convertedColumn, ok := columnNamesMap[column]; ok {
+			column = convertedColumn
+			// 移除双引号，因为后面会重新添加
+			column = strings.Trim(column, `"`)
 		}
 
 		// 处理列名大小写
@@ -41,8 +63,9 @@ func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns b
 	lowercaseIndexName := strings.ToLower(index.Name)
 
 	// 为表名和索引名添加双引号，以处理特殊字符和关键字
+	// 使用index.Table而不是传入的tableName参数，确保索引创建在正确的表上
 	pgDDL := fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS \"%s\" ON \"%s\" (%s);",
-		uniqueClause, lowercaseIndexName, tableName, columns)
+		uniqueClause, lowercaseIndexName, index.Table, columns)
 
 	return pgDDL, nil
 }

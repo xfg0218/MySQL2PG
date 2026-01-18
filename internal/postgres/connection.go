@@ -26,6 +26,11 @@ func NewConnection(config *config.PostgreSQLConfig) (*Connection, error) {
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		config.Host, config.Port, config.Username, config.Password, config.Database)
 
+	// 添加连接参数
+	if config.PgConnectionParams != "" {
+		connStr += " " + config.PgConnectionParams
+	}
+
 	poolConfig, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
 		return nil, fmt.Errorf("解析PostgreSQL连接配置失败: %w", err)
@@ -70,16 +75,29 @@ func (c *Connection) BeginTransaction(ctx context.Context) (pgx.Tx, error) {
 // ExecuteDDL 执行DDL语句
 func (c *Connection) ExecuteDDL(ddl string) error {
 	ctx := context.Background()
-	_, err := c.pool.Exec(ctx, ddl)
+
+	// 将DDL转换为小写
+	lowercaseDDL := strings.ToLower(ddl)
+
+	// 将char(0)转换为char(10)，因为PostgreSQL不允许char(0)类型
+	lowercaseDDL = strings.ReplaceAll(lowercaseDDL, "char(0)", "char(10)")
+
+	_, err := c.pool.Exec(ctx, lowercaseDDL)
 	if err != nil {
-		return fmt.Errorf("执行DDL失败: %w, SQL: %s", err, ddl)
+		return fmt.Errorf("执行DDL失败: %w, PostgreSQL SQL: %s", err, lowercaseDDL)
 	}
 	return err
 }
 
 // ExecuteDDLWithTransaction 在事务中执行DDL语句
 func (c *Connection) ExecuteDDLWithTransaction(tx pgx.Tx, ddl string) error {
-	_, err := tx.Exec(context.Background(), ddl)
+	// 将DDL转换为小写
+	lowercaseDDL := strings.ToLower(ddl)
+
+	// 将char(0)转换为char(10)，因为PostgreSQL不允许char(0)类型
+	lowercaseDDL = strings.ReplaceAll(lowercaseDDL, "char(0)", "char(10)")
+
+	_, err := tx.Exec(context.Background(), lowercaseDDL)
 	return err
 }
 

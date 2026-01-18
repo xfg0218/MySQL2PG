@@ -26,6 +26,8 @@ type Manager struct {
 	conversionStats []ConversionStageStat
 	// 存储数据校验不一致的表信息
 	inconsistentTables []TableDataInconsistency
+	// 存储表名到列名映射的映射
+	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
 }
 
 // ConversionStageStat 转换阶段统计信息
@@ -36,7 +38,8 @@ type ConversionStageStat struct {
 	ObjectCount int       // 处理的对象数量
 }
 
-// NewManager 创建新的转换管理器
+// NewManager 创建新的转换管理器实例
+// 初始化数据库连接、配置和日志文件
 func NewManager(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config) (*Manager, error) {
 	// 打开错误日志文件
 	errorLogFile, err := os.OpenFile(config.Run.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -54,15 +57,17 @@ func NewManager(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, 
 	}
 
 	return &Manager{
-		mysqlConn:    mysqlConn,
-		postgresConn: postgresConn,
-		config:       config,
-		errorLogFile: errorLogFile,
-		logFile:      logFile,
+		mysqlConn:           mysqlConn,
+		postgresConn:        postgresConn,
+		config:              config,
+		errorLogFile:        errorLogFile,
+		logFile:             logFile,
+		tableColumnNamesMap: make(map[string]map[string]string),
 	}, nil
 }
 
-// Close 关闭管理器
+// Close 关闭转换管理器
+// 关闭打开的日志文件
 func (m *Manager) Close() error {
 	var err error
 	if m.logFile != nil {
@@ -78,16 +83,17 @@ func (m *Manager) Close() error {
 	return err
 }
 
-// Run 开始转换
+// Run 执行完整的转换流程
+// 根据配置执行表DDL、数据、索引、函数、用户和权限的转换
 func (m *Manager) Run() error {
-	m.Log("开始转换MySQL DDL到PostgreSQL...")
+	m.Log("表MySQL 的DDL、数据、view、索引、函数、用户和权限的转换到 PostgreSQL ...")
 
 	// 检查是否启用了表列表功能
 	if m.config.Conversion.Options.UseTableList && len(m.config.Conversion.Options.TableList) > 0 {
-		m.Log("启用了表列表功能，只同步指定表的数据")
+		m.Log("启用了表列表功能，只同步指定的表")
 
 		// 获取MySQL元数据（只需要表信息）
-		allTables, _, _, _, _, err := m.getMetadata()
+		allTables, _, _, _, _, _, err := m.getMetadata()
 		if err != nil {
 			return err
 		}
@@ -108,32 +114,61 @@ func (m *Manager) Run() error {
 		}
 
 		if len(filteredTables) == 0 {
-			m.Log("警告: 表列表中没有指定存在的表，跳过数据同步")
+			m.Log("警告: 表列表中没有指定存在的表，跳过同步")
 			return nil
 		}
 
-		// 计算总任务数（只计算数据同步任务）
-		m.totalTasks = len(filteredTables)
+		// 计算总任务数
+		m.totalTasks = 0
+		if m.config.Conversion.Options.TableDDL {
+			m.totalTasks += len(filteredTables)
+		}
+		if m.config.Conversion.Options.Data {
+			m.totalTasks += len(filteredTables)
+		}
 		m.Log("启用了表列表功能，只同步指定的 %d 个表", len(filteredTables))
 
-		// 执行数据同步
-		if m.config.Run.ShowConsoleLogs {
-			fmt.Println("\n2. 同步表数据...")
+		// 执行DDL转换（如果启用）
+		if m.config.Conversion.Options.TableDDL {
+			if m.config.Run.ShowConsoleLogs {
+				fmt.Println("\n1. 开始转换表结构...")
+			}
+			// 记录DDL转换开始时间
+			startTime := time.Now()
+			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
+			if err := m.convertTables(filteredTables, semaphore); err != nil {
+				return err
+			}
+			// 记录DDL转换结束时间并添加到转换统计中
+			endTime := time.Now()
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "转换表结构",
+				StartTime:   startTime,
+				EndTime:     endTime,
+				ObjectCount: len(filteredTables),
+			})
 		}
-		// 记录数据同步开始时间
-		startTime := time.Now()
-		semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
-		if err := m.syncTableData(filteredTables, semaphore); err != nil {
-			return err
+
+		// 执行数据同步（如果启用）
+		if m.config.Conversion.Options.Data {
+			if m.config.Run.ShowConsoleLogs {
+				fmt.Println("\n2. 同步表数据...")
+			}
+			// 记录数据同步开始时间
+			startTime := time.Now()
+			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
+			if err := m.syncTableData(filteredTables, semaphore); err != nil {
+				return err
+			}
+			// 记录数据同步结束时间并添加到转换统计中
+			endTime := time.Now()
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "同步表数据",
+				StartTime:   startTime,
+				EndTime:     endTime,
+				ObjectCount: len(filteredTables),
+			})
 		}
-		// 记录数据同步结束时间并添加到转换统计中
-		endTime := time.Now()
-		m.conversionStats = append(m.conversionStats, ConversionStageStat{
-			StageName:   "同步表数据",
-			StartTime:   startTime,
-			EndTime:     endTime,
-			ObjectCount: len(filteredTables),
-		})
 
 		// 显示数据不一致表的统计信息
 		m.displayInconsistentTables()
@@ -141,22 +176,22 @@ func (m *Manager) Run() error {
 		// 生成汇总表格
 		m.generateSummaryTable()
 
-		m.Log("表列表数据同步完成!")
+		m.Log("表列表同步完成!")
 		return nil
 	}
 
 	// 正常转换流程
 	// 1. 获取MySQL元数据
-	tables, functions, indexes, users, tablePrivileges, err := m.getMetadata()
+	tables, functions, indexes, views, users, tablePrivileges, err := m.getMetadata()
 	if err != nil {
 		return err
 	}
 
 	// 2. 计算总任务数
-	m.calculateTotalTasks(tables, functions, indexes, users, tablePrivileges)
+	m.calculateTotalTasks(tables, functions, indexes, views, users, tablePrivileges)
 
 	// 3. 执行转换
-	if err := m.executeConversion(tables, functions, indexes, users, tablePrivileges); err != nil {
+	if err := m.executeConversion(tables, functions, indexes, views, users, tablePrivileges); err != nil {
 		return err
 	}
 
@@ -167,11 +202,13 @@ func (m *Manager) Run() error {
 	return nil
 }
 
-// getMetadata 获取MySQL元数据
-func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysql.IndexInfo, []mysql.UserInfo, []mysql.TablePrivInfo, error) {
+// getMetadata 获取MySQL数据库的元数据信息
+// 返回表、函数、索引、用户和表权限信息
+func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysql.IndexInfo, []mysql.ViewInfo, []mysql.UserInfo, []mysql.TablePrivInfo, error) {
 	var tables []mysql.TableInfo
 	var functions []mysql.FunctionInfo
 	var indexes []mysql.IndexInfo
+	var views []mysql.ViewInfo
 	var users []mysql.UserInfo
 	var tablePrivileges []mysql.TablePrivInfo
 	var err error
@@ -179,7 +216,7 @@ func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysq
 	if m.config.Conversion.Options.TableDDL || m.config.Conversion.Options.Indexes || m.config.Conversion.Options.Data || m.config.Conversion.Options.Grant {
 		tables, err = m.mysqlConn.GetTables(m.config.Conversion.Options.SkipUseTableList, m.config.Conversion.Options.SkipTableList)
 		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("获取表信息失败: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取表信息失败: %w", err)
 		}
 
 		// 提取所有索引（排除主键）
@@ -195,32 +232,39 @@ func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysq
 		}
 	}
 
+	// 获取视图信息
+	views, err = m.mysqlConn.GetViews(m.config.MySQL.Database)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取视图信息失败: %w", err)
+	}
+
 	if m.config.Conversion.Options.Functions {
 		functions, err = m.mysqlConn.GetFunctions()
 		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("获取函数信息失败: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取函数信息失败: %w", err)
 		}
 	}
 
 	if m.config.Conversion.Options.Users || m.config.Conversion.Options.Grant {
 		users, err = m.mysqlConn.GetUsers()
 		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("获取用户信息失败: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取用户信息失败: %w", err)
 		}
 	}
 
 	if m.config.Conversion.Options.Grant || m.config.Conversion.Options.TablePrivileges {
 		tablePrivileges, err = m.mysqlConn.GetTablePrivileges()
 		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("获取表权限失败: %w", err)
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取表权限失败: %w", err)
 		}
 	}
 
-	return tables, functions, indexes, users, tablePrivileges, nil
+	return tables, functions, indexes, views, users, tablePrivileges, nil
 }
 
-// calculateTotalTasks 计算总任务数
-func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) {
+// calculateTotalTasks 计算转换的总任务数
+// 根据启用的转换选项和对象数量计算总任务数
+func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, views []mysql.ViewInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) {
 	m.totalTasks = 0
 
 	// 根据配置的选项计算任务数
@@ -236,6 +280,9 @@ func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysq
 	if m.config.Conversion.Options.Functions {
 		m.totalTasks += len(functions)
 	}
+	if len(views) > 0 {
+		m.totalTasks += len(views)
+	}
 	if m.config.Conversion.Options.Users {
 		m.totalTasks += len(users)
 	}
@@ -247,8 +294,9 @@ func (m *Manager) calculateTotalTasks(tables []mysql.TableInfo, functions []mysq
 	}
 }
 
-// executeConversion 执行转换
-func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) error {
+// executeConversion 执行完整的转换流程
+// 按照配置的顺序执行表DDL、数据、索引、函数、视图、用户和权限的转换
+func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, views []mysql.ViewInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) error {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
 	errorChan := make(chan error, 1)
@@ -285,6 +333,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 	// 检查是否所有选项都打开
 	allOptionsEnabled := m.config.Conversion.Options.TableDDL &&
 		m.config.Conversion.Options.Data &&
+		m.config.Conversion.Options.View &&
 		m.config.Conversion.Options.Indexes &&
 		m.config.Conversion.Options.Functions &&
 		m.config.Conversion.Options.Users &&
@@ -295,7 +344,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 		// 1. 首先执行表DDL转换
 		if m.config.Conversion.Options.TableDDL && len(filteredTables) > 0 {
 			if m.config.Run.ShowConsoleLogs {
-				fmt.Println("\n1. 开始转换表结构...")
+				fmt.Println("\n1. 转换表结构...")
 			}
 			// 记录开始时间
 			startTime := time.Now()
@@ -325,6 +374,46 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				StartTime:   startTime,
 				EndTime:     time.Now(),
 				ObjectCount: len(filteredTables),
+			})
+
+			// 检查是否有错误
+			select {
+			case err := <-errorChan:
+				return err
+			default:
+			}
+		}
+
+		// 2.1 执行视图转换（在表DDL之后，数据同步之前）
+		if m.config.Conversion.Options.View && len(views) > 0 {
+			// 记录开始时间
+			startTime := time.Now()
+			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
+			for i := 0; i < len(views); i += batchSize {
+				end := i + batchSize
+				if end > len(views) {
+					end = len(views)
+				}
+
+				batch := views[i:end]
+				wg.Add(1)
+				go func(batch []mysql.ViewInfo) {
+					defer wg.Done()
+					if err := m.convertViews(batch, semaphore); err != nil {
+						select {
+						case errorChan <- err:
+						default:
+						}
+					}
+				}(batch)
+			}
+			wg.Wait() // 等待视图转换完成
+			// 记录结束时间和对象数量
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "转换表视图",
+				StartTime:   startTime,
+				EndTime:     time.Now(),
+				ObjectCount: len(views),
 			})
 
 			// 检查是否有错误
@@ -457,7 +546,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				wg.Wait() // 等待函数同步完成
 				// 记录结束时间和对象数量
 				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "开始转换函数",
+					StageName:   "转换函数",
 					StartTime:   startTime,
 					EndTime:     time.Now(),
 					ObjectCount: len(functions),
@@ -524,7 +613,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			} else {
 				// 当users: true但没有用户时，添加日志提示
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n5. 开始转换用户...")
+					fmt.Println("\n6. 开始转换用户...")
 					fmt.Println("   未发现任何用户，跳过用户转换")
 				}
 				m.Log("users: true，但未发现任何用户，跳过用户转换")
@@ -535,7 +624,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 		if m.config.Conversion.Options.Grant {
 			if len(filteredTables) > 0 {
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n6. 转换表权限...")
+					fmt.Println("\n7. 转换表权限...")
 				}
 				// 记录开始时间
 				startTime := time.Now()
@@ -607,7 +696,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				} else {
 					// 当table_privileges: true但没有表权限时，添加日志提示
 					if m.config.Run.ShowConsoleLogs {
-						fmt.Println("\n6. 转换表权限...")
+						fmt.Println("\n7. 转换表权限...")
 						fmt.Println("   未发现任何表权限，跳过表权限转换")
 					}
 					m.Log("table_privileges: true，但未发现任何表权限，跳过表权限转换")
@@ -706,10 +795,53 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			}
 		}
 
-		// 第三阶段：执行索引同步（如果启用）
+		// 第二阶段：执行视图转换（如果启用）
+		if m.config.Conversion.Options.View && len(views) > 0 {
+			if m.config.Run.ShowConsoleLogs {
+				fmt.Println("\n3. 转换表视图...")
+			}
+			// 记录开始时间
+			startTime := time.Now()
+			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
+			for i := 0; i < len(views); i += batchSize {
+				end := i + batchSize
+				if end > len(views) {
+					end = len(views)
+				}
+
+				batch := views[i:end]
+				wg.Add(1)
+				go func(batch []mysql.ViewInfo) {
+					defer wg.Done()
+					if err := m.convertViews(batch, semaphore); err != nil {
+						select {
+						case errorChan <- err:
+						default:
+						}
+					}
+				}(batch)
+			}
+			wg.Wait() // 等待视图转换完成
+			// 记录结束时间和对象数量
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "转换表视图",
+				StartTime:   startTime,
+				EndTime:     time.Now(),
+				ObjectCount: len(views),
+			})
+
+			// 检查是否有错误
+			select {
+			case err := <-errorChan:
+				return err
+			default:
+			}
+		}
+
+		// 第四阶段：执行索引同步（如果启用）
 		if m.config.Conversion.Options.Indexes && len(indexes) > 0 {
 			if m.config.Run.ShowConsoleLogs {
-				fmt.Println("\n3. 转换表索引...")
+				fmt.Println("\n4. 转换表索引...")
 			}
 			// 记录开始时间
 			startTime := time.Now()
@@ -749,11 +881,11 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			}
 		}
 
-		// 第四阶段：执行函数同步（如果启用）
+		// 第五阶段：执行函数同步（如果启用）
 		if m.config.Conversion.Options.Functions {
 			if len(functions) > 0 {
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n4. 开始转换函数...")
+					fmt.Println("\n5. 开始转换函数...")
 				}
 				// 记录开始时间
 				startTime := time.Now()
@@ -779,7 +911,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				wg.Wait() // 等待函数同步完成
 				// 记录结束时间和对象数量
 				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "开始转换函数",
+					StageName:   "转换函数",
 					StartTime:   startTime,
 					EndTime:     time.Now(),
 					ObjectCount: len(functions),
@@ -801,11 +933,11 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			}
 		}
 
-		// 第五阶段：执行用户同步（如果启用）
+		// 第六阶段：执行用户同步（如果启用）
 		if m.config.Conversion.Options.Users {
 			if len(users) > 0 {
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n5. 开始转换用户...")
+					fmt.Println("\n6. 开始转换用户...")
 				}
 				// 记录开始时间
 				startTime := time.Now()
@@ -846,17 +978,17 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			} else {
 				// 当users: true但没有用户时，添加日志提示
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n5. 开始转换用户...")
+					fmt.Println("\n6. 开始转换用户...")
 					fmt.Println("   未发现任何用户，跳过用户转换")
 				}
 				m.Log("users: true，但未发现任何用户，跳过用户转换")
 			}
 		}
 
-		// 第六阶段：执行权限转换（如果启用）
+		// 第七阶段：执行权限转换（如果启用）
 		if m.config.Conversion.Options.Grant && len(tables) > 0 {
 			if m.config.Run.ShowConsoleLogs {
-				fmt.Println("\n6. 转换表权限...")
+				fmt.Println("\n7. 转换表权限...")
 			}
 			// 记录开始时间
 			startTime := time.Now()
@@ -941,7 +1073,59 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 	return nil
 }
 
-// convertTables 转换表
+// convertViews 转换表视图DDL
+// 将MySQL视图定义转换为PostgreSQL视图定义并执行
+func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) error {
+	currentViewIndex := 0
+
+	for _, view := range views {
+		semaphore <- struct{}{}
+		currentViewIndex++
+
+		pgViewDDL, err := ConvertViewDDL(view.ViewName, view.ViewDefinition)
+		if err != nil {
+			// 记录转换失败的 MySQL 视图的部分转换结果
+			m.Log("转换表视图 %s，MySQL 定义: %s", view.ViewName, view.ViewDefinition)
+			// 记录转换失败的 PostgreSQL 视图的部分转换结果
+			m.Log("转换表视图 %s 失败，PostgreSQL 定义: %s", view.ViewName, pgViewDDL)
+			errMsg := fmt.Sprintf("转换表视图 %s 失败: %v", view.ViewName, err)
+			m.logError(errMsg)
+			<-semaphore
+			m.updateProgress()
+			return err
+		}
+
+		// 执行创建视图的SQL语句
+		if err := m.postgresConn.ExecuteDDL(pgViewDDL); err != nil {
+			errMsg := fmt.Sprintf("创建表视图 %s 失败: %v", view.ViewName, err)
+			m.logError(errMsg)
+			<-semaphore
+			m.updateProgress()
+			return err
+		}
+
+		// 更新进度
+		m.mutex.Lock()
+		m.completedTasks++
+		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		m.mutex.Unlock()
+
+		// 显示转换成功信息（根据配置决定是否在控制台显示）
+		if m.config.Run.ShowConsoleLogs {
+			m.mutex.Lock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表视图 %s 成功\n", progress, m.completedTasks, m.totalTasks, view.ViewName)
+			m.mutex.Unlock()
+		}
+
+		m.Log("转换表视图 %s 完成", view.ViewName)
+		<-semaphore
+	}
+
+	return nil
+}
+
+// convertTables 转换表DDL
+// 将MySQL表结构转换为PostgreSQL表结构并执行
 func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	currentTableIndex := 0
 
@@ -949,17 +1133,21 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		semaphore <- struct{}{}
 		currentTableIndex++
 
-		// 记录原始MySQL DDL到日志文件
-		m.Log("转换表 %s，MySQL DDL: %s", table.Name, table.DDL)
-
 		pgResult, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns)
 		if err != nil {
+			// 记录转换失败的 MySQL 表的部分转换结果
+			m.Log("转换表 %s，MySQL DDL: %s", table.Name, table.DDL)
+			// 记录转换失败的 PostgreSQL 表的部分转换结果
+			m.Log("转换表 %s 失败，PostgreSQL DDL: %s", table.Name, pgResult.DDL)
 			errMsg := fmt.Sprintf("转换表 %s 失败: %v", table.Name, err)
 			m.logError(errMsg)
 			<-semaphore
 			m.updateProgress()
 			return err
 		}
+
+		// 存储列名映射，用于后续索引转换
+		m.tableColumnNamesMap[table.Name] = pgResult.ColumnNames
 
 		// 先检查表是否存在
 		tableExists, err := m.postgresConn.TableExists(table.Name)
@@ -990,18 +1178,18 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 
 				// 即使表已存在，也添加表注释和列注释
 				if pgResult.TableComment != "" {
+					processedComment := m.processComment(pgResult.TableComment)
 					tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
-						table.Name, strings.ReplaceAll(pgResult.TableComment, "'", "''"))
+						table.Name, processedComment)
 					if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
 						m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
 					}
 				}
-				m.addColumnComments(table)
+				m.addColumnComments(table, pgResult.ColumnNames)
 
 				<-semaphore
 				continue
 			} else {
-				m.Log("表 %s 已存在，正在删除...", table.Name)
 				dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS \"%s\" CASCADE", table.Name)
 				if err := m.postgresConn.ExecuteDDL(dropTableSQL); err != nil {
 					errMsg := fmt.Sprintf("删除表 %s 失败: %v", table.Name, err)
@@ -1010,7 +1198,6 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 					m.updateProgress()
 					return err
 				}
-				m.Log("表 %s 删除成功", table.Name)
 			}
 		}
 
@@ -1024,15 +1211,16 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 
 		// 添加表注释
 		if pgResult.TableComment != "" {
+			processedComment := m.processComment(pgResult.TableComment)
 			tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
-				table.Name, strings.ReplaceAll(pgResult.TableComment, "'", "''"))
+				table.Name, processedComment)
 			if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
 				m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
 			}
 		}
 
 		// 为每个列添加注释
-		m.addColumnComments(table)
+		m.addColumnComments(table, pgResult.ColumnNames)
 
 		// 更新进度
 		m.mutex.Lock()
@@ -1053,35 +1241,97 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 	return nil
 }
 
+// processComment 处理注释中的特殊字符
+func (m *Manager) processComment(comment string) string {
+	processedComment := comment
+	// 替换单引号
+	processedComment = strings.ReplaceAll(processedComment, "'", "''")
+	// 替换换行符
+	processedComment = strings.ReplaceAll(processedComment, "\n", "\\n")
+	// 替换回车符
+	processedComment = strings.ReplaceAll(processedComment, "\r", "\\r")
+	// 替换制表符
+	processedComment = strings.ReplaceAll(processedComment, "\t", "\\t")
+	// 替换反斜杠
+	processedComment = strings.ReplaceAll(processedComment, "\\", "\\\\")
+	return processedComment
+}
+
 // addColumnComments 为表的列添加注释
-func (m *Manager) addColumnComments(table mysql.TableInfo) {
+func (m *Manager) addColumnComments(table mysql.TableInfo, columnNameMap map[string]string) {
 	for _, column := range table.Columns {
 		if column.Comment != "" {
-			// 记录注释信息
-			m.Log("为表 %s 的列 %s 添加注释: %s", table.Name, column.Name, column.Comment)
 
-			// 构建注释语句 - 使用小写列名，因为PostgreSQL默认会将未加双引号的列名转换为小写
-			commentSQL := fmt.Sprintf("COMMENT ON COLUMN \"%s\".\"%s\" IS '%s';",
-				table.Name, strings.ToLower(column.Name), strings.ReplaceAll(column.Comment, "'", "''"))
+			// 处理注释中的特殊字符
+			processedComment := m.processComment(column.Comment)
 
-			m.Log("执行注释SQL: %s", commentSQL)
+			// 尝试多种可能的列名格式
+			var columnNames []string
 
-			if err := m.postgresConn.ExecuteDDL(commentSQL); err != nil {
-				// 如果使用小写列名失败，尝试使用原始大小写的列名（可能在DDL中使用了双引号）
-				m.Log("使用小写列名失败，尝试使用原始大小写列名: %s", column.Name)
-				commentSQL := fmt.Sprintf("COMMENT ON COLUMN \"%s\".\"%s\" IS '%s';",
-					table.Name, column.Name, strings.ReplaceAll(column.Comment, "'", "''"))
+			// 首先检查是否有转换后的列名映射
+			if convertedColumnName, exists := columnNameMap[column.Name]; exists {
+				// 使用映射表中的列名（已经包含了正确的格式和双引号）
+				columnNames = []string{convertedColumnName}
+			} else if m.config.Conversion.Options.LowercaseColumns {
+				// 配置为转小写，尝试小写列名和原始大小写列名
+				columnNames = []string{strings.ToLower(column.Name), column.Name}
+			} else {
+				// 保持原始大小写，尝试原始大小写列名和小写列名
+				columnNames = []string{column.Name, strings.ToLower(column.Name)}
+			}
+
+			// 尝试多种列名格式和引用方式
+			commentAdded := false
+			for _, colName := range columnNames {
+				var commentSQL string
+
+				// 检查列名是否已经包含双引号
+				if strings.HasPrefix(colName, `"`) && strings.HasSuffix(colName, `"`) {
+					// 列名已经包含双引号，直接使用
+					commentSQL = fmt.Sprintf("COMMENT ON COLUMN \"%s\".%s IS '%s';",
+						table.Name, colName, processedComment)
+				} else {
+					// 列名不包含双引号，添加双引号
+					commentSQL = fmt.Sprintf("COMMENT ON COLUMN \"%s\".\"%s\" IS '%s';",
+						table.Name, colName, processedComment)
+				}
 
 				if err := m.postgresConn.ExecuteDDL(commentSQL); err != nil {
-					errMsg := fmt.Sprintf("为表 %s 的列 %s 添加注释失败: %v", table.Name, column.Name, err)
-					m.logError(errMsg)
-					// 注释失败不影响整个表的转换，继续处理下一列
+					// 记录尝试失败的信息，包括具体的SQL语句和错误信息
+					m.Log("为表 %s 的列 %s 使用列名 %s 添加注释失败: %v，SQL语句: %s",
+						table.Name, column.Name, colName, err, commentSQL)
+
+					// 如果列名已经包含双引号，再尝试不带双引号的版本
+					if strings.HasPrefix(colName, `"`) && strings.HasSuffix(colName, `"`) {
+						// 去掉双引号
+						rawColName := colName[1 : len(colName)-1]
+						// 尝试不带双引号的列名（PostgreSQL默认不区分大小写）
+						commentSQL = fmt.Sprintf("COMMENT ON COLUMN %s.%s IS '%s';",
+							table.Name, rawColName, processedComment)
+
+						if err := m.postgresConn.ExecuteDDL(commentSQL); err != nil {
+							// 记录尝试失败的信息
+							m.Log("为表 %s 的列 %s 使用列名 %s 添加注释失败: %v，SQL语句: %s",
+								table.Name, column.Name, rawColName, err, commentSQL)
+							continue
+						} else {
+							commentAdded = true
+							break
+						}
+					}
 					continue
+				} else {
+					commentAdded = true
+					break
 				}
-				// 记录使用原始大小写列名成功的日志
-				m.Log("为表 %s 的列 %s (使用原始大小写) 添加注释成功", table.Name, column.Name)
-			} else {
-				m.Log("为表 %s 的列 %s 添加注释成功", table.Name, column.Name)
+			}
+
+			if !commentAdded {
+				// 所有格式都失败，可能是因为该列在实际表中不存在
+				// 记录更清晰的错误信息
+				errMsg := fmt.Sprintf("为表 %s 的列 %s 添加注释失败: 该列可能在实际表中不存在，跳过添加注释",
+					table.Name, column.Name)
+				m.logError(errMsg)
 			}
 		}
 	}
@@ -1128,13 +1378,16 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 }
 
 // convertIndexes 转换索引
+// 将MySQL索引转换为PostgreSQL索引并执行
 func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struct{}) error {
 	for _, index := range indexes {
 		semaphore <- struct{}{}
 
 		// 使用小写索引名进行日志输出
 		lowercaseIndexName := strings.ToLower(index.Name)
-		pgDDL, err := ConvertIndexDDL(index.Table, index, m.config.Conversion.Options.LowercaseColumns)
+		// 获取该表的列名映射
+		columnNamesMap := m.tableColumnNamesMap[index.Table]
+		pgDDL, err := ConvertIndexDDL(index.Table, index, m.config.Conversion.Options.LowercaseColumns, columnNamesMap)
 		if err != nil {
 			errMsg := fmt.Sprintf("转换索引 %s 失败: %v", lowercaseIndexName, err)
 			m.logError(errMsg)
