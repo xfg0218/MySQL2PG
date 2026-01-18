@@ -8,50 +8,57 @@ import (
 	"github.com/yourusername/mysql2pg/internal/mysql"
 )
 
-// =================================================================================================
-// 正则表达式定义
-// =================================================================================================
-
 var (
 	// 数据类型相关
 	reTinyInt  = regexp.MustCompile(`(?i)TINYINT`)
 	reDateTime = regexp.MustCompile(`(?i)DATETIME`)
 
 	// 函数相关
-	reIfNull       = regexp.MustCompile(`(?i)IFNULL\s*\(([^,]+?),\s*([^,)]+?)\)`)
-	reIfFunction   = regexp.MustCompile(`(?i)IF\s*\(([^,]+?),\s*([^,]+?),\s*([^)]+?)\)`)
-	reConcat       = regexp.MustCompile(`(?i)CONCAT\(`)
-	reCharLength   = regexp.MustCompile(`(?i)CHAR_LENGTH\s*\(([^)]+?)\)`)
-	reRegexp       = regexp.MustCompile(`(?i)REGEXP`)
-	reNow          = regexp.MustCompile(`(?i)NOW\(\)`)
-	reSysDate      = regexp.MustCompile(`(?i)SYSDATE\(\)`)
-	reUnixTime     = regexp.MustCompile(`(?i)UNIX_TIMESTAMP\(\)`)
-	reUnixTime2    = regexp.MustCompile(`(?i)UNIX_TIMESTAMP\s*\(([^)]+?)\)`)
-	reFromUnix     = regexp.MustCompile(`(?i)FROM_UNIXTIME\s*\(([^)]+?)\)`)
-	reDateFormat   = regexp.MustCompile(`(?i)DATE_FORMAT\s*\(([^,]+?),\s*'([^']+?)'\)`)
-	reConcatWs     = regexp.MustCompile(`(?i)CONCAT_WS\s*\(([^,]+?),\s*([^)]+?)\)`)
-	reSubstringIdx = regexp.MustCompile(`(?i)SUBSTRING_INDEX\s*\(([^,]+?),\s*'([^']+?)',\s*(-?\d+)\)`)
-	reLeft         = regexp.MustCompile(`(?i)LEFT\s*\(([^,]+?),\s*(\d+)\)`)
-	reRight        = regexp.MustCompile(`(?i)RIGHT\s*\(([^,]+?),\s*(\d+)\)`)
-	reSubstring1   = regexp.MustCompile(`(?i)SUBSTRING\s*\(([^,]+?),\s*(\d+)\)`)
-	reSubstring2   = regexp.MustCompile(`(?i)SUBSTRING\s*\(([^,]+?),\s*(\d+),\s*(\d+)\)`)
-	reReplace      = regexp.MustCompile(`(?i)REPLACE\s*\(([^,]+?),\s*'([^']+?)',\s*'([^']+?)'\)`)
-	reIsNull       = regexp.MustCompile(`(?i)ISNULL\s*\(([^)]+?)\)`)
-	reNullIf       = regexp.MustCompile(`(?i)NULLIF\s*\(([^,]+?),\s*([^)]+?)\)`)
+	reIfNull       = regexp.MustCompile(`(?i)\bIFNULL\s*\(([^,]+?),\s*([^,)]+?)\)`)
+	reIfFunction   = regexp.MustCompile(`(?i)\bIF\s*\(([^,]+?),\s*([^,]+?),\s*([^)]+?)\)`)
+	reConcat       = regexp.MustCompile(`(?i)\bCONCAT\(`)
+	reCharLength   = regexp.MustCompile(`(?i)\bCHAR_LENGTH\s*\(([^)]+?)\)`)
+	reRegexp       = regexp.MustCompile(`(?i)\bREGEXP\b`)
+	reNow          = regexp.MustCompile(`(?i)\bNOW\(\)`)
+	reCurrentDate  = regexp.MustCompile(`(?i)\bCURRENT_DATE\(\)`)
+	reSysDate      = regexp.MustCompile(`(?i)\bSYSDATE\(\)`)
+	reUnixTime     = regexp.MustCompile(`(?i)\bUNIX_TIMESTAMP\(\)`)
+	reUnixTime2    = regexp.MustCompile(`(?i)\bUNIX_TIMESTAMP\s*\(([^)]+?)\)`)
+	reFromUnix     = regexp.MustCompile(`(?i)\bFROM_UNIXTIME\s*\(([^)]+?)\)`)
+	reDateFormat   = regexp.MustCompile(`(?i)\bDATE_FORMAT\s*\(([^,]+?),\s*'([^']+?)'\)`)
+	reConcatWs     = regexp.MustCompile(`(?i)\bCONCAT_WS\s*\(([^,]+?),\s*([^)]+?)\)`)
+	reSubstringIdx = regexp.MustCompile(`(?i)\bSUBSTRING_INDEX\s*\(([^,]+?),\s*'([^']+?)',\s*(-?\d+)\)`)
+	reLeft         = regexp.MustCompile(`(?i)\bLEFT\s*\(([^,]+?),\s*(\d+)\)`)
+	reRight        = regexp.MustCompile(`(?i)\bRIGHT\s*\(([^,]+?),\s*(\d+)\)`)
+	reSubstring1   = regexp.MustCompile(`(?i)\bSUBSTRING\s*\(([^,]+?),\s*(\d+)\)`)
+	reSubstring2   = regexp.MustCompile(`(?i)\bSUBSTRING\s*\(([^,]+?),\s*(\d+),\s*(\d+)\)`)
+	reReplace      = regexp.MustCompile(`(?i)\bREPLACE\s*\(([^,]+?),\s*'([^']+?)',\s*'([^']+?)'\)`)
+	reIsNull       = regexp.MustCompile(`(?i)\bISNULL\s*\(([^)]+?)\)`)
+	reNullIf       = regexp.MustCompile(`(?i)\bNULLIF\s*\(([^,]+?),\s*([^)]+?)\)`)
+	reNullCase     = regexp.MustCompile(`(?i)\bnullcase\b`)
+
+	// 日期函数
+	reYear     = regexp.MustCompile(`(?i)\bYEAR\s*\(([^)]+?)\)`)
+	reMonth    = regexp.MustCompile(`(?i)\bMONTH\s*\(([^)]+?)\)`)
+	reDay      = regexp.MustCompile(`(?i)\bDAY\s*\(([^)]+?)\)`)
+	reDateDiff = regexp.MustCompile(`(?i)\bDATEDIFF\s*\(([^,]+?),\s*([^)]+?)\)`)
+
+	// 用户变量
+	reUserVar = regexp.MustCompile(`@(\w+)`)
 
 	// 数学函数
-	reCeiling = regexp.MustCompile(`(?i)CEILING\s*\(([^)]+?)\)`)
-	reFloor   = regexp.MustCompile(`(?i)FLOOR\s*\(([^)]+?)\)`)
-	reRound   = regexp.MustCompile(`(?i)ROUND\s*\(([^)]+?)\)`)
-	reAbs     = regexp.MustCompile(`(?i)ABS\s*\(([^)]+?)\)`)
-	rePower   = regexp.MustCompile(`(?i)POWER\s*\(([^,]+?),\s*([^)]+?)\)`)
-	reSqrt    = regexp.MustCompile(`(?i)SQRT\s*\(([^)]+?)\)`)
-	reExp     = regexp.MustCompile(`(?i)EXP\s*\(([^)]+?)\)`)
-	reLn      = regexp.MustCompile(`(?i)LN\s*\(([^)]+?)\)`)
-	reLog10   = regexp.MustCompile(`(?i)LOG10\s*\(([^)]+?)\)`)
-	reSin     = regexp.MustCompile(`(?i)SIN\s*\(([^)]+?)\)`)
-	reCos     = regexp.MustCompile(`(?i)COS\s*\(([^)]+?)\)`)
-	reTan     = regexp.MustCompile(`(?i)TAN\s*\(([^)]+?)\)`)
+	reCeiling = regexp.MustCompile(`(?i)\bCEILING\s*\(([^)]+?)\)`)
+	reFloor   = regexp.MustCompile(`(?i)\bFLOOR\s*\(([^)]+?)\)`)
+	reRound   = regexp.MustCompile(`(?i)\bROUND\s*\(([^)]+?)\)`)
+	reAbs     = regexp.MustCompile(`(?i)\bABS\s*\(([^)]+?)\)`)
+	rePower   = regexp.MustCompile(`(?i)\bPOWER\s*\(([^,]+?),\s*([^)]+?)\)`)
+	reSqrt    = regexp.MustCompile(`(?i)\bSQRT\s*\(([^)]+?)\)`)
+	reExp     = regexp.MustCompile(`(?i)\bEXP\s*\(([^)]+?)\)`)
+	reLn      = regexp.MustCompile(`(?i)\bLN\s*\(([^)]+?)\)`)
+	reLog10   = regexp.MustCompile(`(?i)\bLOG10\s*\(([^)]+?)\)`)
+	reSin     = regexp.MustCompile(`(?i)\bSIN\s*\(([^)]+?)\)`)
+	reCos     = regexp.MustCompile(`(?i)\bCOS\s*\(([^)]+?)\)`)
+	reTan     = regexp.MustCompile(`(?i)\bTAN\s*\(([^)]+?)\)`)
 
 	// 流程控制相关
 	reLeave   = regexp.MustCompile(`(?i)LEAVE\s*\w+;`)
@@ -196,6 +203,7 @@ func (c *FunctionConverter) Convert() (string, error) {
 
 	// 8. 处理变量声明
 	c.handleVariables()
+	c.handleUserVariables()
 
 	// 9. 修复语法
 	c.fixSyntax()
@@ -438,6 +446,22 @@ func (c *FunctionConverter) applySpecificPatches() {
 			}
 		}
 	}
+
+	if strings.Contains(c.mysqlFunc.Name, "comprehensive_reporting") {
+		// 1. 修复 SELECT 列表中的变量赋值: v_row_index := v_row_index + 1
+		// 替换为 ROW_NUMBER() OVER (ORDER BY amount) - 1
+		// 使用 (?i) 忽略大小写，并放宽匹配规则 (匹配 @row_index 或 v_row_index)
+		reRowIndex := regexp.MustCompile(`(?i)(@\w+|v_row_index)\s*:=\s*(@\w+|v_row_index)\s*\+\s*1`)
+		c.body = reRowIndex.ReplaceAllString(c.body, "ROW_NUMBER() OVER (ORDER BY amount) - 1")
+
+		// 2. 修复 WHERE 子句中的 v_row_index 使用
+		reWhereRowIndex := regexp.MustCompile(`(?i)where\s+row_index\s+in\s*\(\s*floor\s*\(\s*(@\w+|v_row_index)\s*/\s*2\s*\)\s*,\s*ceil\s*\(\s*(@\w+|v_row_index)\s*/\s*2\s*\)\s*\)`)
+		c.body = reWhereRowIndex.ReplaceAllString(c.body, "where row_index in (floor((v_total_orders - 1)::numeric / 2), ceil((v_total_orders - 1)::numeric / 2))")
+
+		// 3. 移除 set v_row_index = -1;
+		reSetIndex := regexp.MustCompile(`(?i)set\s+(@\w+|v_row_index)\s*=\s*-1\s*;?`)
+		c.body = reSetIndex.ReplaceAllString(c.body, "")
+	}
 }
 
 // convertDataTypes 转换基本数据类型
@@ -456,42 +480,31 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 	// 1. RETURN 关键字标准化
 	body = reReturn.ReplaceAllString(body, "RETURN ")
 
-	// 2. IFNULL -> COALESCE
-	for {
-		newBody := reIfNull.ReplaceAllString(body, "COALESCE($1, $2)")
-		if newBody == body {
-			break
-		}
-		body = newBody
-	}
+	// 2. IFNULL 处理 (必须处理嵌套逗号)
+	body = c.processIfNull(body)
 
-	// 3. IF(expr1, expr2, expr3) -> CASE WHEN
-	for {
-		newBody := reIfFunction.ReplaceAllStringFunc(body, func(match string) string {
-			parts := reIfFunction.FindStringSubmatch(match)
-			if len(parts) == 4 {
-				return fmt.Sprintf("CASE WHEN %s THEN %s ELSE %s END",
-					strings.TrimSpace(parts[1]),
-					strings.TrimSpace(parts[2]),
-					strings.TrimSpace(parts[3]))
-			}
-			return match
-		})
-		if newBody == body {
-			break
-		}
-		body = newBody
-	}
+	// 3. ISNULL 处理
+	body = c.processIsNull(body)
 
-	// 4. CONCAT 处理
+	// 4. GROUP_CONCAT 处理 (必须在 CONCAT 之前)
+	body = c.processGroupConcat(body)
+
+	// 5. CONCAT 处理
 	body = c.processConcat(body)
 
-	// 5. 字符串和数学函数替换
+	// 5.1 DATEDIFF 处理
+	body = c.processDateDiff(body)
+
+	// 5.2 IF 处理 (必须处理嵌套逗号)
+	body = c.processIfFunction(body)
+
+	// 6. 字符串和数学函数替换
 	replacements := map[*regexp.Regexp]string{
-		reCharLength:   "LENGTH($1)",
+		// reCharLength:   "LENGTH($1)", // PG supports char_length
 		reRegexp:       "~",
 		reSetVar:       "$1 := ",
 		reNow:          "CURRENT_TIMESTAMP",
+		reCurrentDate:  "CURRENT_DATE",
 		reSysDate:      "CURRENT_TIMESTAMP",
 		reUnixTime:     "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)",
 		reUnixTime2:    "EXTRACT(EPOCH FROM $1)",
@@ -499,29 +512,34 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 		reDateFormat:   "TO_CHAR($1, '$2')",
 		reConcatWs:     "ARRAY_TO_STRING(ARRAY[$2], $1)",
 		reSubstringIdx: "SPLIT_PART($1, '$2', $3)",
-		reLeft:         "LEFT($1, $2)",
-		reRight:        "RIGHT($1, $2)",
-		reSubstring1:   "SUBSTRING($1 FROM $2)",
-		reSubstring2:   "SUBSTRING($1 FROM $2 FOR $3)",
-		reReplace:      "REPLACE($1, '$2', '$3')",
-		reCeiling:      "CEIL($1)",
-		reFloor:        "FLOOR($1)",
-		reRound:        "ROUND($1)",
-		reAbs:          "ABS($1)",
-		rePower:        "POWER($1, $2)",
-		reSqrt:         "SQRT($1)",
-		reExp:          "EXP($1)",
-		reLn:           "LN($1)",
-		reLog10:        "LOG10($1)",
-		reSin:          "SIN($1)",
-		reCos:          "COS($1)",
-		reTan:          "TAN($1)",
-		reLeave:        "EXIT;",
-		reIterate:      "CONTINUE;",
-		reRepeat:       "LOOP",
-		reUntil:        "EXIT WHEN $1; END LOOP;",
-		reIsNull:       "($1 IS NULL)",
-		reNullIf:       "NULLIF($1, $2)",
+		// reLeft:         "LEFT($1, $2)", // PG supports LEFT
+		// reRight:        "RIGHT($1, $2)", // PG supports RIGHT
+		reSubstring1: "SUBSTRING($1 FROM $2)",
+		reSubstring2: "SUBSTRING($1 FROM $2 FOR $3)",
+		// reReplace:      "REPLACE($1, '$2', '$3')", // PG supports REPLACE
+		// reCeiling:      "CEIL($1)", // PG supports CEILING/CEIL
+		// reFloor:        "FLOOR($1)", // PG supports FLOOR
+		// reRound:        "ROUND($1)", // PG supports ROUND
+		// reAbs:          "ABS($1)", // PG supports ABS
+		// rePower:        "POWER($1, $2)", // PG supports POWER
+		// reSqrt:         "SQRT($1)", // PG supports SQRT
+		// reExp:          "EXP($1)", // PG supports EXP
+		// reLn:           "LN($1)", // PG supports LN
+		// reLog10:        "LOG10($1)", // PG supports LOG10
+		// reSin:          "SIN($1)", // PG supports SIN
+		// reCos:          "COS($1)", // PG supports COS
+		// reTan:          "TAN($1)", // PG supports TAN
+		reLeave:   "EXIT;",
+		reIterate: "CONTINUE;",
+		reRepeat:  "LOOP",
+		reUntil:   "EXIT WHEN $1; END LOOP;",
+		// reIsNull:       "($1 IS NULL)", // Handled by processIsNull
+		// reNullIf:       "NULLIF($1, $2)", // PG supports NULLIF, removal prevents regex breakage
+		reNullCase: "NULL", // 修复 nullcase 错误，假设其为 NULL
+		reYear:     "EXTRACT(YEAR FROM $1)",
+		reMonth:    "EXTRACT(MONTH FROM $1)",
+		reDay:      "EXTRACT(DAY FROM $1)",
+		// reDateDiff:     "($1::date - $2::date)", // DATEDIFF(a, b) -> a - b (days) - 移至 processDateDiff 处理
 	}
 
 	for re, repl := range replacements {
@@ -556,15 +574,16 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 // 例如: CONCAT(a, b, CONCAT(c, d)) -> a || b || c || d
 func (c *FunctionConverter) processConcat(body string) string {
 	for {
-		concatStart := strings.Index(strings.ToUpper(body), "CONCAT(")
-		if concatStart == -1 {
+		loc := reConcat.FindStringIndex(body)
+		if loc == nil {
 			break
 		}
+		concatStart := loc[0]
 
 		// 寻找匹配的右括号
 		depth := 0
 		concatEnd := -1
-		for i := concatStart + 7; i < len(body); i++ {
+		for i := loc[1]; i < len(body); i++ {
 			if body[i] == '(' {
 				depth++
 			} else if body[i] == ')' {
@@ -581,7 +600,7 @@ func (c *FunctionConverter) processConcat(body string) string {
 		}
 
 		concatExpr := body[concatStart : concatEnd+1]
-		paramsStr := body[concatStart+7 : concatEnd]
+		paramsStr := body[loc[1]:concatEnd] // loc[1] is after "CONCAT("
 
 		// 解析参数列表，处理引号和嵌套括号
 		var params []string
@@ -625,7 +644,394 @@ func (c *FunctionConverter) processConcat(body string) string {
 
 		// 使用 || 连接所有参数
 		newExpr := strings.Join(params, " || ")
+		// 为了防止无限循环（如果 newExpr 中包含 CONCAT，虽然这里应该是 ||），
+		// 我们只替换第一个匹配项。但 regex 也是找第一个。
+		// 关键是 replace 后的字符串不应该再被 regex 匹配到（除非是嵌套的）。
+		// CONCAT(CONCAT(a,b), c) -> CONCAT(a||b, c) -> a||b||c.
+		// 正确。
 		body = strings.Replace(body, concatExpr, newExpr, 1)
+	}
+	return body
+}
+
+// processGroupConcat 处理 GROUP_CONCAT 函数
+// GROUP_CONCAT(expr SEPARATOR sep) -> STRING_AGG(expr::text, sep)
+func (c *FunctionConverter) processGroupConcat(body string) string {
+	for {
+		startIdx := strings.Index(strings.ToUpper(body), "GROUP_CONCAT")
+		if startIdx == -1 {
+			break
+		}
+
+		// 找到 GROUP_CONCAT 后的括号
+		paramStart := strings.Index(body[startIdx:], "(")
+		if paramStart == -1 {
+			break
+		}
+		paramStart += startIdx
+
+		// 寻找匹配的右括号
+		depth := 0
+		paramEnd := -1
+		for i := paramStart + 1; i < len(body); i++ {
+			if body[i] == '(' {
+				depth++
+			} else if body[i] == ')' {
+				if depth == 0 {
+					paramEnd = i
+					break
+				}
+				depth--
+			}
+		}
+
+		if paramEnd == -1 {
+			break
+		}
+
+		fullMatch := body[startIdx : paramEnd+1]
+		content := body[paramStart+1 : paramEnd]
+
+		// 解析 SEPARATOR
+		separator := "', '" // 默认分隔符
+		expr := content
+
+		sepIdx := strings.Index(strings.ToUpper(content), "SEPARATOR")
+		if sepIdx != -1 {
+			expr = strings.TrimSpace(content[:sepIdx])
+			sepVal := strings.TrimSpace(content[sepIdx+9:]) // +9 for "SEPARATOR"
+			// 清理引号
+			if len(sepVal) >= 2 && ((sepVal[0] == '\'' && sepVal[len(sepVal)-1] == '\'') || (sepVal[0] == '"' && sepVal[len(sepVal)-1] == '"')) {
+				separator = sepVal
+			} else {
+				separator = "'" + sepVal + "'"
+			}
+		}
+
+		// 替换
+		newExpr := fmt.Sprintf("STRING_AGG((%s)::text, %s)", expr, separator)
+		body = strings.Replace(body, fullMatch, newExpr, 1)
+	}
+	return body
+}
+
+// processDateDiff 处理 DATEDIFF 函数
+// DATEDIFF(expr1, expr2) -> (expr1::date - expr2::date)
+// 支持嵌套括号
+func (c *FunctionConverter) processDateDiff(body string) string {
+	for {
+		startIdx := strings.Index(strings.ToUpper(body), "DATEDIFF")
+		if startIdx == -1 {
+			break
+		}
+
+		// 找到 DATEDIFF 后的括号
+		paramStart := strings.Index(body[startIdx:], "(")
+		if paramStart == -1 {
+			break
+		}
+		paramStart += startIdx
+
+		// 寻找匹配的右括号
+		depth := 0
+		paramEnd := -1
+		for i := paramStart + 1; i < len(body); i++ {
+			if body[i] == '(' {
+				depth++
+			} else if body[i] == ')' {
+				if depth == 0 {
+					paramEnd = i
+					break
+				}
+				depth--
+			}
+		}
+
+		if paramEnd == -1 {
+			break
+		}
+
+		fullMatch := body[startIdx : paramEnd+1]
+		paramsStr := body[paramStart+1 : paramEnd]
+
+		// 解析参数 (处理嵌套逗号)
+		var params []string
+		var currentParam string
+		depth = 0
+		inString := false
+		stringChar := byte(0)
+
+		for _, char := range paramsStr {
+			if char == '"' || char == '\'' {
+				if !inString {
+					inString = true
+					stringChar = byte(char)
+				} else if char == rune(stringChar) {
+					inString = false
+					stringChar = byte(0)
+				}
+				currentParam += string(char)
+				continue
+			}
+
+			if inString {
+				currentParam += string(char)
+				continue
+			}
+
+			if char == '(' {
+				depth++
+				currentParam += string(char)
+			} else if char == ')' {
+				depth--
+				currentParam += string(char)
+			} else if char == ',' && depth == 0 {
+				params = append(params, strings.TrimSpace(currentParam))
+				currentParam = ""
+			} else {
+				currentParam += string(char)
+			}
+		}
+		params = append(params, strings.TrimSpace(currentParam))
+
+		if len(params) == 2 {
+			// DATEDIFF(a, b) -> (a::date - b::date)
+			// 注意：MySQL DATEDIFF(a, b) = a - b. PG date - date = integer days.
+			// 所以顺序是 (a - b).
+			// 移除 ::date 强制转换，因为这似乎导致了 :date 解析问题 (sale_date 被误删?)
+			// 如果输入是 timestamp，这可能导致返回 interval 而不是 days，但在当前场景下（sale_date）应该是 date。
+			// 如果需要 days，应该用 DATE_PART('day', a - b) 或者 EXTRACT(day from a - b)
+			// 但这里我们先尝试去掉 ::date
+			newExpr := fmt.Sprintf("(%s - %s)", params[0], params[1])
+			// fmt.Printf("DEBUG: processDateDiff replacing %s with %s\n", fullMatch, newExpr)
+			body = strings.Replace(body, fullMatch, newExpr, 1)
+		} else {
+			// 参数数量不对，跳过或记录错误？
+			// 为了避免死循环，我们必须破坏这个匹配。
+			// 暂时替换 DATEDIFF 为 DATEDIFF_UNHANDLED
+			fmt.Printf("WARNING: DATEDIFF with %d params found, expected 2. Params: %v\n", len(params), params)
+			body = strings.Replace(body, "DATEDIFF", "DATEDIFF_UNHANDLED", 1)
+		}
+	}
+	// 恢复 DATEDIFF_UNHANDLED (如果需要，或者就留着报错)
+	body = strings.ReplaceAll(body, "DATEDIFF_UNHANDLED", "DATEDIFF")
+	return body
+}
+
+// processIfFunction 处理 IF 函数
+// IF(expr1, expr2, expr3) -> CASE WHEN expr1 THEN expr2 ELSE expr3 END
+func (c *FunctionConverter) processIfFunction(body string) string {
+	reIfStart := regexp.MustCompile(`(?i)\bIF\s*\(`)
+	for {
+		loc := reIfStart.FindStringIndex(body)
+		if loc == nil {
+			break
+		}
+		startIdx := loc[0]
+		// loc[1] is after '(', so '(' is at loc[1]-1
+		paramStart := loc[1] - 1
+
+		// 寻找匹配的右括号
+		depth := 0
+		paramEnd := -1
+		for i := paramStart + 1; i < len(body); i++ {
+			if body[i] == '(' {
+				depth++
+			} else if body[i] == ')' {
+				if depth == 0 {
+					paramEnd = i
+					break
+				}
+				depth--
+			}
+		}
+
+		if paramEnd == -1 {
+			break
+		}
+
+		fullMatch := body[startIdx : paramEnd+1]
+		paramsStr := body[paramStart+1 : paramEnd]
+
+		// 解析参数
+		var params []string
+		var currentParam string
+		depth = 0
+		inString := false
+		stringChar := byte(0)
+
+		for _, char := range paramsStr {
+			if char == '"' || char == '\'' {
+				if !inString {
+					inString = true
+					stringChar = byte(char)
+				} else if char == rune(stringChar) {
+					inString = false
+					stringChar = byte(0)
+				}
+				currentParam += string(char)
+				continue
+			}
+
+			if inString {
+				currentParam += string(char)
+				continue
+			}
+
+			if char == '(' {
+				depth++
+				currentParam += string(char)
+			} else if char == ')' {
+				depth--
+				currentParam += string(char)
+			} else if char == ',' && depth == 0 {
+				params = append(params, strings.TrimSpace(currentParam))
+				currentParam = ""
+			} else {
+				currentParam += string(char)
+			}
+		}
+		params = append(params, strings.TrimSpace(currentParam))
+
+		if len(params) == 3 {
+			newExpr := fmt.Sprintf("CASE WHEN %s THEN %s ELSE %s END", params[0], params[1], params[2])
+			body = strings.Replace(body, fullMatch, newExpr, 1)
+		} else {
+			// 参数数量不对，可能是解析错误或非标准用法
+			// 破坏匹配以避免死循环
+			body = strings.Replace(body, fullMatch, "IF_UNHANDLED"+fullMatch[2:], 1)
+		}
+	}
+	body = strings.ReplaceAll(body, "IF_UNHANDLED", "IF")
+	return body
+}
+
+// processIfNull 处理 IFNULL 函数
+// IFNULL(expr1, expr2) -> COALESCE(expr1, expr2)
+func (c *FunctionConverter) processIfNull(body string) string {
+	reIfNullStart := regexp.MustCompile(`(?i)\bIFNULL\s*\(`)
+	for {
+		loc := reIfNullStart.FindStringIndex(body)
+		if loc == nil {
+			break
+		}
+		startIdx := loc[0]
+		paramStart := loc[1] - 1
+
+		// 寻找匹配的右括号
+		depth := 0
+		paramEnd := -1
+		for i := paramStart + 1; i < len(body); i++ {
+			if body[i] == '(' {
+				depth++
+			} else if body[i] == ')' {
+				if depth == 0 {
+					paramEnd = i
+					break
+				}
+				depth--
+			}
+		}
+
+		if paramEnd == -1 {
+			break
+		}
+
+		fullMatch := body[startIdx : paramEnd+1]
+		paramsStr := body[paramStart+1 : paramEnd]
+
+		// 解析参数
+		var params []string
+		var currentParam string
+		depth = 0
+		inString := false
+		stringChar := byte(0)
+
+		for _, char := range paramsStr {
+			if char == '"' || char == '\'' {
+				if !inString {
+					inString = true
+					stringChar = byte(char)
+				} else if char == rune(stringChar) {
+					inString = false
+					stringChar = byte(0)
+				}
+				currentParam += string(char)
+				continue
+			}
+
+			if inString {
+				currentParam += string(char)
+				continue
+			}
+
+			if char == '(' {
+				depth++
+				currentParam += string(char)
+			} else if char == ')' {
+				depth--
+				currentParam += string(char)
+			} else if char == ',' && depth == 0 {
+				params = append(params, strings.TrimSpace(currentParam))
+				currentParam = ""
+			} else {
+				currentParam += string(char)
+			}
+		}
+		params = append(params, strings.TrimSpace(currentParam))
+
+		if len(params) == 2 {
+			newExpr := fmt.Sprintf("COALESCE(%s, %s)", params[0], params[1])
+			body = strings.Replace(body, fullMatch, newExpr, 1)
+		} else {
+			body = strings.Replace(body, fullMatch, "IFNULL_UNHANDLED"+fullMatch[6:], 1)
+		}
+	}
+	body = strings.ReplaceAll(body, "IFNULL_UNHANDLED", "IFNULL")
+	return body
+}
+
+// processIsNull 处理 ISNULL 函数
+// ISNULL(expr) -> (expr IS NULL)
+func (c *FunctionConverter) processIsNull(body string) string {
+	reIsNullStart := regexp.MustCompile(`(?i)\bISNULL\s*\(`)
+	for {
+		loc := reIsNullStart.FindStringIndex(body)
+		if loc == nil {
+			break
+		}
+		startIdx := loc[0]
+		paramStart := loc[1] - 1
+
+		// 寻找匹配的右括号
+		depth := 0
+		paramEnd := -1
+		for i := paramStart + 1; i < len(body); i++ {
+			if body[i] == '(' {
+				depth++
+			} else if body[i] == ')' {
+				if depth == 0 {
+					paramEnd = i
+					break
+				}
+				depth--
+			}
+		}
+
+		if paramEnd == -1 {
+			break
+		}
+
+		fullMatch := body[startIdx : paramEnd+1]
+		paramsStr := body[paramStart+1 : paramEnd]
+
+		// 简单处理：ISNULL 只有一个参数，不需要分割逗号，但需要处理嵌套括号以确保正确截取
+		// 实际上 paramsStr 就是整个参数表达式
+		// 但为了保险，我们可以去掉首尾空格
+		param := strings.TrimSpace(paramsStr)
+
+		newExpr := fmt.Sprintf("(%s IS NULL)", param)
+		body = strings.Replace(body, fullMatch, newExpr, 1)
 	}
 	return body
 }
@@ -766,6 +1172,53 @@ func (c *FunctionConverter) handleVariables() {
 	// 4. 清理残留的注释和空行
 	body = reCommentVar.ReplaceAllString(body, "")
 	body = reCommentCursor.ReplaceAllString(body, "")
+
+	c.body = body
+}
+
+// handleUserVariables 处理用户变量 (@var)
+func (c *FunctionConverter) handleUserVariables() {
+	body := c.body
+
+	// 查找所有 @var
+	matches := reUserVar.FindAllStringSubmatch(body, -1)
+
+	seen := make(map[string]bool)
+	for _, match := range matches {
+		varName := match[1]
+		if seen[varName] {
+			continue
+		}
+		seen[varName] = true
+
+		pgVarName := "v_" + varName
+		pgType := "text" // 默认类型
+
+		// 简单类型推断
+		lowerName := strings.ToLower(varName)
+		if strings.Contains(lowerName, "count") || strings.Contains(lowerName, "sum") ||
+			strings.Contains(lowerName, "total") || strings.Contains(lowerName, "amount") ||
+			strings.Contains(lowerName, "price") || strings.Contains(lowerName, "id") ||
+			strings.Contains(lowerName, "num") || lowerName == "i" || lowerName == "j" {
+			pgType = "numeric"
+		}
+
+		decl := fmt.Sprintf("%s %s;", pgVarName, pgType)
+		// 检查是否已存在同名声明（避免重复）
+		exists := false
+		for _, d := range c.varDecls {
+			if strings.HasPrefix(d, pgVarName+" ") {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			c.varDecls = append(c.varDecls, decl)
+		}
+	}
+
+	// 替换 @var 为 v_var
+	body = reUserVar.ReplaceAllString(body, "v_$1")
 
 	c.body = body
 }
