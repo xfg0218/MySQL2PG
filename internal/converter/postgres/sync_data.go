@@ -37,7 +37,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			}()
 
 			// 获取表列信息
-			columns, err := mysqlConn.GetTableColumns(table.Name)
+			columns, columnTypes, err := mysqlConn.GetTableColumnsWithTypes(table.Name)
 			if err != nil {
 				errMsg := fmt.Sprintf("获取表 %s 列信息失败: %v", table.Name, err)
 				logError(errMsg)
@@ -81,7 +81,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					if pgRowCount == totalRows {
 						validationResult = "数据一致"
 					} else {
-						validationResult = fmt.Sprintf("数据不一致")
+						validationResult = "数据不一致"
 						mutex.Lock()
 						*inconsistentTables = append(*inconsistentTables, TableDataInconsistency{
 							TableName:        table.Name,
@@ -217,7 +217,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				}
 
 				// 使用批量插入并获取实际处理的行数
-				currentBatchSize, lastValue, err = postgresConn.BatchInsertDataWithTransactionAndGetLastValue(tx, table.Name, columns, batchInsertSize, primaryKey, rows)
+				currentBatchSize, lastValue, err = postgresConn.BatchInsertDataWithTransactionAndGetLastValue(tx, table.Name, columns, columnTypes, batchInsertSize, primaryKey, rows)
 				rows.Close() // 确保关闭rows
 
 				if err != nil {
@@ -302,7 +302,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				if pgRowCount == totalRows {
 					validationResult = "数据一致"
 				} else {
-					validationResult = fmt.Sprintf("数据不一致")
+					validationResult = "数据不一致"
 					mutex.Lock()
 					*inconsistentTables = append(*inconsistentTables, TableDataInconsistency{
 						TableName:        table.Name,

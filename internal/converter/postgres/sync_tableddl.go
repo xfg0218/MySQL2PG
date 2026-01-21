@@ -261,6 +261,12 @@ func parseTableInfo(mysqlDDL string) (tableName string, isTemporary bool, tableC
 
 // cleanTableLevelSettings 清理表级别的引擎、字符集和行格式设置
 func cleanTableLevelSettings(columnsDefinition string) string {
+	// 首先处理分区语法（最长匹配优先）
+	columnsDefinition = rePartitionComment.ReplaceAllString(columnsDefinition, "")
+	columnsDefinition = rePartitionSimple.ReplaceAllString(columnsDefinition, "")
+	columnsDefinition = rePartitionComplex.ReplaceAllString(columnsDefinition, "")
+	columnsDefinition = rePartition.ReplaceAllString(columnsDefinition, "")
+
 	replacements := []struct {
 		old string
 		new string
