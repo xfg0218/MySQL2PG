@@ -85,6 +85,32 @@ func (c *Connection) GetTableColumns(tableName string) ([]string, error) {
 	return columns, nil
 }
 
+// GetTableColumnsWithTypes 获取表的列名和类型信息
+func (c *Connection) GetTableColumnsWithTypes(tableName string) ([]string, map[string]string, error) {
+	rows, err := c.db.Query(fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
+	if err != nil {
+		return nil, nil, fmt.Errorf("获取表列信息失败: %w", err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	columnTypes := make(map[string]string)
+	
+	for rows.Next() {
+		var field, colType, null, key, extra string
+		var defaultValue sql.NullString
+
+		if err := rows.Scan(&field, &colType, &null, &key, &defaultValue, &extra); err != nil {
+			return nil, nil, fmt.Errorf("扫描列信息失败: %w", err)
+		}
+
+		columns = append(columns, field)
+		columnTypes[field] = colType
+	}
+
+	return columns, columnTypes, nil
+}
+
 // GetTableData 获取表数据
 func (c *Connection) GetTableData(tableName string, columns []string, offset, limit int) (*sql.Rows, error) {
 	// 使用反引号包围表名和列名，以处理包含特殊字符的名称

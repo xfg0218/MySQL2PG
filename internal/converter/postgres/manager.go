@@ -93,7 +93,7 @@ func (m *Manager) Run() error {
 		m.Log("启用了表列表功能，只同步指定的表")
 
 		// 获取MySQL元数据（只需要表信息）
-		allTables, _, _, _, _, _, err := m.getMetadata()
+		allTables, _, indexes, _, _, _, err := m.getMetadata()
 		if err != nil {
 			return err
 		}
@@ -168,6 +168,70 @@ func (m *Manager) Run() error {
 				EndTime:     endTime,
 				ObjectCount: len(filteredTables),
 			})
+		}
+		// 第四阶段：执行索引同步（如果启用）
+		if m.config.Conversion.Options.Indexes && len(indexes) > 0 {
+			m.Log("启用了索引同步功能，只同步指定的 %d 个索引", len(indexes))
+			m.completedTasks = 0
+
+			// 过滤Index
+			// 过滤出需要同步的表
+			var filteredIndexes []mysql.IndexInfo
+			for _, tableName := range m.config.Conversion.Options.TableList {
+				if _, exists := tableMap[tableName]; exists {
+					for _, index := range indexes {
+						if index.Table == tableName {
+							filteredIndexes = append(filteredIndexes, index)
+						}
+					}
+				} else {
+					m.Log("警告: 表列表中指定的表 %s 不存在于MySQL数据库中", tableName)
+				}
+			}
+			m.totalTasks = len(filteredIndexes)
+			var wg sync.WaitGroup
+			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
+			errorChan := make(chan error, 1)
+
+			if m.config.Run.ShowConsoleLogs {
+				fmt.Println("\n4. 转换表索引...")
+			}
+			// 记录开始时间
+			startTime := time.Now()
+			batchSize := m.config.Conversion.Limits.MaxIndexesPerBatch
+			for i := 0; i < len(filteredIndexes); i += batchSize {
+				end := i + batchSize
+				if end > len(filteredIndexes) {
+					end = len(filteredIndexes)
+				}
+
+				batch := filteredIndexes[i:end]
+				wg.Add(1)
+				go func(batch []mysql.IndexInfo) {
+					defer wg.Done()
+					if err := m.convertIndexes(batch, semaphore); err != nil {
+						select {
+						case errorChan <- err:
+						default:
+						}
+					}
+				}(batch)
+			}
+			wg.Wait() // 等待索引同步完成
+			// 记录结束时间和对象数量
+			m.conversionStats = append(m.conversionStats, ConversionStageStat{
+				StageName:   "转换表索引",
+				StartTime:   startTime,
+				EndTime:     time.Now(),
+				ObjectCount: len(filteredIndexes),
+			})
+
+			// 检查是否有错误
+			select {
+			case err := <-errorChan:
+				return err
+			default:
+			}
 		}
 
 		// 显示数据不一致表的统计信息
@@ -1431,7 +1495,7 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
 			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, lowercaseIndexName)
+			fmt.Printf("进度: %.2f%% (%d/%d) : [%s]转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, index.Table, lowercaseIndexName)
 			m.mutex.Unlock()
 		}
 

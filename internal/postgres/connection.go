@@ -3,9 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -443,7 +446,7 @@ func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 }
 
 // BatchInsertDataWithTransactionAndGetLastValue 在事务中批量插入数据并获取最后一个主键值
-func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, tableName string, columns []string, batchSize int, primaryKey string, rows *sql.Rows) (int, interface{}, error) {
+func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKey string, rows *sql.Rows) (int, interface{}, error) {
 	ctx := context.Background()
 
 	// 准备批量插入
@@ -506,8 +509,40 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 			// 进行数据类型转换，处理MySQL和PostgreSQL之间的类型差异
 			switch val := v.(type) {
 			case []byte:
-				// 将[]byte转换为字符串，pgx会自动处理后续的类型转换
-				rowValues[i] = string(val)
+				sVal := string(val)
+				// 检查是否为Point类型并尝试转换
+				if columnTypes != nil {
+					colType, ok := columnTypes[columns[i]]
+					if ok {
+						colTypeLower := strings.ToLower(colType)
+						if strings.Contains(colTypeLower, "point") || strings.Contains(colTypeLower, "geometry") {
+							if pointStr, err := parseMySQLPoint(val); err == nil {
+								rowValues[i] = pointStr
+								continue
+							}
+						}
+					}
+				}
+
+				// 处理MySQL零值时间
+				if sVal == "0000-00-00 00:00:00" || sVal == "0000-00-00" {
+					rowValues[i] = nil
+				} else {
+					// 将[]byte转换为字符串，pgx会自动处理后续的类型转换
+					rowValues[i] = sVal
+				}
+			case string:
+				if val == "0000-00-00 00:00:00" || val == "0000-00-00" {
+					rowValues[i] = nil
+				} else {
+					rowValues[i] = val
+				}
+			case time.Time:
+				if val.IsZero() {
+					rowValues[i] = nil
+				} else {
+					rowValues[i] = val
+				}
 			default:
 				// 其他类型保持不变
 				rowValues[i] = val
@@ -555,4 +590,44 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 	}
 
 	return totalRows, lastValue, nil
+}
+
+// parseMySQLPoint 解析MySQL的WKB格式Point数据
+func parseMySQLPoint(data []byte) (string, error) {
+	// MySQL Geometry Header (4 bytes SRID) + WKB (1 byte order + 4 bytes type + 16 bytes coords)
+	// SRID (4) + Order (1) + Type (4) + X (8) + Y (8) = 25 bytes
+	if len(data) != 25 {
+		return "", fmt.Errorf("invalid MySQL point data length: %d", len(data))
+	}
+
+	// Skip SRID (4 bytes)
+	// Byte order (1 byte)
+	order := data[4]
+
+	var x, y float64
+
+	if order == 1 { // Little Endian
+		// Check type (Point = 1)
+		typeCode := binary.LittleEndian.Uint32(data[5:9])
+		if typeCode != 1 {
+			return "", fmt.Errorf("not a point type: %d", typeCode)
+		}
+		xBits := binary.LittleEndian.Uint64(data[9:17])
+		yBits := binary.LittleEndian.Uint64(data[17:25])
+		x = math.Float64frombits(xBits)
+		y = math.Float64frombits(yBits)
+	} else { // Big Endian
+		// Check type (Point = 1)
+		typeCode := binary.BigEndian.Uint32(data[5:9])
+		if typeCode != 1 {
+			return "", fmt.Errorf("not a point type: %d", typeCode)
+		}
+		xBits := binary.BigEndian.Uint64(data[9:17])
+		yBits := binary.BigEndian.Uint64(data[17:25])
+		x = math.Float64frombits(xBits)
+		y = math.Float64frombits(yBits)
+	}
+
+	// 格式化为PostgreSQL Point格式 (x,y)
+	return fmt.Sprintf("(%v,%v)", x, y), nil
 }

@@ -1,5 +1,16 @@
 package postgres
 
+import "regexp"
+
+var (
+	rePartition        = regexp.MustCompile(`(?is)PARTITION\s+BY\s+.*`)
+	rePartitionComment = regexp.MustCompile(`(?is)/\*!50100\s+PARTITION\s+BY\s+.*?\*/`)
+	rePartitionSimple  = regexp.MustCompile(`(?is)PARTITION\s+BY\s+KEY\s*\(.*?\)\s*\(.*?\)\s*\)`)
+	rePartitionComplex = regexp.MustCompile(`(?is)PARTITION\s+BY\s+.*?\)\s*\)\s*`)
+)
+
+// 基本类型正则缓存
+
 // postgresReservedKeywords 定义PostgreSQL的保留关键字
 var postgresReservedKeywords = map[string]bool{
 	// 常用数据类型相关
