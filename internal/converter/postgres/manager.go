@@ -1152,7 +1152,7 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 		semaphore <- struct{}{}
 		currentViewIndex++
 
-		pgViewDDL, err := ConvertViewDDL(view.ViewName, view.ViewDefinition)
+		pgViewDDL, err := ConvertViewDDL(view.ViewName, view.ViewDefinition, m.config.MySQL.Database)
 		if err != nil {
 			// 记录转换失败的 MySQL 视图的部分转换结果
 			m.Log("转换表视图 %s，MySQL 定义: %s", view.ViewName, view.ViewDefinition)
