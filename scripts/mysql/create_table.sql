@@ -74,6 +74,7 @@ CREATE TABLE case_07_complex_charsets (
 DROP TABLE IF EXISTS case_08_json;
 CREATE TABLE case_08_json (
   data json,
+  data_len json,
   data_upper json
 ) ENGINE=InnoDB;
 
