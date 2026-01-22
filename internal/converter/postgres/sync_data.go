@@ -160,14 +160,27 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			var lastValue interface{}
 			var primaryKey string
 			var useKeyPagination bool
+			var orderBy string
 
-			primaryKey, err = mysqlConn.GetTablePrimaryKey(table.Name)
+			// 使用 GetTablePrimaryKeys 获取所有主键
+			primaryKeys, err := mysqlConn.GetTablePrimaryKeys(table.Name)
 			if err != nil {
 				log("警告: %v，将使用传统的OFFSET分页", err)
 				useKeyPagination = false
-			} else {
+			} else if len(primaryKeys) == 1 {
+				primaryKey = primaryKeys[0]
 				log("表 %s 的主键是 %s，将使用基于主键的分页", table.Name, primaryKey)
 				useKeyPagination = true
+			} else {
+				// 复合主键
+				useKeyPagination = false
+				// 构建 ORDER BY 子句
+				var quotedKeys []string
+				for _, k := range primaryKeys {
+					quotedKeys = append(quotedKeys, fmt.Sprintf("`%s`", k))
+				}
+				orderBy = strings.Join(quotedKeys, ", ")
+				log("表 %s 有复合主键 %v，将使用传统的OFFSET分页（带ORDER BY）", table.Name, primaryKeys)
 			}
 
 			// 同步数据
@@ -180,7 +193,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			}
 			state := &progressState{}
 
-			for processedRows < totalRows {
+			for {
 				var rows *sql.Rows
 				var currentBatchSize int
 
@@ -190,14 +203,14 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					rows, err = mysqlConn.GetTableDataWithPagination(table.Name, columns, primaryKey, lastValue, int(batchSize))
 				} else {
 					// 使用传统的OFFSET分页
-					rows, err = mysqlConn.GetTableData(table.Name, columns, int(processedRows), int(batchSize))
+					rows, err = mysqlConn.GetTableData(table.Name, columns, int(processedRows), int(batchSize), orderBy)
 				}
 
 				if err != nil {
-					errMsg := fmt.Sprintf("获取表 %s 数据失败: %v", table.Name, err)
+					errMsg := fmt.Sprintf("分页获取表 %s 数据失败: %v", table.Name, err)
 					logError(errMsg)
 					select {
-					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+					case errorChan <- fmt.Errorf("分页同步表 %s 失败: %w", table.Name, err):
 					default:
 					}
 					return
@@ -247,6 +260,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					processedRows += int64(currentBatchSize)
 				} else {
 					// 没有更多数据，退出循环
+					log("分页同步表 %s 完成，共处理 %d 行数据", table.Name, processedRows)
 					break
 				}
 
@@ -287,7 +301,17 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 
 			// 数据校验
 			var validationResult string
+			finalMySQLRowCount := totalRows
+
 			if config.Conversion.Options.ValidateData {
+				// 尝试重新获取MySQL表行数以进行更准确的校验
+				currentMySQLCount, err := mysqlConn.GetTableRowCount(table.Name)
+				if err == nil {
+					finalMySQLRowCount = currentMySQLCount
+				} else {
+					log("警告: 无法重新获取表 %s 的行数进行校验: %v，将使用初始行数", table.Name, err)
+				}
+
 				pgRowCount, err := postgresConn.GetTableRowCount(table.Name)
 				if err != nil {
 					errMsg := fmt.Sprintf("校验表 %s 数据失败: %v", table.Name, err)
@@ -299,14 +323,14 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					return
 				}
 
-				if pgRowCount == totalRows {
+				if pgRowCount == finalMySQLRowCount {
 					validationResult = "数据一致"
 				} else {
 					validationResult = "数据不一致"
 					mutex.Lock()
 					*inconsistentTables = append(*inconsistentTables, TableDataInconsistency{
 						TableName:        table.Name,
-						MySQLRowCount:    totalRows,
+						MySQLRowCount:    finalMySQLRowCount,
 						PostgresRowCount: pgRowCount,
 					})
 					mutex.Unlock()
@@ -321,12 +345,12 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
 				currentTask := *completedTasks + 1
 				// 先输出一个换行符，确保完成信息显示在新的一行
-				fmt.Printf("\n进度: %.2f%% (%d/%d) : 同步表 %s 完成，%d 行数据，%s\n", overallProgress, currentTask, totalTasks, table.Name, totalRows, validationResult)
+				fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 完成，%d 行数据，%s\n", overallProgress, currentTask, totalTasks, table.Name, processedRows, validationResult)
 				mutex.Unlock()
 			}
 
 			// 记录同步完成信息
-			log("表 %s 同步完成，%d 行数据，%s", table.Name, totalRows, validationResult)
+			log("\n分页同步表 %s 完成，%d 行数据，%s", table.Name, processedRows, validationResult)
 		}(table)
 	}
 
