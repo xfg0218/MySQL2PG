@@ -293,7 +293,8 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	indexMap := make(map[string]*IndexInfo)
 
 	for rows.Next() {
-		var tableName, indexName, columnName string
+		var tableName, indexName string
+		var columnName sql.NullString
 		var nonUnique int
 		var seqInIndex sql.NullString
 
@@ -309,7 +310,10 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 			}
 		}
 
-		indexMap[indexName].Columns = append(indexMap[indexName].Columns, columnName)
+		// 只添加非NULL的列名，跳过基于表达式的索引列
+		if columnName.Valid {
+			indexMap[indexName].Columns = append(indexMap[indexName].Columns, columnName.String)
+		}
 	}
 
 	// 将map转换为slice
