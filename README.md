@@ -414,7 +414,7 @@ conversion:
     exclude_table_list: [table1]         # 要跳过的表列表，当exclude_use_table_list为true时生效
     validate_data: true         # 同步数据后验证数据一致性
     truncate_before_sync: true  # 同步前是否清空表数据
-  
+
   # 限制配置
   limits:
     concurrency: 10             # 并发数限制

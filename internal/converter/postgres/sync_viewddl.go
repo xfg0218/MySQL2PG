@@ -28,21 +28,12 @@ var (
 	reJSONObject = regexp.MustCompile(`(?i)json_object\s*\(`)
 	// 匹配 JSON_ARRAY 函数
 	reJSONArray = regexp.MustCompile(`(?i)json_array\s*\(`)
-	// 匹配 JSON_QUOTE 函数
-	reJSONQuote = regexp.MustCompile(`(?i)json_quote\s*\(`)
-	// 匹配 JSON_UNQUOTE 函数
-	reJSONUnquote = regexp.MustCompile(`(?i)json_unquote\s*\(`)
 	// 匹配 JSON_EXTRACT 函数
 	reJSONExtract = regexp.MustCompile(`(?i)json_extract\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
-	// 匹配 JSON_KEYS 函数
-	reJSONKeys = regexp.MustCompile(`(?i)json_keys\s*\(`)
-	// 匹配 JSON_LENGTH 函数
-	reJSONLength = regexp.MustCompile(`(?i)json_length\s*\(`)
-	// 匹配 JSON_TYPE 函数
-	reJSONType = regexp.MustCompile(`(?i)json_type\s*\(`)
+	// 匹配 JSON_KEYS 函数 (Removed)
+	// 匹配 JSON_LENGTH 函数 (Removed)
+	// 匹配 JSON_TYPE 函数 (Removed)
 	// 匹配 JSON_VALID 函数
-	reJSONValid = regexp.MustCompile(`(?i)json_valid\s*\([^)]*\)`)
-	// 匹配 JSON_VALUE 函数
 	reJSONValue = regexp.MustCompile(`(?i)json_value\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 JSON_INSERT 函数
 	reJSONInsert = regexp.MustCompile(`(?i)json_insert\s*\(`)
@@ -124,18 +115,30 @@ var (
 	reRAND = regexp.MustCompile(`(?i)rand\s*\([^)]*\)`)
 	// 匹配表连接模式
 	reJoinPattern = regexp.MustCompile(`(?i)\(([^\s]+)\s+([^\s]+)\s+(?:left|inner|right|full)?\s*join\s+([^\s]+)\s+([^\s]+)\s+on\s*\(+([^)]+)\s*\)+\)`)
-	// 匹配连接条件中的列名
-	reColumns = regexp.MustCompile(`(?i)(["\w]+)\s*=\s*("[\w]+")`)
+	// 匹配连接条件中的列名 - 更新以支持点号周围的空格
+	// reColumns = regexp.MustCompile(`(?i)(["\w\.]+)\s*=\s*("["\w\.]+)`)
+	// 新正则支持 "alias" . "column" 格式
+	reColumns = regexp.MustCompile(`(?i)(["\w]+(?:\s*\.\s*["\w]+)?)\s*=\s*(["\w]+(?:\s*\.\s*["\w]+)?)`)
 	// 匹配SUM函数的正则
 	reSum = regexp.MustCompile(`(?i)sum\s*\(\s*(["\w\.]+)\s*\)`)
-	// 匹配COALESCE函数的正则
-	reCoalesce = regexp.MustCompile(`(?i)coalesce\s*\(\s*("[\w\.]+)\s*,\s*(\d+)\s*\)`)
 	// 匹配 interval 语法 (如 now() + interval 1 day)
 	reInterval = regexp.MustCompile(`(?i)(\S[^+\-]*\S)\s*([+\-])\s*interval\s+([+\-]?\d+)\s+([\w_]+)`)
+	// 匹配 CAST AS SIGNED
+	reCastSigned = regexp.MustCompile(`(?i)\bcast\s*\(\s*(.*?)\s+as\s+signed\s*\)`)
+	// 匹配 CAST AS UNSIGNED
+	reCastUnsigned = regexp.MustCompile(`(?i)\bcast\s*\(\s*(.*?)\s+as\s+unsigned\s*\)`)
+	// 匹配取模运算 %
+	reModulo = regexp.MustCompile(`(?i)(["\w\.]+)\s*%\s*(["\w\.]+)`)
+	// 匹配 JOIN 开始部分
+	reJoinStart = regexp.MustCompile(`(?i)\(\s*("[^"]+"|\w+)\s+("[^"]+"|\w+)\s+(?:left|inner|right|full)?\s*join\s+("[^"]+"|\w+)\s+("[^"]+"|\w+)\s+on`)
+	// 匹配 CAST(... USING ...)
+	reCastUsing = regexp.MustCompile(`(?i)\bcast\s*\(\s*(.*?)\s+using\s+[\w]+\s*\)`)
+	// 匹配 CONVERT(... USING ...)
+	reConvertUsing = regexp.MustCompile(`(?i)\bconvert\s*\(\s*(.*?)\s+using\s+[\w]+\s*\)`)
 )
 
 // ConvertViewDDL 将MySQL的VIEW_DEFINITION转换为PostgreSQL的CREATE VIEW语句,从information_schema.VIEWS中读取的VIEW_DEFINITION字段内容
-func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
+func ConvertViewDDL(viewName string, viewDefinition string, dbName string) (string, error) {
 	if strings.TrimSpace(viewName) == "" {
 		return "", fmt.Errorf("empty view name")
 	}
@@ -149,8 +152,17 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to process backticks in view definition for view '%s'", viewName)
 	}
 
-	// 移除数据库名前缀（例如 "db"."table" -> 只保留 "table"）,仅在出现 "db"."table" 或 "db"."table"."col" 的情况下移除 db 前缀
-	processed = reDBPrefix.ReplaceAllString(processed, "$1")
+	processed, literals := maskStringLiterals(processed)
+
+	// 移除数据库名前缀（例如 "db"."table" -> 只保留 "table"）
+	// 只移除匹配当前数据库名的前缀，避免误伤其他标识符
+	if dbName != "" {
+		// 1. 处理带引号的数据库名: "dbName".
+		quotedDB := fmt.Sprintf(`"%s".`, dbName)
+		// 使用不区分大小写的替换
+		processed = replaceCaseInsensitive(processed, quotedDB, "")
+	}
+
 	if processed == "" {
 		return "", fmt.Errorf("failed to remove database prefix in view definition for view '%s'", viewName)
 	}
@@ -189,11 +201,17 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to replace IF with CASE WHEN in view definition for view '%s'", viewName)
 	}
 
-	// 将CONVERT(x, TYPE)转换为CAST(x AS TYPE)（简单替换）
-	processed = reConvert.ReplaceAllString(processed, "CAST($1 AS $2)")
-	if processed == "" {
-		return "", fmt.Errorf("failed to replace CONVERT with CAST in view definition for view '%s'", viewName)
-	}
+	processed = processUsingClause(processed)
+
+	// Remove COLLATE clause
+	processed = reCollateSuffix.ReplaceAllString(processed, "")
+
+	// 处理 CAST AS SIGNED/UNSIGNED
+	processed = reCastSigned.ReplaceAllString(processed, "CAST($1 AS INTEGER)")
+	processed = reCastUnsigned.ReplaceAllString(processed, "CAST($1 AS BIGINT)")
+
+	// Handle Modulo operator % -> MOD(a::numeric, b::numeric)
+	processed = reModulo.ReplaceAllString(processed, "MOD(CAST($1 AS numeric), CAST($2 AS numeric))")
 
 	// 将LIMIT a,b转换为LIMIT b OFFSET a
 	processed = reLimitOffset.ReplaceAllString(processed, "LIMIT $2 OFFSET $1")
@@ -201,49 +219,135 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to adjust LIMIT syntax in view definition for view '%s'", viewName)
 	}
 
-	// 处理表连接条件中的列名歧义，为连接条件中的列添加表别名,对于视图中常见的连接模式：(table1 alias1 join table2 alias2 on(...)),为on子句中的列添加表别名
-	processed = reJoinPattern.ReplaceAllStringFunc(processed, func(joinExpr string) string {
-		matches := reJoinPattern.FindStringSubmatch(joinExpr)
-		if len(matches) < 6 {
-			return joinExpr
+	processed = processFunctionCall(processed, "length", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("length(CAST(%s AS TEXT))", args[0])
 		}
-
-		// matches[1]: 第一个表名
-		// matches[2]: 第一个表别名
-		// matches[3]: 第二个表名
-		// matches[4]: 第二个表别名
-		// matches[5]: 连接条件
-
-		alias1 := matches[2]
-		alias2 := matches[4]
-		condition := matches[5]
-
-		// 处理条件中的列名，为没有表别名的列添加表别名
-		processedCondition := reColumns.ReplaceAllStringFunc(condition, func(colMatch string) string {
-			parts := strings.SplitN(colMatch, "=", 2)
-			if len(parts) != 2 {
-				return colMatch
-			}
-
-			col1 := strings.TrimSpace(parts[0])
-			col2 := strings.TrimSpace(parts[1])
-
-			// 为没有表别名的列添加表别名
-			if !strings.Contains(col1, ".") {
-				col1 = fmt.Sprintf("%s.%s", alias1, col1)
-			}
-			if !strings.Contains(col2, ".") {
-				col2 = fmt.Sprintf("%s.%s", alias2, col2)
-			}
-
-			// 添加类型转换以解决PostgreSQL中的类型不匹配问题
-			return fmt.Sprintf("%s::text = %s::text", col1, col2)
-		})
-
-		// 重新构建连接表达式
-		return fmt.Sprintf("(%s %s join %s %s on((%s)))",
-			matches[1], alias1, matches[3], alias2, processedCondition)
+		return fmt.Sprintf("length(%s)", strings.Join(args, ","))
 	})
+
+	processed = processFunctionCall(processed, "substr", func(args []string) string {
+		if len(args) >= 1 {
+			args[0] = fmt.Sprintf("CAST(%s AS TEXT)", args[0])
+		}
+		return fmt.Sprintf("substr(%s)", strings.Join(args, ","))
+	})
+	processed = processFunctionCall(processed, "substring", func(args []string) string {
+		if len(args) >= 1 {
+			args[0] = fmt.Sprintf("CAST(%s AS TEXT)", args[0])
+		}
+		return fmt.Sprintf("substring(%s)", strings.Join(args, ","))
+	})
+
+	// Locate (MySQL: locate(substr, str) -> PG: strpos(str, substr))
+	processed = processFunctionCall(processed, "locate", func(args []string) string {
+		if len(args) == 2 {
+			return fmt.Sprintf("strpos(CAST(%s AS TEXT), %s)", args[1], args[0])
+		}
+		return fmt.Sprintf("locate(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "replace", func(args []string) string {
+		if len(args) >= 1 {
+			args[0] = fmt.Sprintf("CAST(%s AS TEXT)", args[0])
+		}
+		return fmt.Sprintf("replace(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "trim", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("trim(CAST(%s AS TEXT))", args[0])
+		}
+		return fmt.Sprintf("trim(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "upper", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("upper(CAST(%s AS TEXT))", args[0])
+		}
+		return fmt.Sprintf("upper(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "lower", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("lower(CAST(%s AS TEXT))", args[0])
+		}
+		return fmt.Sprintf("lower(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "reverse", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("reverse(CAST(%s AS TEXT))", args[0])
+		}
+		return fmt.Sprintf("reverse(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "left", func(args []string) string {
+		if len(args) >= 1 {
+			args[0] = fmt.Sprintf("CAST(%s AS TEXT)", args[0])
+		}
+		return fmt.Sprintf("left(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "right", func(args []string) string {
+		if len(args) >= 1 {
+			args[0] = fmt.Sprintf("CAST(%s AS TEXT)", args[0])
+		}
+		return fmt.Sprintf("right(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "round", func(args []string) string {
+		if len(args) == 2 {
+			return fmt.Sprintf("round(CAST(%s AS numeric), %s)", args[0], args[1])
+		}
+		return fmt.Sprintf("round(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "substring_index", func(args []string) string {
+		if len(args) == 3 {
+			// substring_index(str, delim, count) -> split_part(str, delim, count)
+			return fmt.Sprintf("split_part(%s, %s, %s)", args[0], args[1], args[2])
+		}
+		return fmt.Sprintf("substring_index(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "space", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("repeat(' ', %s::integer)", args[0])
+		}
+		return fmt.Sprintf("space(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "hex", func(args []string) string {
+		if len(args) == 1 {
+			// Heuristic: if arg involves ascii, use to_hex (for int), else encode (for string)
+			if strings.Contains(strings.ToLower(args[0]), "ascii") {
+				return fmt.Sprintf("to_hex(%s)", args[0])
+			}
+			return fmt.Sprintf("encode(CAST(%s AS bytea), 'hex')", args[0])
+		}
+		return fmt.Sprintf("hex(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "conv", func(args []string) string {
+		if len(args) == 3 {
+			// conv(N, 10, 2) -> trim leading 0s from bit string
+			if strings.TrimSpace(args[1]) == "10" && strings.TrimSpace(args[2]) == "2" {
+				return fmt.Sprintf("trim(leading '0' from CAST(%s AS BIT(64))::text)", args[0])
+			}
+		}
+		return fmt.Sprintf("conv(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "strcmp", func(args []string) string {
+		if len(args) == 2 {
+			return fmt.Sprintf("(CASE WHEN %s = %s THEN 0 WHEN %s < %s THEN -1 ELSE 1 END)", args[0], args[1], args[0], args[1])
+		}
+		return fmt.Sprintf("strcmp(%s)", strings.Join(args, ","))
+	})
+
+	// 处理表连接条件中的列名歧义
+	processed = replaceJoinAliases(processed)
 
 	// 9) 将简单的CONCAT(a,b,...)转换为 a || b || ... （保留原始行为，对于复杂表达式会尽量处理）
 	processed = replaceConcatExpressions(processed)
@@ -269,20 +373,13 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	}
 
 	// 9.2) 处理COALESCE函数的参数类型不匹配问题
-	processed = reCoalesce.ReplaceAllStringFunc(processed, func(m string) string {
-		match := reCoalesce.FindStringSubmatch(m)
-		if len(match) < 3 {
-			return m
+	// 使用 processFunctionCall 处理任意数量参数，并统一转换为 text 以避免类型不匹配
+	processed = processFunctionCall(processed, "coalesce", func(args []string) string {
+		castedArgs := make([]string, len(args))
+		for i, arg := range args {
+			castedArgs[i] = fmt.Sprintf("CAST(%s AS text)", arg)
 		}
-		column := match[1]
-		defaultVal := match[2]
-		var sb strings.Builder
-		sb.WriteString("coalesce(")
-		sb.WriteString(column)
-		sb.WriteString("::numeric, ")
-		sb.WriteString(defaultVal)
-		sb.WriteString("::numeric)")
-		return sb.String()
+		return fmt.Sprintf("coalesce(%s)", strings.Join(castedArgs, ","))
 	})
 	if processed == "" {
 		return "", fmt.Errorf("failed to fix COALESCE parameter types in view definition for view '%s'", viewName)
@@ -291,16 +388,64 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	// 修正常见MySQL函数差异/关键字，JSON函数转换
 	processed = reJSONObject.ReplaceAllString(processed, "json_build_object(")
 	processed = reJSONArray.ReplaceAllString(processed, "json_build_array(")
-	processed = reJSONQuote.ReplaceAllString(processed, "jsonb_quote(")
-	processed = reJSONUnquote.ReplaceAllString(processed, "jsonb_unquote(")
+	processed = processFunctionCall(processed, "json_quote", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("to_jsonb((%s)::text)", args[0])
+		}
+		return fmt.Sprintf("json_quote(%s)", strings.Join(args, ","))
+	})
+	processed = processFunctionCall(processed, "json_unquote", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("((%s)::jsonb #>> '{}')", args[0])
+		}
+		return fmt.Sprintf("json_unquote(%s)", strings.Join(args, ","))
+	})
 	// JSON_EXTRACT(json_column, '$.key') -> json_column -> 'key'
 	processed = reJSONExtract.ReplaceAllString(processed, "$1 -> $2")
-	processed = reJSONKeys.ReplaceAllString(processed, "json_object_keys(")
-	processed = reJSONLength.ReplaceAllString(processed, "json_array_length(")
-	processed = reJSONType.ReplaceAllString(processed, "jsonb_typeof(")
-	processed = reJSONValid.ReplaceAllStringFunc(processed, func(m string) string {
-		// 匹配JSON_VALID(expr) -> (expr IS NOT NULL AND jsonb_typeof(expr::jsonb) IS NOT NULL)
-		return "(" + m[10:len(m)-1] + " IS NOT NULL AND jsonb_typeof(" + m[10:len(m)-1] + "::jsonb) IS NOT NULL)"
+	processed = processFunctionCall(processed, "json_keys", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("(SELECT jsonb_agg(keys) FROM jsonb_object_keys((%s)::jsonb) keys)", args[0])
+		}
+		return fmt.Sprintf("json_keys(%s)", strings.Join(args, ","))
+	})
+	processed = processFunctionCall(processed, "json_pretty", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("jsonb_pretty((%s)::jsonb)", args[0])
+		}
+		return fmt.Sprintf("json_pretty(%s)", strings.Join(args, ","))
+	})
+	processed = processFunctionCall(processed, "json_length", func(args []string) string {
+		if len(args) == 1 {
+			// MySQL JSON_LENGTH behavior: array->len, object->keys count, scalar->1
+			return fmt.Sprintf("(CASE WHEN jsonb_typeof((%s)::jsonb) = 'array' THEN jsonb_array_length((%s)::jsonb) WHEN jsonb_typeof((%s)::jsonb) = 'object' THEN (SELECT count(*) FROM jsonb_object_keys((%s)::jsonb)) ELSE 1 END)", args[0], args[0], args[0], args[0])
+		}
+		return fmt.Sprintf("json_length(%s)", strings.Join(args, ","))
+	})
+	processed = processFunctionCall(processed, "json_contains_path", func(args []string) string {
+		if len(args) >= 3 {
+			// json_contains_path(json, 'one', path) -> jsonb_path_exists(json, path)
+			// Ignoring 'one'/'all' distinction for multiple paths for now, assuming simple case
+			return fmt.Sprintf("jsonb_path_exists((%s)::jsonb, (%s)::jsonpath)", args[0], args[2])
+		}
+		return fmt.Sprintf("json_contains_path(%s)", strings.Join(args, ","))
+	})
+	processed = processFunctionCall(processed, "json_depth", func(args []string) string {
+		return "NULL::integer" // json_depth not supported directly in PostgreSQL
+	})
+	processed = processFunctionCall(processed, "json_overlaps", func(args []string) string {
+		return "NULL::boolean" // json_overlaps not supported directly in PostgreSQL
+	})
+	processed = processFunctionCall(processed, "json_type", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("jsonb_typeof((%s)::jsonb)", args[0])
+		}
+		return fmt.Sprintf("json_type(%s)", strings.Join(args, ","))
+	})
+	processed = processFunctionCall(processed, "json_valid", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("(%s IS NOT NULL AND jsonb_typeof((%s)::jsonb) IS NOT NULL)", args[0], args[0])
+		}
+		return fmt.Sprintf("json_valid(%s)", strings.Join(args, ","))
 	})
 	// JSON_VALUE(json_column, '$.key') -> json_column ->> 'key'
 	processed = reJSONValue.ReplaceAllString(processed, "$1 ->> $2")
@@ -448,6 +593,111 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	processed = reSTR_TO_DATE.ReplaceAllString(processed, "to_date($1, $2)")
 	processed = reDATEDIFF.ReplaceAllString(processed, "date_part('day', $1 - $2)")
 	processed = reTIMEDIFF.ReplaceAllString(processed, "($1 - $2)")
+
+	processed = processFunctionCall(processed, "timestampdiff", func(args []string) string {
+		if len(args) != 3 {
+			return fmt.Sprintf("timestampdiff(%s)", strings.Join(args, ","))
+		}
+		unit := strings.ToLower(strings.TrimSpace(args[0]))
+		start := args[1]
+		end := args[2]
+
+		switch unit {
+		case "second":
+			return fmt.Sprintf("trunc(extract(epoch from (%s - %s)))::bigint", end, start)
+		case "minute":
+			return fmt.Sprintf("trunc(extract(epoch from (%s - %s)) / 60)::bigint", end, start)
+		case "hour":
+			return fmt.Sprintf("trunc(extract(epoch from (%s - %s)) / 3600)::bigint", end, start)
+		case "day":
+			// extract(day from interval) only returns the 'days' part, not total days if > 30 days?
+			// No, interval subtraction result 'just works' for days if we extract epoch / 86400?
+			// Actually date_part('day', end - start) for timestamps returns number of days.
+			// Let's use extract(epoch)/86400 for safety across date/timestamp types.
+			return fmt.Sprintf("trunc(extract(epoch from (%s - %s)) / 86400)::bigint", end, start)
+		case "week":
+			return fmt.Sprintf("trunc(extract(epoch from (%s - %s)) / 604800)::bigint", end, start)
+		case "month":
+			// (year(end) - year(start)) * 12 + (month(end) - month(start))
+			// But we need to account for day of month?
+			// MySQL TIMESTAMPDIFF(MONTH, '2012-02-01', '2012-03-01') -> 1
+			// PostgreSQL age() handles this well.
+			return fmt.Sprintf("((extract(year from age(%s, %s)) * 12 + extract(month from age(%s, %s))))::bigint", end, start, end, start)
+		case "quarter":
+			return fmt.Sprintf("trunc(((extract(year from age(%s, %s)) * 12 + extract(month from age(%s, %s))) / 3))::bigint", end, start, end, start)
+		case "year":
+			return fmt.Sprintf("trunc(extract(year from age(%s, %s)))::bigint", end, start)
+		default:
+			return fmt.Sprintf("timestampdiff(%s, %s, %s)", unit, start, end)
+		}
+	})
+
+	// Date/Time parts extraction
+	timeParts := map[string]string{
+		"year":       "year",
+		"month":      "month",
+		"day":        "day",
+		"dayofmonth": "day",
+		"hour":       "hour",
+		"minute":     "minute",
+		"second":     "second",
+		"dayofyear":  "doy",
+		"quarter":    "quarter",
+		"week":       "week",
+	}
+	for funcName, part := range timeParts {
+		processed = processFunctionCall(processed, funcName, func(args []string) string {
+			if len(args) >= 1 {
+				return fmt.Sprintf("extract(%s from %s)::integer", part, args[0])
+			}
+			return fmt.Sprintf("%s(%s)", funcName, strings.Join(args, ","))
+		})
+	}
+
+	processed = processFunctionCall(processed, "dayofweek", func(args []string) string {
+		if len(args) == 1 {
+			// MySQL: 1=Sun...7=Sat. PG: 0=Sun...6=Sat.
+			return fmt.Sprintf("(extract(dow from %s)::integer + 1)", args[0])
+		}
+		return fmt.Sprintf("dayofweek(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "last_day", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("(date_trunc('month', %s::date) + interval '1 month - 1 day')::date", args[0])
+		}
+		return fmt.Sprintf("last_day(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "to_days", func(args []string) string {
+		if len(args) == 1 {
+			// Using Julian date for approximation suitable for diffs
+			return fmt.Sprintf("extract(julian from %s)::integer", args[0])
+		}
+		return fmt.Sprintf("to_days(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "curdate", func(args []string) string {
+		return "current_date"
+	})
+	processed = processFunctionCall(processed, "curtime", func(args []string) string {
+		return "current_time"
+	})
+
+	processed = processFunctionCall(processed, "time_to_sec", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("extract(epoch from (%s)::time)::integer", args[0])
+		}
+		return fmt.Sprintf("time_to_sec(%s)", strings.Join(args, ","))
+	})
+
+	processed = processFunctionCall(processed, "sec_to_time", func(args []string) string {
+		if len(args) == 1 {
+			return fmt.Sprintf("(interval '1 second' * (%s))::time", args[0])
+		}
+		return fmt.Sprintf("sec_to_time(%s)", strings.Join(args, ","))
+	})
+
 	if processed == "" {
 		return "", fmt.Errorf("failed to convert basic time functions in view definition for view '%s'", viewName)
 	}
@@ -646,12 +896,16 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		}
 	}
 
+	// Unmask string literals
+	processed = unmaskStringLiterals(processed, literals)
+
 	// 包装成CREATE OR REPLACE VIEW语句
 	quotedViewName := quoteIdentifier(viewName)
 	if quotedViewName == "" {
 		return "", fmt.Errorf("failed to quote view name '%s'", viewName)
 	}
-	createStmt := fmt.Sprintf("CREATE OR REPLACE VIEW %s AS %s;", quotedViewName, processed)
+	// Use DROP VIEW IF EXISTS ... CASCADE to allow type changes in columns
+	createStmt := fmt.Sprintf("DROP VIEW IF EXISTS %s CASCADE; CREATE OR REPLACE VIEW %s AS %s;", quotedViewName, quotedViewName, processed)
 	if createStmt == "" {
 		return "", fmt.Errorf("failed to generate CREATE VIEW statement for view '%s'", viewName)
 	}
@@ -739,7 +993,7 @@ func replaceConcatExpressions(s string) string {
 			break
 		}
 		// 找到括号开始
-		start := pos + 6 // len("concat(")
+		start := pos + 6
 		depth := 1
 		end := start
 		// 找到匹配的右括号
@@ -780,4 +1034,265 @@ func replaceConcatExpressions(s string) string {
 		idx = pos + len(replacement)
 	}
 	return out
+}
+
+// processFunctionCall 处理嵌套函数调用，找到函数名及其参数，然后对参数应用转换函数。
+func processFunctionCall(s string, funcName string, transformer func([]string) string) string {
+	reStart := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(funcName) + `\s*\(`)
+	matches := reStart.FindAllStringIndex(s, -1)
+
+	for i := len(matches) - 1; i >= 0; i-- {
+		pos := matches[i][0]
+
+		openParenPos := -1
+		for k := pos; k < len(s); k++ {
+			if s[k] == '(' {
+				openParenPos = k
+				break
+			}
+		}
+		if openParenPos == -1 {
+			continue
+		}
+
+		depth := 1
+		end := -1
+		for k := openParenPos + 1; k < len(s); k++ {
+			switch s[k] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			}
+			if depth == 0 {
+				end = k
+				break
+			}
+		}
+
+		if end == -1 {
+			continue
+		}
+
+		argsStr := s[openParenPos+1 : end]
+		args := splitTopLevelCommas(argsStr)
+		replacement := transformer(args)
+
+		s = s[:pos] + replacement + s[end+1:]
+	}
+	return s
+}
+
+// maskStringLiterals 用占位符替换单引号字符串字面量。
+func maskStringLiterals(s string) (string, map[string]string) {
+	literals := make(map[string]string)
+	var sb strings.Builder
+
+	lastPos := 0
+	inQuote := false
+	quoteStart := 0
+	litCount := 0
+
+	for i := 0; i < len(s); i++ {
+		if inQuote {
+			if s[i] == '\\' {
+				i++
+				continue
+			}
+			if s[i] == '\'' {
+				if i+1 < len(s) && s[i+1] == '\'' {
+					i++
+					continue
+				}
+				inQuote = false
+				literal := s[quoteStart : i+1]
+				placeholder := fmt.Sprintf("___STR-LIT-%d___", litCount)
+				litCount++
+				literals[placeholder] = literal
+
+				sb.WriteString(s[lastPos:quoteStart])
+				sb.WriteString(placeholder)
+				lastPos = i + 1
+			}
+		} else {
+			if s[i] == '\'' {
+				inQuote = true
+				quoteStart = i
+			}
+		}
+	}
+	sb.WriteString(s[lastPos:])
+
+	return sb.String(), literals
+}
+
+// unmaskStringLiterals 从占位符恢复字符串字面量。
+func unmaskStringLiterals(s string, literals map[string]string) string {
+	for placeholder, val := range literals {
+		s = strings.ReplaceAll(s, placeholder, val)
+	}
+	return s
+}
+
+// replaceCaseInsensitive 执行不区分大小写的字符串替换。
+func replaceCaseInsensitive(s, oldStr, newStr string) string {
+	// Escape special regex chars in 'oldStr'
+	re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(oldStr))
+	return re.ReplaceAllString(s, newStr)
+}
+
+// processUsingClause 处理 CONVERT(expr USING charset) 和 CAST(expr USING charset)，将它们替换为 CAST(expr AS TEXT)。
+func processUsingClause(s string) string {
+	reStart := regexp.MustCompile(`(?i)\b(convert|cast)\s*\(`)
+
+	matches := reStart.FindAllStringIndex(s, -1)
+
+	for i := len(matches) - 1; i >= 0; i-- {
+		pos := matches[i][0]
+
+		openParenPos := -1
+		for k := pos; k < len(s); k++ {
+			if s[k] == '(' {
+				openParenPos = k
+				break
+			}
+		}
+		if openParenPos == -1 {
+			continue
+		}
+
+		depth := 1
+		end := -1
+		for k := openParenPos + 1; k < len(s); k++ {
+			if s[k] == '(' {
+				depth++
+			} else if s[k] == ')' {
+				depth--
+				if depth == 0 {
+					end = k
+					break
+				}
+			}
+		}
+
+		if end == -1 {
+			continue
+		}
+
+		content := s[openParenPos+1 : end]
+		reUsing := regexp.MustCompile(`(?i)\s+USING\s+[\w]+`)
+		loc := reUsing.FindStringIndex(content)
+
+		if loc != nil {
+			expr := content[:loc[0]]
+			replacement := fmt.Sprintf("CAST(%s AS TEXT)", expr)
+			s = s[:pos] + replacement + s[end+1:]
+		} else {
+			funcName := s[pos:openParenPos]
+			if strings.ToLower(funcName) == "convert" {
+				parts := splitTopLevelCommas(content)
+				if len(parts) == 2 {
+					replacement := fmt.Sprintf("CAST(%s AS %s)", parts[0], parts[1])
+					s = s[:pos] + replacement + s[end+1:]
+				}
+			}
+		}
+	}
+	return s
+}
+
+func replaceJoinAliases(s string) string {
+	matches := reJoinStart.FindAllStringIndex(s, -1)
+
+	for i := len(matches) - 1; i >= 0; i-- {
+		start := matches[i][0]
+		endStart := matches[i][1]
+		current := endStart
+		for current < len(s) && (s[current] == ' ' || s[current] == '\t' || s[current] == '\n') {
+			current++
+		}
+
+		if current >= len(s) || s[current] != '(' {
+			continue
+		}
+		onStart := current
+		depth := 0
+		condEnd := -1
+
+		for k := current; k < len(s); k++ {
+			if s[k] == '(' {
+				depth++
+			} else if s[k] == ')' {
+				depth--
+				if depth == 0 {
+					condEnd = k
+					break
+				}
+			}
+		}
+
+		if condEnd == -1 {
+			continue
+		}
+
+		// 从开始正则中提取捕获
+		submatch := reJoinStart.FindStringSubmatch(s[start:endStart])
+		if len(submatch) < 5 {
+			continue
+		}
+		// t1 := submatch[1]
+		a1 := submatch[2]
+		// t2 := submatch[3]
+		a2 := submatch[4]
+
+		// ON 子句内容（外层括号内）
+		condition := s[onStart+1 : condEnd]
+
+		// 处理条件以添加别名
+		processedCondition := reColumns.ReplaceAllStringFunc(condition, func(colMatch string) string {
+			// 确保匹配逻辑安全：仅当匹配后不是 '('
+			// 我们检查此匹配的原始条件字符串上下文
+			idx := strings.Index(condition, colMatch)
+			if idx == -1 {
+				return colMatch
+			}
+
+			// 检查匹配后的字符
+			afterMatchIdx := idx + len(colMatch)
+			if afterMatchIdx < len(condition) {
+				nextChar := condition[afterMatchIdx]
+				if nextChar == '(' {
+					// 可能是函数调用，如 length(...)
+					return colMatch
+				}
+			}
+
+			parts := strings.SplitN(colMatch, "=", 2)
+			if len(parts) != 2 {
+				return colMatch
+			}
+
+			col1 := strings.TrimSpace(parts[0])
+			col2 := strings.TrimSpace(parts[1])
+
+			// 缺失时添加别名
+			if !strings.Contains(col1, ".") {
+				col1 = fmt.Sprintf("%s.%s", a1, col1)
+			}
+			if !strings.Contains(col2, ".") {
+				// 特殊检查：如果 col2 与 col1 相同，两个表都有则可能歧义。
+				// 但我们假设 col2 属于 a2。
+				// 例如，如果 col2 是 "c1"，且 a1 和 a2 都有 "c1"。
+				// 连接条件 "c1" = "c1" 通常意味着 a1.c1 = a2.c1
+				col2 = fmt.Sprintf("%s.%s", a2, col2)
+			}
+
+			// 添加类型转换以避免类型不匹配
+			return fmt.Sprintf("%s::text = %s::text", col1, col2)
+		})
+
+		// 替换 ON 括号内的条件。
+		s = s[:onStart+1] + processedCondition + s[condEnd:]
+	}
+	return s
 }

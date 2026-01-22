@@ -7,6 +7,7 @@ var (
 	rePartitionComment = regexp.MustCompile(`(?is)/\*!50100\s+PARTITION\s+BY\s+.*?\*/`)
 	rePartitionSimple  = regexp.MustCompile(`(?is)PARTITION\s+BY\s+KEY\s*\(.*?\)\s*\(.*?\)\s*\)`)
 	rePartitionComplex = regexp.MustCompile(`(?is)PARTITION\s+BY\s+.*?\)\s*\)\s*`)
+	rePartitionMySQL8  = regexp.MustCompile(`(?is)/\*!80000\s+PARTITION\s+BY\s+.*?\*/`)
 )
 
 // 基本类型正则缓存

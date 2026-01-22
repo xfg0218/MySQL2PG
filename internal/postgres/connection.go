@@ -78,10 +78,8 @@ func (c *Connection) BeginTransaction(ctx context.Context) (pgx.Tx, error) {
 // ExecuteDDL 执行DDL语句
 func (c *Connection) ExecuteDDL(ddl string) error {
 	ctx := context.Background()
-
-	// 将DDL转换为小写
-	lowercaseDDL := strings.ToLower(ddl)
-
+	// 接受原始DDL，不转换为小写
+	lowercaseDDL := ddl
 	// 将char(0)转换为char(10)，因为PostgreSQL不允许char(0)类型
 	lowercaseDDL = strings.ReplaceAll(lowercaseDDL, "char(0)", "char(10)")
 
