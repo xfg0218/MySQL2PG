@@ -58,8 +58,10 @@ var (
 	reTypeMb3Generic = regexp.MustCompile(`(?i)(varchar\((\d+)\)|char\((\d+)\)|text)[^\w]*mb3`)
 
 	// 其他杂项正则
-	reCharsetPrefix = regexp.MustCompile(`(?i)\b_\w+(['"])`)
-	reVirtual       = regexp.MustCompile(`(?i)\s+VIRTUAL`)
+	reCharsetPrefix       = regexp.MustCompile(`(?i)\b_\w+(['"])`)
+	reVirtual             = regexp.MustCompile(`(?i)\s+VIRTUAL`)
+	reMySQLVersionComment = regexp.MustCompile(`(?s)/\*!\d+\s+.*?\*/`)
+	reCollateSuffix       = regexp.MustCompile(`(?i)\s+COLLATE\s+[\w_]+`)
 )
 
 // 基本类型正则缓存
@@ -89,7 +91,7 @@ var typeMappingOrder = []string{
 	// JSON类型
 	"json", "jsonb",
 	// 空间类型
-	"geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection",
+	"geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection", "geomcollection",
 	// 特殊类型
 	"enum", "set",
 }
@@ -150,14 +152,15 @@ var typeMap = map[string]string{
 	"json":  "JSON",
 	"jsonb": "JSONB",
 	// 空间类型
-	"geometry":           "GEOMETRY",
+	"geometry":           "BYTEA",
 	"point":              "POINT",
-	"linestring":         "LINESTRING",
-	"polygon":            "POLYGON",
-	"multipoint":         "MULTIPOINT",
-	"multilinestring":    "MULTILINESTRING",
-	"multipolygon":       "MULTIPOLYGON",
-	"geometrycollection": "GEOMETRYCOLLECTION",
+	"linestring":         "BYTEA",
+	"polygon":            "BYTEA",
+	"multipoint":         "BYTEA",
+	"multilinestring":    "BYTEA",
+	"multipolygon":       "BYTEA",
+	"geometrycollection": "BYTEA",
+	"geomcollection":     "BYTEA",
 	// 特殊类型
 	"enum": "VARCHAR(255)",
 	"set":  "VARCHAR(255)",
@@ -211,12 +214,11 @@ func parseTableInfo(mysqlDDL string) (tableName string, isTemporary bool, tableC
 	var inDoubleQuote bool
 	var escapeNext bool
 
-	mysqlDDLRunes := []rune(mysqlDDL)
 	columnsStart = tableNameStart + tableNameEnd + 1
 	bracketCount = 1
 
-	for i := columnsStart; i < len(mysqlDDLRunes); i++ {
-		char := mysqlDDLRunes[i]
+	for i := columnsStart; i < len(mysqlDDL); i++ {
+		char := mysqlDDL[i]
 
 		if escapeNext {
 			escapeNext = false
@@ -242,10 +244,13 @@ func parseTableInfo(mysqlDDL string) (tableName string, isTemporary bool, tableC
 			if !inSingleQuote && !inDoubleQuote {
 				bracketCount--
 				if bracketCount == 0 {
-					columnsEnd = len([]byte(string(mysqlDDLRunes[:i+1])))
+					columnsEnd = i + 1
 					break
 				}
 			}
+		}
+		if columnsEnd != 0 {
+			break
 		}
 	}
 
@@ -261,7 +266,10 @@ func parseTableInfo(mysqlDDL string) (tableName string, isTemporary bool, tableC
 
 // cleanTableLevelSettings 清理表级别的引擎、字符集和行格式设置
 func cleanTableLevelSettings(columnsDefinition string) string {
-	// 首先处理分区语法（最长匹配优先）
+	// 首先移除MySQL版本注释（含分区定义）
+	columnsDefinition = reMySQLVersionComment.ReplaceAllString(columnsDefinition, "")
+
+	// 然后处理分区语法（最长匹配优先）
 	columnsDefinition = rePartitionComment.ReplaceAllString(columnsDefinition, "")
 	columnsDefinition = rePartitionSimple.ReplaceAllString(columnsDefinition, "")
 	columnsDefinition = rePartitionComplex.ReplaceAllString(columnsDefinition, "")
@@ -356,6 +364,7 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 	line = strings.ReplaceAll(line, " ON UPDATE CURRENT_TIMESTAMP", "")
 	line = strings.ReplaceAll(line, " unsigned", "")
 	line = strings.ReplaceAll(line, " UNSIGNED", "")
+	line = reCollateSuffix.ReplaceAllString(line, "")
 
 	// 批量清理字符集和Collate
 	replacements := []string{
@@ -460,6 +469,7 @@ func cleanTypeDefinition(typeDefinition string) string {
 	typeDefinition = reComplexCharsetSpecific.ReplaceAllString(typeDefinition, "$1")
 	typeDefinition = reComplexCharsetVarchar.ReplaceAllString(typeDefinition, "$1")
 	typeDefinition = reComplexCharset.ReplaceAllString(typeDefinition, "$1")
+	typeDefinition = reCollateSuffix.ReplaceAllString(typeDefinition, "")
 
 	replacements := []string{
 		" character ascii", "", " CHARACTER ASCII", "",
@@ -596,9 +606,11 @@ func cleanTypeDefinition(typeDefinition string) string {
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00 00:00:00.000000'", "")
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00 00:00:00.000'", "")
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00'", "")
+	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, "uuid()", "gen_random_uuid()")
+	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, "json_object", "json_build_object")
+	lowerTypeDef = reCharsetPrefix.ReplaceAllString(lowerTypeDef, "$1")
 
 	if strings.Contains(strings.ToUpper(lowerTypeDef), "GENERATED ALWAYS AS") {
-		lowerTypeDef = reCharsetPrefix.ReplaceAllString(lowerTypeDef, "$1")
 		lowerTypeDef = reVirtual.ReplaceAllString(lowerTypeDef, " STORED")
 	}
 
