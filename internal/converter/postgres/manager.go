@@ -188,6 +188,7 @@ func (m *Manager) Run() error {
 					m.Log("警告: 表列表中指定的表 %s 不存在于MySQL数据库中", tableName)
 				}
 			}
+
 			m.totalTasks = len(filteredIndexes)
 			var wg sync.WaitGroup
 			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
@@ -278,7 +279,12 @@ func (m *Manager) getMetadata() ([]mysql.TableInfo, []mysql.FunctionInfo, []mysq
 	var err error
 
 	if m.config.Conversion.Options.TableDDL || m.config.Conversion.Options.Indexes || m.config.Conversion.Options.Data || m.config.Conversion.Options.Grant {
-		tables, err = m.mysqlConn.GetTables(m.config.Conversion.Options.SkipUseTableList, m.config.Conversion.Options.SkipTableList)
+		tables, err = m.mysqlConn.GetTables(
+			m.config.Conversion.Options.SkipUseTableList,
+			m.config.Conversion.Options.SkipTableList,
+			m.config.Conversion.Options.UseTableList,
+			m.config.Conversion.Options.TableList,
+		)
 		if err != nil {
 			return nil, nil, nil, nil, nil, nil, fmt.Errorf("获取表信息失败: %w", err)
 		}

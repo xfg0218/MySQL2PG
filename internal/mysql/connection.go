@@ -95,7 +95,7 @@ func (c *Connection) GetTableColumnsWithTypes(tableName string) ([]string, map[s
 
 	var columns []string
 	columnTypes := make(map[string]string)
-	
+
 	for rows.Next() {
 		var field, colType, null, key, extra string
 		var defaultValue sql.NullString
@@ -112,7 +112,7 @@ func (c *Connection) GetTableColumnsWithTypes(tableName string) ([]string, map[s
 }
 
 // GetTableData 获取表数据
-func (c *Connection) GetTableData(tableName string, columns []string, offset, limit int) (*sql.Rows, error) {
+func (c *Connection) GetTableData(tableName string, columns []string, offset, limit int, orderBy string) (*sql.Rows, error) {
 	// 使用反引号包围表名和列名，以处理包含特殊字符的名称
 	var quotedColumns []string
 	for _, col := range columns {
@@ -122,7 +122,11 @@ func (c *Connection) GetTableData(tableName string, columns []string, offset, li
 
 	// 对于大表，使用LIMIT和OFFSET可能会导致性能问题
 	// 但在没有主键的情况下，这是唯一的选择
-	query := fmt.Sprintf("SELECT %s FROM `%s` LIMIT %d OFFSET %d", columnsStr, tableName, limit, offset)
+	query := fmt.Sprintf("SELECT %s FROM `%s`", columnsStr, tableName)
+	if orderBy != "" {
+		query += fmt.Sprintf(" ORDER BY %s", orderBy)
+	}
+	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
 	rows, err := c.db.Query(query)
 	if err != nil {
@@ -161,32 +165,67 @@ func (c *Connection) GetTableDataWithPagination(tableName string, columns []stri
 	return rows, nil
 }
 
-// GetTablePrimaryKey 获取表的主键列名
-func (c *Connection) GetTablePrimaryKey(tableName string) (string, error) {
+// GetTablePrimaryKeys 获取表的主键列名列表
+func (c *Connection) GetTablePrimaryKeys(tableName string) ([]string, error) {
 	// 使用SHOW KEYS FROM语句获取主键信息，避免查询information_schema导致的权限问题
 	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
 	query := fmt.Sprintf("SHOW KEYS FROM `%s` WHERE Key_name = 'PRIMARY'", tableName)
 
 	rows, err := c.db.Query(query)
 	if err != nil {
-		return "", fmt.Errorf("获取表主键失败: %w", err)
+		return nil, fmt.Errorf("获取表主键失败: %w", err)
 	}
 	defer rows.Close()
 
+	var primaryKeys []string
 	for rows.Next() {
 		// SHOW KEYS FROM返回的字段顺序：
 		// Table, Non_unique, Key_name, Seq_in_index, Column_name, Collation, Cardinality, Sub_part, Packed, Null, Index_type, Comment, Index_comment, Visible, Expression
-		var table, nonUniqueStr, keyName, seqInIndexStr, columnName string
-		var collation, cardinality, subPart, packed, null, indexType, comment, indexComment, visible, expression sql.NullString
-		if err := rows.Scan(&table, &nonUniqueStr, &keyName, &seqInIndexStr, &columnName, &collation, &cardinality, &subPart, &packed, &null, &indexType, &comment, &indexComment, &visible, &expression); err != nil {
-			return "", fmt.Errorf("扫描主键信息失败: %w", err)
+		// 尝试扫描，忽略列数不匹配的错误（为了兼容不同版本的MySQL）
+		columns, _ := rows.Columns()
+		values := make([]interface{}, len(columns))
+		for i := range values {
+			values[i] = new(interface{})
 		}
 
-		// 只返回第一个主键列（如果是复合主键，也只返回第一个）
-		return columnName, nil
+		if err := rows.Scan(values...); err != nil {
+			return nil, fmt.Errorf("扫描主键信息失败: %w", err)
+		}
+
+		var columnName string
+		// Column_name通常是第5列 (索引4)
+		if len(columns) >= 5 {
+			if val, ok := (*values[4].(*interface{})).([]byte); ok {
+				columnName = string(val)
+			} else if val, ok := (*values[4].(*interface{})).(string); ok {
+				columnName = val
+			}
+		}
+
+		if columnName != "" {
+			primaryKeys = append(primaryKeys, columnName)
+		}
 	}
 
-	return "", fmt.Errorf("表 %s 没有主键", tableName)
+	if len(primaryKeys) == 0 {
+		return nil, fmt.Errorf("表 %s 没有主键", tableName)
+	}
+
+	return primaryKeys, nil
+}
+
+// GetTablePrimaryKey 获取表的主键列名
+func (c *Connection) GetTablePrimaryKey(tableName string) (string, error) {
+	primaryKeys, err := c.GetTablePrimaryKeys(tableName)
+	if err != nil {
+		return "", err
+	}
+
+	if len(primaryKeys) > 1 {
+		return "", fmt.Errorf("表 %s 有复合主键 %v，不支持基于主键的分页", tableName, primaryKeys)
+	}
+
+	return primaryKeys[0], nil
 }
 
 // EstimateRowSize 估算单行数据大小
