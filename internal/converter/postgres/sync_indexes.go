@@ -60,7 +60,18 @@ func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns b
 	columns := strings.Join(quotedColumns, ", ")
 
 	// 将索引名转换为小写，以匹配PostgreSQL的默认行为
-	lowercaseIndexName := strings.ToLower(index.Name)
+	// 为了避免不同表有相同索引名导致的冲突（PostgreSQL中索引名在Schema级别必须唯一），
+	// 我们将表名作为前缀添加到索引名中
+	lowercaseIndexName := strings.ToLower(fmt.Sprintf("%s_%s", index.Table, index.Name))
+
+	// 截断索引名以符合PostgreSQL的长度限制（63字节）
+	if len(lowercaseIndexName) > 63 {
+		// 保留唯一的后缀（通常包含列名信息）和表名的一部分
+		// 简单的截断策略
+		lowercaseIndexName = lowercaseIndexName[:63]
+		// 确保截断后不会以特殊字符结尾
+		lowercaseIndexName = strings.TrimRight(lowercaseIndexName, "_")
+	}
 
 	// 为表名和索引名添加双引号，以处理特殊字符和关键字
 	// 使用index.Table而不是传入的tableName参数，确保索引创建在正确的表上

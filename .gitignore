@@ -25,6 +25,7 @@ go.work.sum
 mysql2pg
 config.yml
 *.log
+*.exe
 # gitlab ci
 .cache
 .golangci.yml

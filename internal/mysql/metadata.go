@@ -55,7 +55,7 @@ type ViewInfo struct {
 }
 
 // GetTables 获取所有表信息
-func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string) ([]TableInfo, error) {
+func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, useTableList bool, tableList []string) ([]TableInfo, error) {
 	// 获取当前连接的用户名，以便更好地诊断权限问题
 	var currentUser string
 	if err := c.db.QueryRow("SELECT USER()").Scan(&currentUser); err != nil {
@@ -83,6 +83,24 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string) ([
 			return nil, fmt.Errorf("扫描表名失败: %w", err)
 		}
 		tableNames = append(tableNames, tableName)
+	}
+
+	// 在应用层面过滤只同步的表
+	if useTableList && len(tableList) > 0 {
+		// 创建一个map用于快速查找需要同步的表
+		useMap := make(map[string]bool)
+		for _, table := range tableList {
+			useMap[table] = true
+		}
+
+		// 过滤表名列表
+		filteredTableNames := make([]string, 0, len(tableNames))
+		for _, tableName := range tableNames {
+			if useMap[tableName] {
+				filteredTableNames = append(filteredTableNames, tableName)
+			}
+		}
+		tableNames = filteredTableNames
 	}
 
 	// 在应用层面过滤掉需要跳过的表
