@@ -738,7 +738,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			if m.config.Conversion.Options.TablePrivileges {
 				if len(tablePrivileges) > 0 {
 					if m.config.Run.ShowConsoleLogs {
-						fmt.Println("\n6. 转换表权限...")
+						fmt.Println("\n7. 转换表权限...")
 					}
 					// 记录开始时间
 					startTime := time.Now()
@@ -1101,7 +1101,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 		if m.config.Conversion.Options.TablePrivileges {
 			if len(tablePrivileges) > 0 {
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n6. 转换表权限...")
+					fmt.Println("\n7. 转换表权限...")
 				}
 				// 记录开始时间
 				startTime := time.Now()
@@ -1129,7 +1129,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			} else {
 				// 当table_privileges: true但没有表权限时，添加日志提示
 				if m.config.Run.ShowConsoleLogs {
-					fmt.Println("\n6. 转换表权限...")
+					fmt.Println("\n7. 转换表权限...")
 					fmt.Println("   未发现任何表权限，跳过表权限转换")
 				}
 				m.Log("table_privileges: true，但未发现任何表权限，跳过表权限转换")
