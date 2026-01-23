@@ -769,6 +769,10 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 	}
 
 	var result strings.Builder
+	// 根据配置决定是否将表名转换为小写
+	if lowercaseColumns {
+		tableName = strings.ToLower(tableName)
+	}
 	if isTemporary {
 		result.WriteString(fmt.Sprintf(`CREATE TEMPORARY TABLE "%s" (`, tableName))
 	} else {

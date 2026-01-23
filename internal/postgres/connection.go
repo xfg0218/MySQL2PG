@@ -580,7 +580,9 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 
 	// 只有在没有找到主键值的情况下，才执行MAX查询（作为后备方案）
 	if primaryKey != "" && lastValue == nil {
-		query := fmt.Sprintf("SELECT MAX(\"%s\") FROM \"%s\"", primaryKey, tableName)
+		// 将主键名转换为小写，以匹配PostgreSQL的默认行为
+		lowercasePrimaryKey := strings.ToLower(primaryKey)
+		query := fmt.Sprintf("SELECT MAX(\"%s\") FROM \"%s\"", lowercasePrimaryKey, tableName)
 		err := tx.QueryRow(ctx, query).Scan(&lastValue)
 		if err != nil && err != pgx.ErrNoRows {
 			return 0, nil, fmt.Errorf("获取最后一个主键值失败: %w", err)
