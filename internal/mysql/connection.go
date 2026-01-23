@@ -19,7 +19,7 @@ type Connection struct {
 // NewConnection 创建新的MySQL连接
 func NewConnection(config *config.MySQLConfig) (*Connection, error) {
 	// 使用无压缩连接
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?",
 		config.Username, config.Password, config.Host, config.Port, config.Database)
 
 	// 添加连接参数

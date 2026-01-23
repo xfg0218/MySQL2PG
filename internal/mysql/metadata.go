@@ -536,7 +536,7 @@ func (c *Connection) GetUsers() ([]UserInfo, error) {
 	rows, err := c.db.Query(`
 		SELECT user, host 
 		FROM mysql.user 
-		WHERE user != 'root' AND user != 'mysql.sys' AND user != 'mysql.session'
+		WHERE user != 'root' AND user != 'mysql.sys' AND user != 'mysql.session' AND user != 'mysql.infoschema'
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("获取用户列表失败: %w", err)
