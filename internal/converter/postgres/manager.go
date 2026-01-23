@@ -1219,8 +1219,14 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		// 存储列名映射，用于后续索引转换
 		m.tableColumnNamesMap[table.Name] = pgResult.ColumnNames
 
+		// 根据配置决定是否将表名转换为小写
+		pgTableName := table.Name
+		if m.config.Conversion.Options.LowercaseColumns {
+			pgTableName = strings.ToLower(pgTableName)
+		}
+
 		// 先检查表是否存在
-		tableExists, err := m.postgresConn.TableExists(table.Name)
+		tableExists, err := m.postgresConn.TableExists(pgTableName)
 		if err != nil {
 			errMsg := fmt.Sprintf("检查表 %s 是否存在失败: %v", table.Name, err)
 			m.logError(errMsg)
@@ -1250,7 +1256,7 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 				if pgResult.TableComment != "" {
 					processedComment := m.processComment(pgResult.TableComment)
 					tableCommentSQL := fmt.Sprintf("COMMENT ON TABLE \"%s\" IS '%s';",
-						table.Name, processedComment)
+						pgTableName, processedComment)
 					if err := m.postgresConn.ExecuteDDL(tableCommentSQL); err != nil {
 						m.logError(fmt.Sprintf("为表 %s 添加表注释失败: %v", table.Name, err))
 					}
@@ -1260,7 +1266,7 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 				<-semaphore
 				continue
 			} else {
-				dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS \"%s\" CASCADE", table.Name)
+				dropTableSQL := fmt.Sprintf("DROP TABLE IF EXISTS \"%s\" CASCADE", pgTableName)
 				if err := m.postgresConn.ExecuteDDL(dropTableSQL); err != nil {
 					errMsg := fmt.Sprintf("删除表 %s 失败: %v", table.Name, err)
 					m.logError(errMsg)

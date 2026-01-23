@@ -67,7 +67,12 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				// 执行数据校验（如果启用）
 				var validationResult string
 				if config.Conversion.Options.ValidateData {
-					pgRowCount, err := postgresConn.GetTableRowCount(table.Name)
+					// 查询PostgreSQL表行数时，根据配置决定是否使用小写表名
+					pgTableName := table.Name
+					if config.Conversion.Options.LowercaseColumns {
+						pgTableName = strings.ToLower(pgTableName)
+					}
+					pgRowCount, err := postgresConn.GetTableRowCount(pgTableName)
 					if err != nil {
 						errMsg := fmt.Sprintf("校验表 %s 数据失败: %v", table.Name, err)
 						logError(errMsg)
@@ -108,6 +113,12 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			}
 
 			// 先清空表数据（根据配置决定是否执行）
+			// 根据配置决定是否将表名转换为小写
+			tableName := table.Name
+			if config.Conversion.Options.LowercaseColumns {
+				tableName = strings.ToLower(tableName)
+			}
+
 			if config.Conversion.Options.TruncateBeforeSync {
 				// 开始事务用于清空表
 				tx, err := postgresConn.BeginTransaction(context.Background())
@@ -121,7 +132,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					return
 				}
 
-				truncateQuery := fmt.Sprintf("TRUNCATE TABLE \"%s\"", table.Name)
+				truncateQuery := fmt.Sprintf("TRUNCATE TABLE \"%s\"", tableName)
 				if _, err := tx.Exec(context.Background(), truncateQuery); err != nil {
 					errMsg := fmt.Sprintf("清空表 %s 数据失败: %v", table.Name, err)
 					logError(errMsg)
@@ -230,7 +241,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				}
 
 				// 使用批量插入并获取实际处理的行数
-				currentBatchSize, lastValue, err = postgresConn.BatchInsertDataWithTransactionAndGetLastValue(tx, table.Name, columns, columnTypes, batchInsertSize, primaryKey, rows)
+				currentBatchSize, lastValue, err = postgresConn.BatchInsertDataWithTransactionAndGetLastValue(tx, tableName, columns, columnTypes, batchInsertSize, primaryKey, rows)
 				rows.Close() // 确保关闭rows
 
 				if err != nil {
@@ -312,7 +323,12 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					log("警告: 无法重新获取表 %s 的行数进行校验: %v，将使用初始行数", table.Name, err)
 				}
 
-				pgRowCount, err := postgresConn.GetTableRowCount(table.Name)
+				// 查询PostgreSQL表行数时，根据配置决定是否使用小写表名
+				pgTableName := table.Name
+				if config.Conversion.Options.LowercaseColumns {
+					pgTableName = strings.ToLower(pgTableName)
+				}
+				pgRowCount, err := postgresConn.GetTableRowCount(pgTableName)
 				if err != nil {
 					errMsg := fmt.Sprintf("校验表 %s 数据失败: %v", table.Name, err)
 					logError(errMsg)
