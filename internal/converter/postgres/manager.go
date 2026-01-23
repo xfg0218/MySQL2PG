@@ -616,7 +616,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				wg.Wait() // 等待函数同步完成
 				// 记录结束时间和对象数量
 				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "转换函数",
+					StageName:   "转换库函数",
 					StartTime:   startTime,
 					EndTime:     time.Now(),
 					ObjectCount: len(functions),
@@ -981,7 +981,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				wg.Wait() // 等待函数同步完成
 				// 记录结束时间和对象数量
 				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "转换函数",
+					StageName:   "转换库函数",
 					StartTime:   startTime,
 					EndTime:     time.Now(),
 					ObjectCount: len(functions),
@@ -1438,7 +1438,7 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
 			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换函数 %s 成功\n", progress, m.completedTasks, m.totalTasks, function.Name)
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换库函数 %s 成功\n", progress, m.completedTasks, m.totalTasks, function.Name)
 			m.mutex.Unlock()
 		}
 
