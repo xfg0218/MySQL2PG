@@ -394,6 +394,7 @@ postgresql:
   database: test_db
   test_only: false  # 仅测试连接，不执行转换
   max_conns: 50     # 连接池配置的最大连接数
+  pg_connection_params: search_path=public connect_timeout=100 # PostgreSQL连接参数
 
 # 转换配置
 conversion:
