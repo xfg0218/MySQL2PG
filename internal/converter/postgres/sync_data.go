@@ -104,7 +104,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 					mutex.Lock()
 					overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
 					currentTask := *completedTasks + 1
-					fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 数据成功，共有 0 行数据，%s \n", overallProgress, currentTask, totalTasks, table.Name, validationResult)
+					fmt.Printf("\n进度: %.2f%% (%d/%d) : 同步表 %s 数据成功，共有 0 行数据，%s \n", overallProgress, currentTask, totalTasks, table.Name, validationResult)
 					mutex.Unlock()
 				}
 				// 记录同步完成信息
@@ -361,7 +361,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
 				currentTask := *completedTasks + 1
 				// 先输出一个换行符，确保完成信息显示在新的一行
-				fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 完成，%d 行数据，%s\n", overallProgress, currentTask, totalTasks, table.Name, processedRows, validationResult)
+				fmt.Printf("\n进度: %.2f%% (%d/%d) : 同步表 %s 完成，%d 行数据，%s\n", overallProgress, currentTask, totalTasks, table.Name, processedRows, validationResult)
 				mutex.Unlock()
 			}
 
