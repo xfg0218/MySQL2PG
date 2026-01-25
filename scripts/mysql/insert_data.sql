@@ -18,4 +18,27 @@ INSERT INTO case_03_floats VALUES
 (999.9, 999, 999.90, 999.9, 999.90, 999.90, 999.90, 999.9),
 (2.7, 2.7, 2.70, 2.7, 2.70, 2.70, 2.70, 2.7);
 
+-- 插入数据到 case_10_defaults 表（测试默认值）
+insert into case_10_defaults(c1) values(1);
+
+--  插入数据到 case_11_autoincrement 表（测试自增）
+insert into case_11_autoincrement(big_id,mixed_case) values(1,1);
+insert into case_11_autoincrement(big_id,mixed_case) values(2,2);
+
+-- 插入数据到 case_27_mysql8_check 表（测试检查约束，正常第二条SQL会报错）
+INSERT INTO case_27_mysql8_check (id, age) VALUES (1, 25);
+INSERT INTO case_27_mysql8_check (id, age) VALUES (2, 16);
+
+-- 插入数据到 case_28_mysql8_func_index 表（测试函数索引）
+INSERT INTO case_28_mysql8_func_index (name, data) 
+VALUES ('alice', '{"id": 123, "city": "Beijing"}');
+
+-- 插入数据到 case_29_mysql8_defaults 表（测试默认值）
+INSERT INTO case_29_mysql8_defaults (id) VALUES ('custom-id-123');
+
+-- 插入数据到 case_45_stored_generated 表（测试存储生成列）
+INSERT INTO case_45_stored_generated (id, c1) VALUES (1, 10);
+
+-- 插入数据到 case_59_complex_generated 表（测试复杂生成列）
+INSERT INTO case_59_complex_generated (id, price, quantity, discount)  VALUES (1, 100.00, 5, 10.00);
 
