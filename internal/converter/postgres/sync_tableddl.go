@@ -610,8 +610,17 @@ func cleanTypeDefinition(typeDefinition string) string {
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, "json_object", "json_build_object")
 	lowerTypeDef = reCharsetPrefix.ReplaceAllString(lowerTypeDef, "$1")
 
+	// 处理生成列：PostgreSQL 不允许生成列引用其他生成列
+	// 为了避免这个问题，我们将所有生成列转换为普通列
+	// 虽然这会失去生成列的功能，但至少可以保证同步成功
 	if strings.Contains(strings.ToUpper(lowerTypeDef), "GENERATED ALWAYS AS") {
-		lowerTypeDef = reVirtual.ReplaceAllString(lowerTypeDef, " STORED")
+		// 移除生成列定义，只保留普通列定义
+		// 使用正则表达式匹配所有可能的生成列定义
+		// 匹配模式：GENERATED ALWAYS AS (expression) [VIRTUAL|STORED]
+		reGenerated := regexp.MustCompile(`(?i)\s*GENERATED ALWAYS AS\s*\([^)]*\)\s*(VIRTUAL|STORED)`)
+		lowerTypeDef = reGenerated.ReplaceAllString(lowerTypeDef, "")
+		// 移除可能的空字符串
+		lowerTypeDef = strings.TrimSpace(lowerTypeDef)
 	}
 
 	if strings.HasSuffix(lowerTypeDef, ",") {
