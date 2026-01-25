@@ -60,6 +60,11 @@
 -- 56. case_56_encrypted        - 加密表测试
 -- 57. case_57_column_privileges - 列级权限测试
 -- 58. case_58_subpartition     - 子分区测试
+-- 59. case_59_complex_generated - 复杂生成列测试（包含多函数表达式）
+-- 60. case_60_statistics       - 表统计信息测试（STATS_PERSISTENT等）
+-- 61. case_61_many_columns     - 大量列测试（20+列）
+-- 62. case_62_various_defaults - 多样默认值测试（函数默认值、JSON默认值等）
+-- 63. case_63_charset_collation - 多语言字符集测试（utf8mb4_zh_0900_as_cs等）
 
 -- 创建整数类型表
 DROP TABLE IF EXISTS case_01_integers;
@@ -591,3 +596,79 @@ CREATE TABLE case_58_subpartition (
     PARTITION p2020 VALUES LESS THAN (2021),
     PARTITION p2021 VALUES LESS THAN (2022)
   );
+
+-- 创建复杂生成列表（包含多函数表达式）
+DROP TABLE IF EXISTS case_59_complex_generated;
+CREATE TABLE case_59_complex_generated (
+  id int,
+  price decimal(10,2),
+  quantity int,
+  discount decimal(5,2),
+  subtotal decimal(12,2) GENERATED ALWAYS AS ((price * quantity)) STORED,
+  total decimal(12,2) GENERATED ALWAYS AS ((price * quantity) * (1 - discount / 100)) STORED,
+  formatted_total varchar(50)
+);
+
+-- 创建带多列统计信息的表
+DROP TABLE IF EXISTS case_60_statistics;
+CREATE TABLE case_60_statistics (
+  id int PRIMARY KEY,
+  category varchar(50),
+  subcategory varchar(50),
+  value decimal(10,2)
+) ENGINE=InnoDB
+  STATS_PERSISTENT=1
+  STATS_AUTO_RECALC=1
+  STATS_SAMPLE_PAGES=10;
+
+-- 创建带大量列的表
+DROP TABLE IF EXISTS case_61_many_columns;
+CREATE TABLE case_61_many_columns (
+  id int PRIMARY KEY,
+  col_1 varchar(10),
+  col_2 varchar(11),
+  col_3 varchar(12),
+  col_4 varchar(13),
+  col_5 varchar(100),
+  col_6 varchar(120),
+  col_7 varchar(180),
+  col_8 varchar(200),
+  col_9 varchar(500),
+  col_10 varchar(510),
+  col_11 varchar(680),
+  col_12 varchar(10),
+  col_13 varchar(10),
+  col_14 varchar(10),
+  col_15 varchar(10),
+  col_16 varchar(10),
+  col_17 varchar(10),
+  col_18 varchar(10),
+  col_19 varchar(10),
+  col_20 varchar(10)
+) ENGINE=InnoDB;
+
+-- 创建带不同默认值类型的表
+DROP TABLE IF EXISTS case_62_various_defaults;
+CREATE TABLE case_62_various_defaults (
+  id int PRIMARY KEY AUTO_INCREMENT,
+  name varchar(50) DEFAULT 'Unknown',
+  age int DEFAULT 18,
+  active boolean DEFAULT true,
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  price decimal(10,2) DEFAULT 0.00,
+  quantity int DEFAULT 1,
+  status varchar(20) DEFAULT 'pending',
+  data json DEFAULT (JSON_OBJECT('key', 'value')),
+  uuid char(36) DEFAULT (UUID())
+) ENGINE=InnoDB;
+
+-- 创建带字符集和排序规则的复杂表
+DROP TABLE IF EXISTS case_63_charset_collation;
+CREATE TABLE case_63_charset_collation (
+  id int PRIMARY KEY,
+  name_en varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
+  name_zh varchar(50) CHARACTER SET utf8mb4,
+  name_de varchar(50) CHARACTER SET utf8mb4,
+  code varchar(10) CHARACTER SET ascii COLLATE ascii_bin
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

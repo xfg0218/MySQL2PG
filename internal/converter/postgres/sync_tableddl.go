@@ -839,25 +839,42 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 						}
 					}
 				}
-				// 处理表达式中引用其他生成列的情况
-				for genCol, genExpr := range generatedColumns {
-					// 移除 genExpr 中的引号，避免引号嵌套
-					genExprNoQuotes := strings.ReplaceAll(genExpr, "\"", "")
-					// 移除 genCol 中的引号，用于匹配
-					genColNoQuotes := strings.ReplaceAll(genCol, "\"", "")
-					// 替换引用，确保表达式被正确地嵌套在括号中
-					expr = strings.ReplaceAll(expr, "\""+genColNoQuotes+"\"", genExprNoQuotes)
-					expr = strings.ReplaceAll(expr, genColNoQuotes, genExprNoQuotes)
-				}
-				// 存储当前生成列的表达式
-				generatedColumns[columnName] = expr
-				// 提取数据类型部分
-				reType := regexp.MustCompile(`^[^\s]+`)
-				typeMatch := reType.FindStringSubmatch(typeDefinition)
-				if len(typeMatch) > 0 {
-					dataType := typeMatch[0]
-					// 替换类型定义中的表达式，确保括号正确
-					typeDefinition = dataType + " GENERATED ALWAYS AS (" + expr + ") STORED"
+
+				// 检查表达式是否包含FORMAT函数（支持嵌套在其他函数中）
+				reFormatFunc := regexp.MustCompile(`(?i)format\s*\(`)
+				hasFormatFunc := reFormatFunc.MatchString(expr) || reFormatFunc.MatchString(typeDefinition)
+
+				if hasFormatFunc {
+					// 对于包含FORMAT函数的生成列，转换为普通列
+					// 提取数据类型部分
+					reType := regexp.MustCompile(`^[^\s]+`)
+					typeMatch := reType.FindStringSubmatch(typeDefinition)
+					if len(typeMatch) > 0 {
+						dataType := typeMatch[0]
+						// 转换为普通列
+						typeDefinition = dataType
+					}
+				} else {
+					// 处理表达式中引用其他生成列的情况
+					for genCol, genExpr := range generatedColumns {
+						// 移除 genExpr 中的引号，避免引号嵌套
+						genExprNoQuotes := strings.ReplaceAll(genExpr, "\"", "")
+						// 移除 genCol 中的引号，用于匹配
+						genColNoQuotes := strings.ReplaceAll(genCol, "\"", "")
+						// 替换引用，确保表达式被正确地嵌套在括号中
+						expr = strings.ReplaceAll(expr, "\""+genColNoQuotes+"\"", genExprNoQuotes)
+						expr = strings.ReplaceAll(expr, genColNoQuotes, genExprNoQuotes)
+					}
+					// 存储当前生成列的表达式
+					generatedColumns[columnName] = expr
+					// 提取数据类型部分
+					reType := regexp.MustCompile(`^[^\s]+`)
+					typeMatch := reType.FindStringSubmatch(typeDefinition)
+					if len(typeMatch) > 0 {
+						dataType := typeMatch[0]
+						// 替换类型定义中的表达式，确保括号正确
+						typeDefinition = dataType + " GENERATED ALWAYS AS (" + expr + ") STORED"
+					}
 				}
 			}
 		}
