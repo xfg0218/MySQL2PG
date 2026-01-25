@@ -60,6 +60,11 @@
 -- 56. case_56_encrypted        - 加密表测试
 -- 57. case_57_column_privileges - 列级权限测试
 -- 58. case_58_subpartition     - 子分区测试
+-- 59. case_59_complex_generated - 复杂生成列测试（包含多函数表达式）
+-- 60. case_60_statistics       - 表统计信息测试（STATS_PERSISTENT等）
+-- 61. case_61_many_columns     - 大量列测试（20+列）
+-- 62. case_62_various_defaults - 多样默认值测试（函数默认值、JSON默认值等）
+-- 63. case_63_charset_collation - 多语言字符集测试（utf8mb4_zh_0900_as_cs等）
 
 -- 创建整数类型表
 DROP TABLE IF EXISTS case_01_integers;
