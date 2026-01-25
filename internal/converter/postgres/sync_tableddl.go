@@ -360,7 +360,7 @@ func convertDataType(mysqlType string) (postgresType string, isAutoIncrement boo
 }
 
 // processColumnDefinition 处理列定义，提取列名、类型定义和注释
-func processColumnDefinition(line string, lowercaseColumns bool) (columnName string, typeDefinition string, columnComment string, isConstraint bool, isIncompleteType bool, err error) {
+func processColumnDefinition(line string, lowercaseColumns bool) (columnName string, typeDefinition string, columnComment string, isConstraint bool, isCheckConstraint bool, checkConstraintDefinition string, isIncompleteType bool, err error) {
 	line = strings.ReplaceAll(line, " ON UPDATE CURRENT_TIMESTAMP", "")
 	line = strings.ReplaceAll(line, " unsigned", "")
 	line = strings.ReplaceAll(line, " UNSIGNED", "")
@@ -420,9 +420,20 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 			}
 		}
 		if !isDataType {
+			// 检查是否是 CHECK 约束
+			if strings.Contains(upperLine, "CHECK") {
+				isCheckConstraint = true
+				checkConstraintDefinition = line
+			}
 			isConstraint = true
 			return
 		}
+	} else if strings.HasPrefix(upperLine, "CHECK") {
+		// 直接以 CHECK 开头的约束
+		isCheckConstraint = true
+		checkConstraintDefinition = line
+		isConstraint = true
+		return
 	}
 
 	if strings.HasPrefix(line, `"`) {
@@ -685,6 +696,7 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 	lines := strings.Split(columnsDefinition, "\n")
 
 	var columnDefinitions []string
+	var checkConstraints []string
 	var primaryKeyColumn string
 	columnNames := make(map[string]string)
 	// 存储生成列的表达式，用于处理生成列引用其他生成列的情况
@@ -721,12 +733,6 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		}
 
 		upperTrimmedLine := strings.ToUpper(trimmedLine)
-		if strings.HasPrefix(strings.TrimSpace(upperTrimmedLine), "CONSTRAINT ") {
-			continue
-		}
-		if strings.HasPrefix(upperTrimmedLine, "CONSTRAINT") || strings.HasPrefix(upperTrimmedLine, "FOREIGN KEY") {
-			continue
-		}
 
 		if reIndexPattern.MatchString(upperTrimmedLine) ||
 			strings.Contains(upperTrimmedLine, "FOREIGN KEY") ||
@@ -747,13 +753,15 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 			continue
 		}
 
-		if strings.HasPrefix(strings.ToUpper(trimmedLine), "CONSTRAINT ") {
-			continue
-		}
-
-		columnName, typeDefinition, columnComment, isConstraint, isIncompleteType, err := processColumnDefinition(trimmedLine, lowercaseColumns)
+		columnName, typeDefinition, columnComment, isConstraint, isCheckConstraint, checkConstraintDefinition, isIncompleteType, err := processColumnDefinition(trimmedLine, lowercaseColumns)
 		if err != nil {
 			return nil, err
+		}
+
+		if isCheckConstraint && checkConstraintDefinition != "" {
+			// 保留 CHECK 约束
+			checkConstraints = append(checkConstraints, checkConstraintDefinition)
+			continue
 		}
 
 		if isConstraint {
@@ -895,13 +903,15 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		result.WriteString(fmt.Sprintf(`CREATE TABLE "%s" (`, tableName))
 	}
 
-	for i, columnDef := range columnDefinitions {
-		if i > 0 {
-			result.WriteString(",")
-		}
-		result.WriteString(fmt.Sprintf(`%s`, columnDef))
+	// 收集所有表元素（列定义、主键约束、CHECK 约束）
+	var tableElements []string
+
+	// 添加列定义
+	for _, columnDef := range columnDefinitions {
+		tableElements = append(tableElements, columnDef)
 	}
 
+	// 添加主键约束
 	if primaryKeyColumn != "" {
 		if originalColumnName, ok := columnNames[strings.ToLower(primaryKeyColumn)]; ok {
 			primaryKeyColumn = originalColumnName
@@ -909,7 +919,41 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 				primaryKeyColumn = strings.ToLower(primaryKeyColumn)
 			}
 		}
-		result.WriteString(fmt.Sprintf(`,  PRIMARY KEY ("%s")`, primaryKeyColumn))
+		primaryKeyDef := fmt.Sprintf(`PRIMARY KEY ("%s")`, primaryKeyColumn)
+		tableElements = append(tableElements, primaryKeyDef)
+	}
+
+	// 添加 CHECK 约束
+	if len(checkConstraints) > 0 {
+		// 去重 CHECK 约束，避免重复添加
+		uniqueCheckConstraints := make([]string, 0)
+		seenConstraints := make(map[string]bool)
+
+		for _, constraint := range checkConstraints {
+			// 移除 ENFORCED/NOT ENFORCED 关键字，因为 PostgreSQL 不支持
+			constraint = strings.ReplaceAll(constraint, " ENFORCED", "")
+			constraint = strings.ReplaceAll(constraint, " NOT ENFORCED", "")
+			constraint = strings.TrimSpace(constraint)
+
+			// 检查约束是否已经添加过
+			if !seenConstraints[constraint] {
+				seenConstraints[constraint] = true
+				uniqueCheckConstraints = append(uniqueCheckConstraints, constraint)
+			}
+		}
+
+		// 添加唯一的 CHECK 约束
+		for _, checkConstraint := range uniqueCheckConstraints {
+			tableElements = append(tableElements, checkConstraint)
+		}
+	}
+
+	// 构建最终的表定义
+	for i, element := range tableElements {
+		if i > 0 {
+			result.WriteString(",")
+		}
+		result.WriteString(fmt.Sprintf(`%s`, element))
 	}
 
 	result.WriteString(`)`)
