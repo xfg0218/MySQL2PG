@@ -1,3 +1,66 @@
+-- MySQL2PG 测试表定义文件
+-- 包含各种MySQL语法场景，用于测试MySQL到PostgreSQL的转换功能
+-- 
+-- 表列表及其特点：
+-- 1. case_01_integers         - 整数类型测试（tinyint, smallint, mediumint, int, bigint）
+-- 2. case_02_boolean          - 布尔类型测试（tinyint(1) 转换为 BOOLEAN）
+-- 3. case_03_floats           - 浮点数类型测试（float, double, decimal, numeric）
+-- 4. case_04_mb3_suffix       - 字符类型测试（mb3后缀）
+-- 5. case_05_charsets         - 字符集类型测试（utf8, utf8mb4, latin1, utf16）
+-- 6. case_06_collates         - 排序规则类型测试（utf8mb4_general_ci, utf8_bin等）
+-- 7. case_07_complex_charsets - 复杂字符集类型测试
+-- 8. case_08_json             - JSON类型测试
+-- 9. case_09_datetime         - 日期时间类型测试（date, time, datetime, timestamp, year）
+-- 10. case_10_defaults        - 默认值类型测试
+-- 11. case_11_autoincrement   - 自增类型测试（AUTO_INCREMENT）
+-- 12. case_12_unsigned        - 无符号类型测试（unsigned, zerofill）
+-- 13. case_13_enum_set        - 枚举和集合类型测试（enum, set）
+-- 14. case_14_binary          - 二进制类型测试（binary, varbinary, blob系列）
+-- 15. case_15_options         - 表选项类型测试（ENGINE, CHARSET, COLLATE, ROW_FORMAT）
+-- 16. case_16_partition        - 分区类型测试（RANGE分区）
+-- 17. case_17_temp            - 临时表类型测试
+-- 18. case_18_quotes          - 引号类型测试（反引号包围的表名和列名）
+-- 19. case_19_comments         - 注释类型测试（列注释和表注释）
+-- 20. case_20_constraints      - 约束类型测试（PRIMARY KEY, KEY, UNIQUE KEY, INDEX）
+-- 21. case_21_virtual          - 虚拟列类型测试（VIRTUAL生成列）
+-- 22. case_22_spatial          - 空间类型测试（geometry, point, linestring等）
+-- 23. case_23_weird_syntax     - 怪异语法类型测试（不规则空格、大小写混合等）
+-- 24. case_24_edge_cases       - 边缘情况类型测试
+-- 25. case_25_mysql8_reserved  - MySQL 8.0保留字测试（rank, system, groups等）
+-- 26. case_26_mysql8_invisible - MySQL 8.0不可见列测试（INVISIBLE列）
+-- 27. case_27_mysql8_check     - MySQL 8.0检查约束测试（CHECK约束）
+-- 28. case_28_mysql8_func_index - MySQL 8.0函数索引测试
+-- 29. case_29_mysql8_defaults  - MySQL 8.0默认值测试（函数默认值）
+-- 30. case_30_mysql8_collations - MySQL 8.0字符集和排序规则测试
+-- 31. case_31_sys_utf8mb3      - MySQL 8.0系统表测试（utf8mb3字符集）
+-- 32. case_32_complex_generated - MySQL 8.0复杂生成列测试（包含CASE表达式）
+-- 33. case_33_desc_index       - MySQL 8.0降序索引测试
+-- 34. case_34_table_options    - MySQL 8.0表选项测试
+-- 35. case_35_enum_charset     - MySQL 8.0枚举和集合字符集测试
+-- 36. case_36_uppercase        - MySQL 8.0大写表名测试
+-- 37. case_37_hump             - MySQL 8.0驼峰表名测试
+-- 38. case_38_snake            - MySQL 8.0蛇形表名测试
+-- 39. case_39_underscore       - MySQL 8.0下划线表名测试
+-- 40. case_40_default          - MySQL 8.0默认值测试
+-- 41. case_41_foreign_key      - 外键约束测试
+-- 42. case_42_fulltext         - 全文索引测试
+-- 43. case_43_spatial_index    - 空间索引测试
+-- 44. case_44_composite_pk     - 复合主键测试
+-- 45. case_45_stored_generated - 存储生成列测试（STORED和VIRTUAL）
+-- 46. case_46_myisam           - MyISAM存储引擎测试
+-- 47. case_47_memory           - MEMORY存储引擎测试
+-- 48. case_48_index_types      - 不同索引类型测试（BTREE, HASH）
+-- 49. case_49_list_partition   - LIST分区测试
+-- 50. case_50_hash_partition   - HASH分区测试
+-- 51. case_51_copy_like        - 表复制测试（CREATE TABLE LIKE）
+-- 52. case_52_copy_as          - 表数据复制测试（CREATE TABLE AS SELECT）
+-- 53. case_53_deferred_constraint - 延迟约束测试
+-- 54. case_54_tablespace       - 表空间测试
+-- 55. case_55_compressed       - 压缩表测试
+-- 56. case_56_encrypted        - 加密表测试
+-- 57. case_57_column_privileges - 列级权限测试
+-- 58. case_58_subpartition     - 子分区测试
+
 -- 创建整数类型表
 DROP TABLE IF EXISTS case_01_integers;
 CREATE TABLE case_01_integers (
@@ -375,3 +438,156 @@ CREATE TABLE `CASE_40_DEFAULT` (
   `age` int DEFAULT 0,
   `email` varchar(100) DEFAULT 'unknown@example.com'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 创建外键约束表
+DROP TABLE IF EXISTS case_41_foreign_key;
+DROP TABLE IF EXISTS case_41_parent;
+CREATE TABLE case_41_parent (
+  id int PRIMARY KEY,
+  name varchar(50)
+) ENGINE=InnoDB;
+
+CREATE TABLE case_41_foreign_key (
+  id int PRIMARY KEY,
+  parent_id int,
+  name varchar(50),
+  FOREIGN KEY (parent_id) REFERENCES case_41_parent(id)
+    ON DELETE CASCADE
+    ON UPDATE SET NULL
+) ENGINE=InnoDB;
+
+-- 创建全文索引表
+DROP TABLE IF EXISTS case_42_fulltext;
+CREATE TABLE case_42_fulltext (
+  id int PRIMARY KEY,
+  title varchar(100),
+  content text,
+  FULLTEXT KEY ft_title_content (title, content)
+) ENGINE=InnoDB;
+
+-- 创建空间索引表
+DROP TABLE IF EXISTS case_43_spatial_index;
+CREATE TABLE case_43_spatial_index (
+  id int PRIMARY KEY,
+  location point
+) ENGINE=InnoDB;
+
+-- 创建复合主键表
+DROP TABLE IF EXISTS case_44_composite_pk;
+CREATE TABLE case_44_composite_pk (
+  id1 int,
+  id2 int,
+  name varchar(50),
+  PRIMARY KEY (id1, id2)
+) ENGINE=InnoDB;
+
+-- 创建存储生成列表
+DROP TABLE IF EXISTS case_45_stored_generated;
+CREATE TABLE case_45_stored_generated (
+  id int,
+  c1 int,
+  c2 int GENERATED ALWAYS AS (c1 * 2) STORED,
+  c3 int GENERATED ALWAYS AS (c1 + c2) VIRTUAL
+) ENGINE=InnoDB;
+
+-- 创建MyISAM存储引擎表
+DROP TABLE IF EXISTS case_46_myisam;
+CREATE TABLE case_46_myisam (
+  id int PRIMARY KEY,
+  name varchar(50)
+) ENGINE=MyISAM;
+
+-- 创建MEMORY存储引擎表
+DROP TABLE IF EXISTS case_47_memory;
+CREATE TABLE case_47_memory (
+  id int PRIMARY KEY,
+  name varchar(50)
+) ENGINE=MEMORY;
+
+-- 创建不同索引类型表
+DROP TABLE IF EXISTS case_48_index_types;
+CREATE TABLE case_48_index_types (
+  id int PRIMARY KEY,
+  name varchar(50),
+  value int,
+  KEY idx_name_btree (name) USING BTREE,
+  KEY idx_value_hash (value) USING HASH
+) ENGINE=InnoDB;
+
+-- 创建LIST分区表
+DROP TABLE IF EXISTS case_49_list_partition;
+CREATE TABLE case_49_list_partition (
+  id int,
+  category int
+) PARTITION BY LIST (category) (
+  PARTITION p0 VALUES IN (1, 2, 3),
+  PARTITION p1 VALUES IN (4, 5, 6)
+);
+
+-- 创建HASH分区表
+DROP TABLE IF EXISTS case_50_hash_partition;
+CREATE TABLE case_50_hash_partition (
+  id int,
+  name varchar(50)
+) PARTITION BY HASH (id) PARTITIONS 4;
+
+-- 创建表复制测试
+DROP TABLE IF EXISTS case_51_copy_like;
+CREATE TABLE case_51_copy_like LIKE case_01_integers;
+
+-- 创建表数据复制测试
+DROP TABLE IF EXISTS case_52_copy_as;
+CREATE TABLE case_52_copy_as AS
+SELECT * FROM case_01_integers WHERE 1=0;
+
+-- 创建延迟约束表
+DROP TABLE IF EXISTS case_53_deferred_constraint;
+CREATE TABLE case_53_deferred_constraint (
+  id int PRIMARY KEY,
+  name varchar(50) UNIQUE
+) ENGINE=InnoDB;
+
+-- 创建表空间表
+DROP TABLE IF EXISTS case_54_tablespace;
+CREATE TABLE case_54_tablespace (
+  id int PRIMARY KEY,
+  name varchar(50)
+) ENGINE=InnoDB
+  TABLESPACE=`innodb_file_per_table`;
+
+-- 创建压缩表
+DROP TABLE IF EXISTS case_55_compressed;
+CREATE TABLE case_55_compressed (
+  id int PRIMARY KEY,
+  data text
+) ENGINE=InnoDB
+  ROW_FORMAT=COMPRESSED
+  KEY_BLOCK_SIZE=8;
+
+-- 创建加密表
+DROP TABLE IF EXISTS case_56_encrypted;
+CREATE TABLE case_56_encrypted (
+  id int PRIMARY KEY,
+  sensitive_data varchar(100)
+) ENGINE=InnoDB;
+
+-- 创建列级权限表
+DROP TABLE IF EXISTS case_57_column_privileges;
+CREATE TABLE case_57_column_privileges (
+  id int PRIMARY KEY,
+  public_data varchar(50),
+  sensitive_data varchar(50)
+) ENGINE=InnoDB;
+
+-- 创建子分区表
+DROP TABLE IF EXISTS case_58_subpartition;
+CREATE TABLE case_58_subpartition (
+  id int,
+  year int,
+  month int
+) PARTITION BY RANGE (year)
+  SUBPARTITION BY HASH (month)
+  SUBPARTITIONS 12 (
+    PARTITION p2020 VALUES LESS THAN (2021),
+    PARTITION p2021 VALUES LESS THAN (2022)
+  );
