@@ -51,7 +51,7 @@ var (
 	reTableComment = regexp.MustCompile(`(?i)\s+COMMENT\s*=\s*'([^']*)'`)
 
 	// 索引相关正则
-	reIndexPattern = regexp.MustCompile(`^(KEY|INDEX|UNIQUE KEY|UNIQUE INDEX|"KEY"|"INDEX"|"UNIQUE KEY"|"UNIQUE INDEX")\s+(["a-zA-Z_]["a-zA-Z0-9_"]*)\s*\(["a-zA-Z_]`)
+	reIndexPattern = regexp.MustCompile(`^(KEY|INDEX|UNIQUE KEY|UNIQUE INDEX|"KEY"|"INDEX"|"UNIQUE KEY"|"UNIQUE INDEX"|FULLTEXT|"FULLTEXT")\s+("[a-zA-Z_]["a-zA-Z0-9_"]*)\s*\(["a-zA-Z_]`)
 	rePrimaryKey   = regexp.MustCompile(`PRIMARY KEY\s*\(\s*(\w+)\s*\)`)
 
 	// mb3相关正则
@@ -405,7 +405,7 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 	}
 
 	upperLine := strings.ToUpper(line)
-	if strings.HasPrefix(upperLine, "CONSTRAINT") || strings.HasPrefix(upperLine, "KEY") || strings.HasPrefix(upperLine, "INDEX") {
+	if strings.HasPrefix(upperLine, "CONSTRAINT") || strings.HasPrefix(upperLine, "KEY") || strings.HasPrefix(upperLine, "INDEX") || strings.HasPrefix(upperLine, "FULLTEXT") {
 		parts := strings.Fields(line)
 		if len(parts) < 2 {
 			isConstraint = true
@@ -610,17 +610,55 @@ func cleanTypeDefinition(typeDefinition string) string {
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, "json_object", "json_build_object")
 	lowerTypeDef = reCharsetPrefix.ReplaceAllString(lowerTypeDef, "$1")
 
-	// 处理生成列：PostgreSQL 不允许生成列引用其他生成列
-	// 为了避免这个问题，我们将所有生成列转换为普通列
-	// 虽然这会失去生成列的功能，但至少可以保证同步成功
+	// 处理生成列：PostgreSQL 不支持 VIRTUAL 关键字，只支持 STORED 关键字
+	// 为了保留生成列的功能，我们将 VIRTUAL 转换为 STORED
+	// 注意：只处理括号外的 VIRTUAL 关键字，避免修改括号内的内容
 	if strings.Contains(strings.ToUpper(lowerTypeDef), "GENERATED ALWAYS AS") {
-		// 移除生成列定义，只保留普通列定义
-		// 使用正则表达式匹配所有可能的生成列定义
-		// 匹配模式：GENERATED ALWAYS AS (expression) [VIRTUAL|STORED]
-		reGenerated := regexp.MustCompile(`(?i)\s*GENERATED ALWAYS AS\s*\([^)]*\)\s*(VIRTUAL|STORED)`)
-		lowerTypeDef = reGenerated.ReplaceAllString(lowerTypeDef, "")
+		// 使用逐字符处理的方式，只替换括号外的 VIRTUAL 关键字
+		var result strings.Builder
+		inParen := 0
+		i := 0
+		for i < len(lowerTypeDef) {
+			r := rune(lowerTypeDef[i])
+			switch r {
+			case '(':
+				inParen++
+				result.WriteRune(r)
+				i++
+			case ')':
+				if inParen > 0 {
+					inParen--
+				}
+				result.WriteRune(r)
+				i++
+			default:
+				if inParen == 0 && strings.ToUpper(string(r)) == "V" {
+					// 检查是否是 VIRTUAL 关键字
+					if i+6 < len(lowerTypeDef) && strings.ToUpper(lowerTypeDef[i:i+7]) == "VIRTUAL" {
+						result.WriteString("STORED")
+						i += 7 // 跳过整个 VIRTUAL 关键字
+					} else {
+						result.WriteRune(r)
+						i++
+					}
+				} else {
+					result.WriteRune(r)
+					i++
+				}
+			}
+		}
+		lowerTypeDef = result.String()
+
+		// 移除可能的多余空格
+		lowerTypeDef = regexp.MustCompile(`\s+`).ReplaceAllString(lowerTypeDef, " ")
 		// 移除可能的空字符串
 		lowerTypeDef = strings.TrimSpace(lowerTypeDef)
+
+		// 将生成列的关键字转换为大写
+		reGenerated := regexp.MustCompile(`(?i)(generated\s+always\s+as)`)
+		lowerTypeDef = reGenerated.ReplaceAllString(lowerTypeDef, "GENERATED ALWAYS AS")
+		reStored := regexp.MustCompile(`(?i)(\bSTORED\b)`)
+		lowerTypeDef = reStored.ReplaceAllString(lowerTypeDef, "STORED")
 	}
 
 	if strings.HasSuffix(lowerTypeDef, ",") {
@@ -649,6 +687,8 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 	var columnDefinitions []string
 	var primaryKeyColumn string
 	columnNames := make(map[string]string)
+	// 存储生成列的表达式，用于处理生成列引用其他生成列的情况
+	generatedColumns := make(map[string]string)
 
 	var incompleteTypeDef bool
 	var partialTypeDef string
@@ -772,6 +812,56 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 			}
 		}
 
+		// 处理生成列：提取表达式并存储，处理引用其他生成列的情况
+		if strings.Contains(strings.ToUpper(typeDefinition), "GENERATED ALWAYS AS") {
+			// 提取生成列的表达式（处理嵌套括号）
+			expr, err := extractGeneratedColumnExpr(typeDefinition)
+			if err == nil && expr != "" {
+				// 移除表达式中可能包含的 stored 关键字
+				expr = strings.ReplaceAll(strings.ToLower(expr), "stored", "")
+				expr = strings.TrimSpace(expr)
+				// 移除表达式中可能包含的多余括号（只移除外层的一对括号）
+				expr = strings.TrimSpace(expr)
+				if strings.HasPrefix(expr, "(") && strings.HasSuffix(expr, ")") {
+					// 检查括号是否匹配
+					bracketDepth := 0
+					for i, char := range expr {
+						if char == '(' {
+							bracketDepth++
+						} else if char == ')' {
+							bracketDepth--
+							if bracketDepth == 0 && i == len(expr)-1 {
+								// 括号匹配，移除外层括号
+								expr = expr[1 : len(expr)-1]
+								expr = strings.TrimSpace(expr)
+								break
+							}
+						}
+					}
+				}
+				// 处理表达式中引用其他生成列的情况
+				for genCol, genExpr := range generatedColumns {
+					// 移除 genExpr 中的引号，避免引号嵌套
+					genExprNoQuotes := strings.ReplaceAll(genExpr, "\"", "")
+					// 移除 genCol 中的引号，用于匹配
+					genColNoQuotes := strings.ReplaceAll(genCol, "\"", "")
+					// 替换引用，确保表达式被正确地嵌套在括号中
+					expr = strings.ReplaceAll(expr, "\""+genColNoQuotes+"\"", genExprNoQuotes)
+					expr = strings.ReplaceAll(expr, genColNoQuotes, genExprNoQuotes)
+				}
+				// 存储当前生成列的表达式
+				generatedColumns[columnName] = expr
+				// 提取数据类型部分
+				reType := regexp.MustCompile(`^[^\s]+`)
+				typeMatch := reType.FindStringSubmatch(typeDefinition)
+				if len(typeMatch) > 0 {
+					dataType := typeMatch[0]
+					// 替换类型定义中的表达式，确保括号正确
+					typeDefinition = dataType + " GENERATED ALWAYS AS (" + expr + ") STORED"
+				}
+			}
+		}
+
 		typeDefinition = cleanTypeDefinition(typeDefinition)
 		newColumnDefinition := fmt.Sprintf(`"%s" %s`, columnName, typeDefinition)
 		columnDefinitions = append(columnDefinitions, newColumnDefinition)
@@ -818,6 +908,48 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		ColumnNames:    columnNamesMap,
 		ColumnComments: columnCommentsMap,
 	}, nil
+}
+
+// extractGeneratedColumnExpr 提取生成列的表达式，处理嵌套括号
+func extractGeneratedColumnExpr(typeDefinition string) (string, error) {
+	// 找到 GENERATED ALWAYS AS 的位置
+	generatedIndex := strings.Index(strings.ToUpper(typeDefinition), "GENERATED ALWAYS AS")
+	if generatedIndex == -1 {
+		return "", fmt.Errorf("未找到 GENERATED ALWAYS AS 关键字")
+	}
+
+	// 找到第一个左括号
+	openParenIndex := strings.Index(typeDefinition[generatedIndex:], "(")
+	if openParenIndex == -1 {
+		return "", fmt.Errorf("未找到表达式开始的左括号")
+	}
+	openParenIndex += generatedIndex
+
+	// 从左括号开始，跟踪括号深度，找到匹配的右括号
+	exprStart := openParenIndex + 1
+	bracketDepth := 1
+	exprEnd := -1
+
+	for i := exprStart; i < len(typeDefinition); i++ {
+		char := typeDefinition[i]
+		if char == '(' {
+			bracketDepth++
+		} else if char == ')' {
+			bracketDepth--
+			if bracketDepth == 0 {
+				exprEnd = i
+				break
+			}
+		}
+	}
+
+	if exprEnd == -1 {
+		return "", fmt.Errorf("未找到表达式结束的右括号")
+	}
+
+	// 提取表达式
+	expr := typeDefinition[exprStart:exprEnd]
+	return strings.TrimSpace(expr), nil
 }
 
 // GenerateColumnCommentsSQL 生成PostgreSQL列注释SQL
