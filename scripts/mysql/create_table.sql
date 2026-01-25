@@ -621,31 +621,76 @@ CREATE TABLE case_60_statistics (
   STATS_AUTO_RECALC=1
   STATS_SAMPLE_PAGES=10;
 
--- 创建带大量列的表
+-- 创建带大量列的表（包含 MySQL 所有支持类型及其最小和最大长度）
 DROP TABLE IF EXISTS case_61_many_columns;
 CREATE TABLE case_61_many_columns (
   id int PRIMARY KEY,
-  col_1 varchar(10),
-  col_2 varchar(11),
-  col_3 varchar(12),
-  col_4 varchar(13),
-  col_5 varchar(100),
-  col_6 varchar(120),
-  col_7 varchar(180),
-  col_8 varchar(200),
-  col_9 varchar(500),
-  col_10 varchar(510),
-  col_11 varchar(680),
-  col_12 varchar(10),
-  col_13 varchar(10),
-  col_14 varchar(10),
-  col_15 varchar(10),
-  col_16 varchar(10),
-  col_17 varchar(10),
-  col_18 varchar(10),
-  col_19 varchar(10),
-  col_20 varchar(10)
-) ENGINE=InnoDB;
+  -- 整数类型
+  tinyint_min tinyint,
+  tinyint_max tinyint,
+  smallint_min smallint,
+  smallint_max smallint,
+  mediumint_min mediumint,
+  mediumint_max mediumint,
+  int_min int,
+  int_max int,
+  bigint_min bigint,
+  bigint_max bigint,
+  
+  -- 浮点数类型 (注意: float/double的(M,D)语法也受限制, 通常直接写float)
+  float_min float,
+  float_max float,
+  double_min double,
+  double_max double,
+  decimal_min decimal(1,0),
+  decimal_max decimal(65,30),
+  
+  -- 字符串类型
+  char_min char(1),
+  char_max char(255),
+  varchar_min varchar(1),
+  varchar_max varchar(255),
+  text_min text,
+  text_max text,
+  tinytext_min tinytext,
+  tinytext_max tinytext,
+  mediumtext_min mediumtext,
+  mediumtext_max mediumtext,
+  longtext_min longtext,
+  longtext_max longtext,
+  
+  -- 二进制类型
+  binary_min binary(1),
+  binary_max binary(255),
+  varbinary_min varbinary(1),
+  varbinary_max varbinary(255),
+  blob_min blob,
+  blob_max blob,
+  tinyblob_min tinyblob,
+  tinyblob_max tinyblob,
+  mediumblob_min mediumblob,
+  mediumblob_max mediumblob,
+  longblob_min longblob,
+  longblob_max longblob,
+  
+  -- 日期时间类型
+  date_col date,
+  time_col time,
+  datetime_col datetime,
+  timestamp_col timestamp,
+  year_col year,
+  
+  -- 其他类型
+  boolean_col boolean,
+  enum_min enum('a'),
+  enum_max enum('a', 'b', 'c', 'd', 'e'),
+  set_min set('x'),
+  set_max set('x', 'y', 'z'),
+  json_col json
+  
+) ENGINE=InnoDB 
+  DEFAULT CHARSET=utf8mb4 -- 支持存储 emoji 和中文
+  COLLATE=utf8mb4_unicode_ci;
 
 -- 创建带不同默认值类型的表
 DROP TABLE IF EXISTS case_62_various_defaults;
@@ -672,3 +717,4 @@ CREATE TABLE case_63_charset_collation (
   name_de varchar(50) CHARACTER SET utf8mb4,
   code varchar(10) CHARACTER SET ascii COLLATE ascii_bin
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
