@@ -31,3 +31,4 @@ import (​
 - 读取 MySQL 代码需要兼容 MySQL 5.x 和 MySQL 8.x 和 MySQL 9.x 的语法
 - 写入 PostgreSQL 代码需要兼容 PostgreSQL 9.x 以上的语法
 - 代码需要深度分析，并给出每一步的分析的过程，需要使用正则匹配的方式生成，来适配通用的语法
+- 代码注释需要使用中文
