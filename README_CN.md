@@ -1,3 +1,25 @@
+<div align="center">
+
+[![License][license-badge]][license-url] [![Stars][stars-badge]][stars-url] [![Last Commit][last-commit-badge]][commits-url] [![Language][go-badge]][repo-url] [![Go Version][go-version-badge]][go-url]
+
+</div>
+
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
+[license-url]: https://github.com/xfg0218/MySQL2PG/blob/main/LICENSE
+
+[stars-badge]: https://img.shields.io/github/stars/xfg0218/MySQL2PG?style=for-the-badge&label=Stars
+[stars-url]: https://github.com/xfg0218/MySQL2PG/stargazers
+
+[last-commit-badge]: https://img.shields.io/github/last-commit/xfg0218/MySQL2PG?style=for-the-badge&label=Last%20Commit
+[commits-url]: https://github.com/xfg0218/MySQL2PG/commits/main
+
+[go-badge]: https://img.shields.io/github/languages/top/xfg0218/MySQL2PG?style=for-the-badge&logo=go&logoColor=white
+[repo-url]: https://github.com/xfg0218/MySQL2PG
+
+[go-version-badge]: https://img.shields.io/badge/Go-1.24%2B-blue?style=for-the-badge&logo=go
+[go-url]: https://go.dev/dl/
+
+
 [English](README.md) | [中文](README_CN.md)
 
 # MySQL2PG - 高性能MySQL到PostgreSQL转换工具
