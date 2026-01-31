@@ -20,7 +20,7 @@
 [go-url]: https://go.dev/dl/
 
 
-[English](README.md) | [中文](README_CN.md)
+Language: [English](README.md) | [中文](README_CN.md)
 
 # MySQL2PG - 高性能MySQL到PostgreSQL转换工具
 
