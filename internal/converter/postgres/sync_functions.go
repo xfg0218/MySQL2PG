@@ -489,6 +489,11 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 	// 4. GROUP_CONCAT 处理 (必须在 CONCAT 之前)
 	body = c.processGroupConcat(body)
 
+	// 4.1 CONCAT_WS 处理（安全解析为 concat_ws）
+	body = c.processConcatWs(body)
+
+	// 4.2 保留 ARRAY_TO_STRING 原样，避免误匹配导致括号失衡
+
 	// 5. CONCAT 处理
 	body = c.processConcat(body)
 
@@ -501,16 +506,16 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 	// 6. 字符串和数学函数替换
 	replacements := map[*regexp.Regexp]string{
 		// reCharLength:   "LENGTH($1)", // PG supports char_length
-		reRegexp:       "~",
-		reSetVar:       "$1 := ",
-		reNow:          "CURRENT_TIMESTAMP",
-		reCurrentDate:  "CURRENT_DATE",
-		reSysDate:      "CURRENT_TIMESTAMP",
-		reUnixTime:     "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)",
-		reUnixTime2:    "EXTRACT(EPOCH FROM $1)",
-		reFromUnix:     "TO_TIMESTAMP($1)",
-		reDateFormat:   "TO_CHAR($1, '$2')",
-		reConcatWs:     "ARRAY_TO_STRING(ARRAY[$2], $1)",
+		reRegexp:      "~",
+		reSetVar:      "$1 := ",
+		reNow:         "CURRENT_TIMESTAMP",
+		reCurrentDate: "CURRENT_DATE",
+		reSysDate:     "CURRENT_TIMESTAMP",
+		reUnixTime:    "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)",
+		reUnixTime2:   "EXTRACT(EPOCH FROM $1)",
+		reFromUnix:    "TO_TIMESTAMP($1)",
+		reDateFormat:  "TO_CHAR($1, '$2')",
+		// CONCAT_WS 由 processConcatWs 处理
 		reSubstringIdx: "SPLIT_PART($1, '$2', $3)",
 		// reLeft:         "LEFT($1, $2)", // PG supports LEFT
 		// reRight:        "RIGHT($1, $2)", // PG supports RIGHT
@@ -652,6 +657,111 @@ func (c *FunctionConverter) processConcat(body string) string {
 		body = strings.Replace(body, concatExpr, newExpr, 1)
 	}
 	return body
+}
+
+// processConcatWs 处理 CONCAT_WS 函数
+func (c *FunctionConverter) processConcatWs(body string) string {
+	reStart := regexp.MustCompile(`(?i)\bCONCAT_WS\s*\(`)
+	pos := 0
+	for {
+		sub := body[pos:]
+		loc := reStart.FindStringIndex(sub)
+		if loc == nil {
+			break
+		}
+		start := pos + loc[0]
+		open := -1
+		for i := start; i < len(body); i++ {
+			if body[i] == '(' {
+				open = i
+				break
+			}
+		}
+		if open == -1 {
+			break
+		}
+		depth := 1
+		end := -1
+		for i := open + 1; i < len(body); i++ {
+			switch body[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					end = i
+					break
+				}
+			}
+		}
+		if end == -1 {
+			break
+		}
+		argsStr := body[open+1 : end]
+		args := splitTopLevel(argsStr)
+		if len(args) < 2 {
+			body = body[:start] + "CONCAT_WS(" + argsStr + ")" + body[end+1:]
+			pos = start + len("CONCAT_WS(")
+			continue
+		}
+		sep := strings.TrimSpace(args[0])
+		elems := make([]string, 0, len(args)-1)
+		for i := 1; i < len(args); i++ {
+			elems = append(elems, strings.TrimSpace(args[i]))
+		}
+		newExpr := "concat_ws(" + sep + ", " + strings.Join(elems, ", ") + ")"
+		body = body[:start] + newExpr + body[end+1:]
+		pos = start + len(newExpr)
+	}
+	return body
+}
+
+// splitTopLevel 按顶层逗号分割，支持引号与括号
+func splitTopLevel(s string) []string {
+	var parts []string
+	var cur strings.Builder
+	depth := 0
+	inStr := false
+	var strCh byte
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch == '\'' || ch == '"' {
+			if !inStr {
+				inStr = true
+				strCh = ch
+			} else if strCh == ch {
+				inStr = false
+			}
+			cur.WriteByte(ch)
+			continue
+		}
+		if inStr {
+			cur.WriteByte(ch)
+			continue
+		}
+		if ch == '(' {
+			depth++
+			cur.WriteByte(ch)
+			continue
+		}
+		if ch == ')' {
+			if depth > 0 {
+				depth--
+			}
+			cur.WriteByte(ch)
+			continue
+		}
+		if ch == ',' && depth == 0 {
+			parts = append(parts, strings.TrimSpace(cur.String()))
+			cur.Reset()
+			continue
+		}
+		cur.WriteByte(ch)
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, strings.TrimSpace(cur.String()))
+	}
+	return parts
 }
 
 // processGroupConcat 处理 GROUP_CONCAT 函数

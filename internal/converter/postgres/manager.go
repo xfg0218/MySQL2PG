@@ -594,7 +594,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				}
 				// 记录开始时间
 				startTime := time.Now()
-				batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
+				// 函数转换使用 MaxFunctionsPerBatch，避免与 DDL 批量设置混淆导致过大批次
+				batchSize := m.config.Conversion.Limits.MaxFunctionsPerBatch
 				for i := 0; i < len(functions); i += batchSize {
 					end := i + batchSize
 					if end > len(functions) {

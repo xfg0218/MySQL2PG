@@ -442,6 +442,7 @@ FROM
     case_05_charsets;
 
 -- 视图22：使用MySQL 8.0的GIS空间函数
+/****
 CREATE OR REPLACE VIEW view_case26_mysql8_gis AS
 SELECT 
     g,
@@ -455,6 +456,7 @@ SELECT
     ST_Distance(p, ST_GeomFromText('POINT(0 0)')) AS distance_from_origin
 FROM 
     case_22_spatial;
+****/
 
 -- 视图23：使用MySQL 8.0的JSON聚合函数
 CREATE OR REPLACE VIEW view_case27_mysql8_json_agg AS

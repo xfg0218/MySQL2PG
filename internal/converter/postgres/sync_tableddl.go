@@ -51,7 +51,7 @@ var (
 	reTableComment = regexp.MustCompile(`(?i)\s+COMMENT\s*=\s*'([^']*)'`)
 
 	// 索引相关正则
-	reIndexPattern = regexp.MustCompile(`^(KEY|INDEX|UNIQUE KEY|UNIQUE INDEX|"KEY"|"INDEX"|"UNIQUE KEY"|"UNIQUE INDEX"|FULLTEXT|"FULLTEXT")\s+("[a-zA-Z_]["a-zA-Z0-9_"]*)\s*\(["a-zA-Z_]`)
+	reIndexPattern = regexp.MustCompile(`(?i)^(KEY|INDEX|UNIQUE KEY|UNIQUE INDEX|FULLTEXT)\s+`)
 	rePrimaryKey   = regexp.MustCompile(`PRIMARY KEY\s*\(\s*(\w+)\s*\)`)
 
 	// mb3相关正则
@@ -152,15 +152,15 @@ var typeMap = map[string]string{
 	"json":  "JSON",
 	"jsonb": "JSONB",
 	// 空间类型
-	"geometry":           "BYTEA",
+	"geometry":           "GEOMETRY",
 	"point":              "POINT",
-	"linestring":         "BYTEA",
-	"polygon":            "BYTEA",
-	"multipoint":         "BYTEA",
-	"multilinestring":    "BYTEA",
-	"multipolygon":       "BYTEA",
-	"geometrycollection": "BYTEA",
-	"geomcollection":     "BYTEA",
+	"linestring":         "LINESTRING",
+	"polygon":            "POLYGON",
+	"multipoint":         "MULTIPOINT",
+	"multilinestring":    "MULTILINESTRING",
+	"multipolygon":       "MULTIPOLYGON",
+	"geometrycollection": "GEOMETRYCOLLECTION",
+	"geomcollection":     "GEOMETRYCOLLECTION",
 	// 特殊类型
 	"enum": "VARCHAR(255)",
 	"set":  "VARCHAR(255)",
@@ -621,55 +621,9 @@ func cleanTypeDefinition(typeDefinition string) string {
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, "json_object", "json_build_object")
 	lowerTypeDef = reCharsetPrefix.ReplaceAllString(lowerTypeDef, "$1")
 
-	// 处理生成列：PostgreSQL 不支持 VIRTUAL 关键字，只支持 STORED 关键字
-	// 为了保留生成列的功能，我们将 VIRTUAL 转换为 STORED
-	// 注意：只处理括号外的 VIRTUAL 关键字，避免修改括号内的内容
-	if strings.Contains(strings.ToUpper(lowerTypeDef), "GENERATED ALWAYS AS") {
-		// 使用逐字符处理的方式，只替换括号外的 VIRTUAL 关键字
-		var result strings.Builder
-		inParen := 0
-		i := 0
-		for i < len(lowerTypeDef) {
-			r := rune(lowerTypeDef[i])
-			switch r {
-			case '(':
-				inParen++
-				result.WriteRune(r)
-				i++
-			case ')':
-				if inParen > 0 {
-					inParen--
-				}
-				result.WriteRune(r)
-				i++
-			default:
-				if inParen == 0 && strings.ToUpper(string(r)) == "V" {
-					// 检查是否是 VIRTUAL 关键字
-					if i+6 < len(lowerTypeDef) && strings.ToUpper(lowerTypeDef[i:i+7]) == "VIRTUAL" {
-						result.WriteString("STORED")
-						i += 7 // 跳过整个 VIRTUAL 关键字
-					} else {
-						result.WriteRune(r)
-						i++
-					}
-				} else {
-					result.WriteRune(r)
-					i++
-				}
-			}
-		}
-		lowerTypeDef = result.String()
-
-		// 移除可能的多余空格
-		lowerTypeDef = regexp.MustCompile(`\s+`).ReplaceAllString(lowerTypeDef, " ")
-		// 移除可能的空字符串
-		lowerTypeDef = strings.TrimSpace(lowerTypeDef)
-
-		// 将生成列的关键字转换为大写
-		reGenerated := regexp.MustCompile(`(?i)(generated\s+always\s+as)`)
-		lowerTypeDef = reGenerated.ReplaceAllString(lowerTypeDef, "GENERATED ALWAYS AS")
-		reStored := regexp.MustCompile(`(?i)(\bSTORED\b)`)
-		lowerTypeDef = reStored.ReplaceAllString(lowerTypeDef, "STORED")
+	// 处理生成列：PostgreSQL 9.x 不支持生成列，直接移除 GENERATED ALWAYS AS ...
+	if idx := strings.Index(strings.ToUpper(lowerTypeDef), "GENERATED ALWAYS AS"); idx != -1 {
+		lowerTypeDef = strings.TrimSpace(lowerTypeDef[:idx])
 	}
 
 	if strings.HasSuffix(lowerTypeDef, ",") {
@@ -682,15 +636,16 @@ func cleanTypeDefinition(typeDefinition string) string {
 
 // ConvertTableDDL 转换MySQL表DDL到PostgreSQL
 func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLResult, error) {
-	mysqlDDL = strings.ReplaceAll(mysqlDDL, "`", "\"")
-
-	columnNamesMap := make(map[string]string)
-	columnCommentsMap := make(map[string]string)
+	// 全局移除反引号，避免索引错位和标识符问题
+	mysqlDDL = strings.ReplaceAll(mysqlDDL, "`", "")
 
 	tableName, isTemporary, tableComment, columnsStart, columnsEnd, err := parseTableInfo(mysqlDDL)
 	if err != nil {
 		return nil, err
 	}
+
+	columnNamesMap := make(map[string]string)
+	columnCommentsMap := make(map[string]string)
 
 	columnsDefinition := cleanTableLevelSettings(mysqlDDL[columnsStart:columnsEnd])
 	lines := strings.Split(columnsDefinition, "\n")
@@ -821,7 +776,7 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 		}
 
 		// 处理生成列：提取表达式并存储，处理引用其他生成列的情况
-		if strings.Contains(strings.ToUpper(typeDefinition), "GENERATED ALWAYS AS") {
+		if false && strings.Contains(strings.ToUpper(typeDefinition), "GENERATED ALWAYS AS") {
 			// 提取生成列的表达式（处理嵌套括号）
 			expr, err := extractGeneratedColumnExpr(typeDefinition)
 			if err == nil && expr != "" {
@@ -933,6 +888,8 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 			// 移除 ENFORCED/NOT ENFORCED 关键字，因为 PostgreSQL 不支持
 			constraint = strings.ReplaceAll(constraint, " ENFORCED", "")
 			constraint = strings.ReplaceAll(constraint, " NOT ENFORCED", "")
+			// 移除字符串字面量中的_utf8mb4前缀，因为 PostgreSQL 不支持
+			constraint = strings.ReplaceAll(constraint, "_utf8mb4'", "'")
 			constraint = strings.TrimSpace(constraint)
 
 			// 检查约束是否已经添加过

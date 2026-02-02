@@ -516,10 +516,12 @@ CREATE INDEX idx_case_65_y4 ON case_65_year_types(y4);
 CREATE INDEX idx_case_65_y_default ON case_65_year_types(y_default);
 
 -- 为case_66_geometry_subtypes表添加空间索引
+/***
 CALL drop_index_if_exists('idx_case_66_geo', 'case_66_geometry_subtypes');
 CALL drop_index_if_exists('idx_case_66_pt', 'case_66_geometry_subtypes');
 CREATE SPATIAL INDEX idx_case_66_geo ON case_66_geometry_subtypes(geo);
 -- CREATE SPATIAL INDEX idx_case_66_pt ON case_66_geometry_subtypes(pt);
+**/
 
 -- 为case_67_trigger_simulation表添加索引
 CALL drop_index_if_exists('idx_case_67_created_at', 'case_67_trigger_simulation');
