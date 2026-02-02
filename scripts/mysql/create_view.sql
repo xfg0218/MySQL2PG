@@ -423,7 +423,7 @@ SELECT
 FROM 
     case_01_integers;
 
--- 视图21：使用MySQL 8.0的正则表达式函数
+-- 视图21：使用MySQL 8.0的正则表达式函数（兼容MySQL 5.7）
 CREATE OR REPLACE VIEW view_case25_mysql8_regexp AS
 SELECT 
     c1,
@@ -432,12 +432,12 @@ SELECT
     c4,
     c5,
     c6,
-    REGEXP_LIKE(c1, '^[A-Za-z]+$') AS is_alpha_c1,
-    REGEXP_LIKE(c2, '^[0-9]+$') AS is_numeric_c2,
-    REGEXP_REPLACE(c3, '[^A-Za-z0-9]', '') AS cleaned_c3,
-    REGEXP_INSTR(c4, 'test') AS test_pos_c4,
-    REGEXP_SUBSTR(c5, '[0-9]+') AS numbers_c5,
-    REGEXP_COUNT(c6, 'a') AS a_count_c6
+    (c1 RLIKE '^[A-Za-z]+$') AS is_alpha_c1,
+    (c2 RLIKE '^[0-9]+$') AS is_numeric_c2,
+    c3 AS cleaned_c3, -- MySQL 5.7不支持REGEXP_REPLACE
+    INSTR(c4, 'test') AS test_pos_c4, -- MySQL 5.7不支持REGEXP_INSTR
+    c5 AS numbers_c5, -- MySQL 5.7不支持REGEXP_SUBSTR
+    LENGTH(c6) - LENGTH(REPLACE(c6, 'a', '')) AS a_count_c6 -- 模拟REGEXP_COUNT
 FROM 
     case_05_charsets;
 
@@ -462,7 +462,7 @@ SELECT
     b.status,
     JSON_ARRAYAGG(JSON_OBJECT('tiny', i.col_tiny, 'small', i.col_small)) AS int_data,
     JSON_OBJECTAGG(b.status, JSON_ARRAY(i.col_tiny, i.col_small)) AS status_map,
-    JSON_ARRAYAGG(DISTINCT i.col_tiny) AS unique_tiny
+    JSON_ARRAYAGG(i.col_tiny) AS unique_tiny -- MySQL 5.7不支持在JSON_ARRAYAGG中使用DISTINCT
 FROM 
     case_01_integers i
 JOIN 
@@ -470,21 +470,15 @@ JOIN
 GROUP BY 
     b.status;
 
--- 视图24：使用MySQL 8.0的时间窗口函数
+-- 视图24：使用MySQL 8.0的时间窗口函数（兼容MySQL 5.7）
 CREATE OR REPLACE VIEW view_case28_mysql8_time_window AS
 SELECT 
     d1,
     dt1,
     ts1,
-    YEAR(d1) AS year,
-    MONTH(d1) AS month,
-    DAY(d1) AS day,
-    HOUR(ts1) AS hour,
-    MINUTE(ts1) AS minute,
-    DATE_FORMAT(d1, '%Y-%m') AS year_month,
-    DATE_FORMAT(ts1, '%H:%i') AS time,
-    TIMESTAMPDIFF(DAY, d1, NOW()) AS days_from_today,
-    DATE_ADD(d1, INTERVAL 30 DAY) AS next_month
+    YEAR(d1) AS year_val,
+    MONTH(d1) AS month_val,
+    DAY(d1) AS day_val
 FROM 
     case_09_datetime;
 
@@ -565,8 +559,8 @@ SELECT
     data->>'$.name' AS name,
     data->>'$.details.address' AS address,
     data->>'$.details.phone' AS phone,
-    JSON_VALUE(data, '$.value' RETURNING DECIMAL(10,2)) AS value,
-    JSON_VALUE(data, '$.status' RETURNING VARCHAR(20)) AS status,
+    JSON_EXTRACT(data, '$.value') AS value,
+    JSON_EXTRACT(data, '$.status') AS status,
     JSON_EXTRACT(data, '$.tags[*]') AS tags
 FROM 
     case_08_json;
@@ -577,7 +571,7 @@ SELECT
     b.status,
     GROUP_CONCAT(DISTINCT i.col_tiny ORDER BY i.col_tiny SEPARATOR ', ') AS tiny_values,
     GROUP_CONCAT(i.col_small SEPARATOR '|') AS small_values,
-    STRING_AGG(CAST(i.col_medium AS CHAR), ';') AS medium_values
+    GROUP_CONCAT(CAST(i.col_medium AS CHAR) SEPARATOR ';') AS medium_values -- MySQL 5.7不支持STRING_AGG
 FROM 
     case_01_integers i
 JOIN 
@@ -596,8 +590,8 @@ SELECT
     FLOOR(col_decimal) AS floor,
     ABS(col_float) AS absolute,
     SQRT(ABS(col_float)) AS square_root,
-    POWER(col_float, 3) AS cube,
-    MOD(col_float, 3) AS modulus,
+    POWER(col_float, 3) AS `cube`,
+    MOD(col_float, 3) AS `modulus`,
     LOG10(col_float) AS log10,
     LN(col_float) AS natural_log,
     SIN(col_float) AS sine,
