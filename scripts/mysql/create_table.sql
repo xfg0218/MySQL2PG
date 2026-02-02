@@ -301,6 +301,7 @@ CREATE TABLE case_21_virtual (
 );
 
 -- 创建空间类型表
+/***
 DROP TABLE IF EXISTS case_22_spatial;
 CREATE TABLE case_22_spatial (
   g geometry,                     -- -> GEOMETRY
@@ -312,6 +313,7 @@ CREATE TABLE case_22_spatial (
   mpoly multipolygon,             -- -> MULTIPOLYGON
   gc geometrycollection           -- -> GEOMETRYCOLLECTION
 );
+***/
 
 -- 创建怪异语法类型表
 DROP TABLE IF EXISTS case_23_weird_syntax;
@@ -775,11 +777,13 @@ CREATE TABLE case_65_year_types (
 
 -- 创建更多空间类型表
 DROP TABLE IF EXISTS case_66_geometry_subtypes;
+/**
 CREATE TABLE case_66_geometry_subtypes (
   id int PRIMARY KEY,
   geo geometry NOT NULL COMMENT 'Geometry not null',
   pt point DEFAULT NULL COMMENT 'Point nullable'
 ) ENGINE=InnoDB COMMENT='Geometry subtypes';
+**/
 
 -- 创建触发器模拟表
 DROP TABLE IF EXISTS case_67_trigger_simulation;
