@@ -1,6 +1,26 @@
 -- 插入数据到 case_01_integers 表
 truncate table case_01_integers;
-INSERT INTO case_01_integers VALUES (-1,-32768,838,2147483647,-1000,922, 123456789,-92233);
+SET SESSION cte_max_recursion_depth = 300000;
+INSERT INTO case_01_integers (
+    col_tiny, col_small, col_medium, col_int,
+    col_integer, col_big, col_int_prec, col_big_prec
+)
+WITH RECURSIVE nums AS (
+    SELECT 1 AS n
+    UNION ALL
+    SELECT n + 1 FROM nums WHERE n < 300000
+)
+SELECT
+    FLOOR(RAND(n * 1) * 255 - 128),
+    FLOOR(RAND(n * 2) * 65535 - 32768),
+    FLOOR(RAND(n * 3) * 16777215 - 8388608),
+    FLOOR(RAND(n * 4) * 4294967295 - 2147483648),
+    FLOOR(RAND(n * 5) * 4294967295 - 2147483648),
+    FLOOR(RAND(n * 6) * 18446744073709551615 - 9223372036854775808),
+    FLOOR(RAND(n * 7) * 4294967295 - 2147483648),
+    FLOOR(RAND(n * 8) * 18446744073709551615 - 9223372036854775808)
+FROM nums;
+
 
 -- 插入数据到 case_02_boolean 表
 truncate table case_02_boolean;
