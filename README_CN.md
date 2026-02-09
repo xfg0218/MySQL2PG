@@ -753,6 +753,26 @@ $ ./mysql2pg -c config.yml
 转换失败: 批量插入失败: ERROR: duplicate key value violates unique constraint "users_20251201_pkey" (SQLSTATE 23505), 数据样本: [[49] [50] [51]]
 ```
 
+### 6. 编译时下载依赖包超时
+
+报错信息:
+```sql
+github.com/yourusername/mysql2pg/internal/config imports
+	github.com/spf13/viper: github.com/spf13/viper@v1.18.2: Get "https://proxy.golang.org/github.com/spf13/viper/@v/v1.18.2.zip": dial tcp [2607:f8b0:400a:80d::2011]:443: i/o timeout
+github.com/yourusername/mysql2pg/internal/mysql imports
+	github.com/go-sql-driver/mysql: github.com/go-sql-driver/mysql@v1.7.1: Get "https://proxy.golang.org/github.com/go-sql-driver/mysql/@v/v1.7.1.zip": dial tcp [2607:f8b0:400a:80d::2011]:443: i/o timeout
+```
+
+解决方法：
+```sql
+# go env -w GOPROXY=https://goproxy.cn,direct
+
+# go env GOPROXY
+https://goproxy.cn,direct
+
+# make build
+```
+
 ## 总结
 
 MySQL2PG是一款功能强大、性能优异的MySQL到PostgreSQL转换工具，它提供了全面的转换功能和丰富的配置选项，能够满足各种复杂的数据库迁移需求。无论是小型项目还是大型企业级应用，MySQL2PG都能提供高效、可靠的数据库迁移解决方案。
