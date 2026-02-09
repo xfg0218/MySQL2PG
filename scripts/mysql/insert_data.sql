@@ -1,6 +1,6 @@
--- 插入数据到 case_01_integers 表
+-- 插入数据到 case_01_integers 表，共300,0000条数据
 truncate table case_01_integers;
-SET SESSION cte_max_recursion_depth = 300000;
+SET SESSION cte_max_recursion_depth = 3000000;
 INSERT INTO case_01_integers (
     col_tiny, col_small, col_medium, col_int,
     col_integer, col_big, col_int_prec, col_big_prec
@@ -8,7 +8,7 @@ INSERT INTO case_01_integers (
 WITH RECURSIVE nums AS (
     SELECT 1 AS n
     UNION ALL
-    SELECT n + 1 FROM nums WHERE n < 300000
+    SELECT n + 1 FROM nums WHERE n < 3000000
 )
 SELECT
     FLOOR(RAND(n * 1) * 255 - 128),
