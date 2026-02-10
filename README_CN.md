@@ -723,6 +723,46 @@ $ ./mysql2pg -c config.yml
 
 ```
 
+### 8. 同步表数据案例
+
+在2核，2GB 的环境上，`limits.concurrency=4` , 和 `limits.batch_insert_size=10000` 的情况下，同步速度约为 1691 行/秒
+
+> 如果服务器配置高，可以适当调整以上参数。
+
+```sql
+-- 表的DDL
+DROP TABLE IF EXISTS case_01_integers;
+CREATE TABLE case_01_integers (
+  col_tiny tinyint, 
+  col_small smallint,
+  col_medium mediumint,
+  col_int int,
+  col_integer integer,
+  col_big bigint,
+  col_int_prec int(11),
+  col_big_prec bigint(20)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE INDEX idx_case_01_col_tiny ON case_01_integers(col_tiny);
+
+
+-- 同步速度
+进度: 0.00% (1/1) : 同步表 case_01_integers 完成，12000000 行数据，跳过验证
+
+----------------------------------------------------------------------
+各阶段及耗时汇总如下:
++--------------------------+----------------+-----------------------+
+| 阶段                     | 对象数量       | 耗时(秒)              |
++--------------------------+----------------+-----------------------+
+| 同步表数据                | 1              | 7093.55               |
++--------------------------+----------------+-----------------------+
+| 总耗时                    |                | 7093.55               |
++--------------------------+----------------+-----------------------+
+
+real	118m13.675s
+user	6m7.256s
+sys	0m6.487s
+```
+
 ## 常见问题
 
 ### 1. 数据校验失败怎么办？
