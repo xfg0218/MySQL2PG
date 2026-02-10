@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/binary"
@@ -8,12 +9,33 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/yourusername/mysql2pg/internal/config"
 )
+
+// 全局对象池，减少内存分配
+var (
+	batchSlicePool = sync.Pool{
+		New: func() interface{} {
+			return make([][]interface{}, 0, 1000)
+		},
+	}
+	rowSlicePool = sync.Pool{
+		New: func() interface{} {
+			return make([]interface{}, 0, 50)
+		},
+	}
+)
+
+// unsafeString 将 []byte 转换为 string，不进行内存分配
+func unsafeString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
 
 // Connection PostgreSQL连接管理器
 type Connection struct {
@@ -590,6 +612,193 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 	}
 
 	return totalRows, lastValue, nil
+}
+
+// ReadBatchFromRows 从MySQL结果集中读取一批数据并进行转换
+func (c *Connection) ReadBatchFromRows(rows *sql.Rows, columns []string, columnTypes map[string]string, batchSize int, primaryKey string) ([][]interface{}, interface{}, error) {
+	// 准备批量数据容器
+	effectiveBatchSize := batchSize
+	if effectiveBatchSize <= 0 {
+		effectiveBatchSize = 10000
+	}
+
+	// 从池中获取批量切片
+	var copyRows [][]interface{}
+	obj := batchSlicePool.Get()
+	if obj != nil {
+		copyRows = obj.([][]interface{})
+		// 确保切片为空但保留容量
+		copyRows = copyRows[:0]
+	} else {
+		copyRows = make([][]interface{}, 0, effectiveBatchSize)
+	}
+
+	// 跟踪最后一个主键值
+	var lastValue interface{}
+	var primaryKeyIndex int = -1
+
+	// 预处理列名和类型信息，避免在循环中重复计算
+	lowercaseColumns := make([]string, len(columns))
+
+	// 标记列是否需要特殊处理
+	type colProcessor func(interface{}) interface{}
+	processors := make([]colProcessor, len(columns))
+
+	for i, col := range columns {
+		lowerCol := strings.ToLower(col)
+		lowercaseColumns[i] = lowerCol
+
+		// 默认处理器：保持原样
+		processors[i] = func(v interface{}) interface{} { return v }
+
+		// 检查是否有特殊类型处理
+		if columnTypes != nil {
+			if colType, ok := columnTypes[col]; ok {
+				colTypeLower := strings.ToLower(colType)
+				if strings.Contains(colTypeLower, "point") || strings.Contains(colTypeLower, "geometry") {
+					processors[i] = func(v interface{}) interface{} {
+						if bVal, ok := v.([]byte); ok {
+							if pointStr, err := parseMySQLPoint(bVal); err == nil {
+								return pointStr
+							}
+						}
+						return v
+					}
+				}
+			}
+		}
+	}
+
+	if primaryKey != "" {
+		lowercasePrimaryKey := strings.ToLower(primaryKey)
+		for i, col := range lowercaseColumns {
+			if col == lowercasePrimaryKey {
+				primaryKeyIndex = i
+				break
+			}
+		}
+	}
+
+	// 重用values和valuePtrs切片
+	values := make([]interface{}, len(columns))
+	valuePtrs := make([]interface{}, len(columns))
+	for i := range values {
+		valuePtrs[i] = &values[i]
+	}
+
+	rowCount := 0
+
+	// 读取直到达到batchSize或rows耗尽
+	for rowCount < effectiveBatchSize && rows.Next() {
+		// 扫描行数据
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, nil, fmt.Errorf("扫描行数据失败: %w", err)
+		}
+
+		// 跟踪最后一个主键值
+		if primaryKeyIndex != -1 {
+			lastValue = values[primaryKeyIndex]
+		}
+
+		// 从池中获取行切片
+		var rowValues []interface{}
+		rowObj := rowSlicePool.Get()
+		if rowObj != nil {
+			rowValues = rowObj.([]interface{})
+			// 调整切片长度以匹配列数
+			if cap(rowValues) < len(values) {
+				rowValues = make([]interface{}, len(values))
+			} else {
+				rowValues = rowValues[:len(values)]
+			}
+		} else {
+			rowValues = make([]interface{}, len(values))
+		}
+
+		// 复制当前行的值到新的切片并进行类型转换
+		for i, v := range values {
+			// 使用预先定义的处理器处理特殊类型
+			processedVal := processors[i](v)
+
+			// 进行基础数据类型转换
+			switch val := processedVal.(type) {
+			case []byte:
+				// 优化：直接比较字节切片，避免转换字符串
+				if len(val) == 19 && bytes.Equal(val, []byte("0000-00-00 00:00:00")) {
+					rowValues[i] = nil
+				} else if len(val) == 10 && bytes.Equal(val, []byte("0000-00-00")) {
+					rowValues[i] = nil
+				} else {
+					// 使用零分配转换
+					rowValues[i] = unsafeString(val)
+				}
+			case string:
+				if val == "0000-00-00 00:00:00" || val == "0000-00-00" {
+					rowValues[i] = nil
+				} else {
+					rowValues[i] = val
+				}
+			case time.Time:
+				if val.IsZero() {
+					rowValues[i] = nil
+				} else {
+					rowValues[i] = val
+				}
+			default:
+				rowValues[i] = val
+			}
+		}
+		copyRows = append(copyRows, rowValues)
+		rowCount++
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return copyRows, lastValue, nil
+}
+
+// CopyBatchData 执行CopyFrom批量写入
+func (c *Connection) CopyBatchData(tx pgx.Tx, tableName string, columns []string, data [][]interface{}, lowercaseColumns bool) (int64, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+
+	// 函数结束时归还切片到池中
+	defer func() {
+		// 归还每一行
+		for _, row := range data {
+			// 只有容量合适的才归还，避免池污染
+			if cap(row) >= 64 { // 假设阈值
+				rowSlicePool.Put(row)
+			}
+		}
+		// 归还批量切片
+		batchSlicePool.Put(data)
+	}()
+
+	ctx := context.Background()
+
+	// 处理列名大小写
+	finalColumns := make([]string, len(columns))
+	// 使用缓存的列名转换结果（如果有）
+	// 这里简单处理，每次都转换
+	for i, col := range columns {
+		if lowercaseColumns {
+			finalColumns[i] = strings.ToLower(col)
+		} else {
+			finalColumns[i] = col
+		}
+	}
+
+	// 执行CopyFrom
+	rowsAffected, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, finalColumns, pgx.CopyFromRows(data))
+	if err != nil {
+		return 0, fmt.Errorf("CopyFrom执行失败: %w", err)
+	}
+
+	return rowsAffected, nil
 }
 
 // parseMySQLPoint 解析MySQL的WKB格式Point数据

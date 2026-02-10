@@ -228,6 +228,62 @@ func (c *Connection) GetTablePrimaryKey(tableName string) (string, error) {
 	return primaryKeys[0], nil
 }
 
+// GetMinMaxPrimaryKeys 获取主键的最小值和最大值
+func (c *Connection) GetMinMaxPrimaryKeys(tableName string, primaryKey string) (interface{}, interface{}, error) {
+	query := fmt.Sprintf("SELECT MIN(`%s`), MAX(`%s`) FROM `%s`", primaryKey, primaryKey, tableName)
+
+	var minVal, maxVal interface{}
+	err := c.db.QueryRow(query).Scan(&minVal, &maxVal)
+	if err != nil {
+		return nil, nil, fmt.Errorf("获取主键范围失败: %w", err)
+	}
+
+	// 处理可能的NULL值（例如表为空）
+	if minVal == nil || maxVal == nil {
+		return nil, nil, nil
+	}
+
+	// 转换类型
+	minVal = ConvertMySQLValue(minVal, "")
+	maxVal = ConvertMySQLValue(maxVal, "")
+
+	return minVal, maxVal, nil
+}
+
+// GetTableDataInRange 获取指定主键范围内的表数据
+func (c *Connection) GetTableDataInRange(tableName string, columns []string, primaryKey string, minId, maxId interface{}, lastValue interface{}, limit int) (*sql.Rows, error) {
+	var quotedColumns []string
+	for _, col := range columns {
+		quotedColumns = append(quotedColumns, fmt.Sprintf("`%s`", col))
+	}
+	columnsStr := strings.Join(quotedColumns, ", ")
+
+	var query string
+	var args []interface{}
+
+	// 构建查询条件：id >= minId AND id <= maxId
+	// 并且如果是分页后续请求，还需要 id > lastValue
+
+	if lastValue != nil {
+		// 分页后续请求：WHERE id > lastValue AND id <= maxId
+		query = fmt.Sprintf("SELECT %s FROM `%s` WHERE `%s` > ? AND `%s` <= ? ORDER BY `%s` LIMIT %d",
+			columnsStr, tableName, primaryKey, primaryKey, primaryKey, limit)
+		args = []interface{}{lastValue, maxId}
+	} else {
+		// 初始请求：WHERE id >= minId AND id <= maxId
+		query = fmt.Sprintf("SELECT %s FROM `%s` WHERE `%s` >= ? AND `%s` <= ? ORDER BY `%s` LIMIT %d",
+			columnsStr, tableName, primaryKey, primaryKey, primaryKey, limit)
+		args = []interface{}{minId, maxId}
+	}
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("获取范围数据失败: %w", err)
+	}
+
+	return rows, nil
+}
+
 // EstimateRowSize 估算单行数据大小
 func (c *Connection) EstimateRowSize(tableName string) (int64, error) {
 	// 获取表的列信息
@@ -242,6 +298,46 @@ func (c *Connection) EstimateRowSize(tableName string) (int64, error) {
 	avgRowLength := int64(len(columns) * 20)
 
 	return avgRowLength, nil
+}
+
+// ConvertMySQLValue 将MySQL值转换为通用类型
+func ConvertMySQLValue(value interface{}, colType string) interface{} {
+	// 处理空值
+	if value == nil {
+		return nil
+	}
+
+	// 处理sql.Null类型
+	switch v := value.(type) {
+	case sql.NullInt64:
+		if v.Valid {
+			return v.Int64
+		}
+		return nil
+	case sql.NullFloat64:
+		if v.Valid {
+			return v.Float64
+		}
+		return nil
+	case sql.NullString:
+		if v.Valid {
+			return v.String
+		}
+		return nil
+	case sql.NullBool:
+		if v.Valid {
+			return v.Bool
+		}
+		return nil
+	case sql.NullTime:
+		if v.Valid {
+			return v.Time
+		}
+		return nil
+	default:
+		// 其他类型直接返回
+		return value
+	}
 }
 
 // GetTableRowCount 获取表的行数
