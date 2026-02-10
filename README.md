@@ -591,6 +591,47 @@ Summary of Stages and Duration:
 +--------------------------+----------------+-----------------------+
 ```
 
+### 7. Database Connection Test Case
+
+```
+-- Displayed when mysql.test_only=true and postgresql.test_only=true
++-------------------------------------------------------------+
+1. MySQL connection test completed, version information displayed, exiting program.
+2. PostgreSQL connection test completed, version information displayed, exiting program.
++-------------------------------------------------------------+
+| Database Version Information:                               |
++--------------+----------------------------------------------+
+| Database Type | Version Information                          |
++--------------+----------------------------------------------+
+| MySQL       | 5.7.44                                       |
+| PostgreSQL  | PostgreSQL 16.1 on x86_64-pc-linux-gn...     |
++--------------+----------------------------------------------+
+
+-- Displayed when mysql.test_only=false or postgresql.test_only=false
+
++-------------------------------------------------------------+
+1. MySQL connection test completed, version information displayed, exiting program.
++-------------------------------------------------------------+
+| Database Version Information:                               |
++--------------+----------------------------------------------+
+| Database Type | Version Information                          |
++--------------+----------------------------------------------+
+| MySQL       | 5.7.44                                       |
+| PostgreSQL  | PostgreSQL 16.1 on x86_64-pc-linux-gn...     |
++--------------+----------------------------------------------+
+
++-------------------------------------------------------------+
+2. PostgreSQL connection test completed, version information displayed, exiting program.
++-------------------------------------------------------------+
+| Database Version Information:                               |
++--------------+----------------------------------------------+
+| Database Type | Version Information                          |
++--------------+----------------------------------------------+
+| MySQL       | 5.7.44                                       |
+| PostgreSQL  | PostgreSQL 16.1 on x86_64-pc-linux-gn...     |
++--------------+----------------------------------------------+
+
+```
 
 ### 8. Table Data Synchronization Case
 
