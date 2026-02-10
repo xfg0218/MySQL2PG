@@ -591,6 +591,47 @@ Summary of Stages and Duration:
 +--------------------------+----------------+-----------------------+
 ```
 
+
+### 8. Table Data Synchronization Case
+
+On a 2-core, 2GB environment with `limits.concurrency=4` and `limits.batch_insert_size=10000`, the synchronization speed is approximately 1691 rows per second.
+
+> If your server has higher configuration, you can appropriately adjust the above parameters.
+
+```sql
+-- Table DDL
+DROP TABLE IF EXISTS case_01_integers;
+CREATE TABLE case_01_integers (
+  col_tiny tinyint, 
+  col_small smallint,
+  col_medium mediumint,
+  col_int int,
+  col_integer integer,
+  col_big bigint,
+  col_int_prec int(11),
+  col_big_prec bigint(20)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE INDEX idx_case_01_col_tiny ON case_01_integers(col_tiny);
+
+
+-- Synchronization Speed
+Progress: 0.00% (1/1) : Table case_01_integers synchronization completed, 12000000 rows of data, skipping validation
+
+----------------------------------------------------------------------
+Summary of stages and time consumption:
++--------------------------+----------------+-----------------------+
+| Stage                    | Object Count   | Time (seconds)        |
++--------------------------+----------------+-----------------------+
+| Table Data Synchronization | 1             | 7093.55               |
++--------------------------+----------------+-----------------------+
+| Total Time               |                | 7093.55               |
++--------------------------+----------------+-----------------------+
+
+real	118m13.675s
+user	6m7.256s
+sys	0m6.487s
+```
+
 ## FAQ
 
 ### 1. What if data validation fails?

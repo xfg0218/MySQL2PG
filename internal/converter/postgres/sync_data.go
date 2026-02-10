@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/yourusername/mysql2pg/internal/config"
 	"github.com/yourusername/mysql2pg/internal/mysql"
@@ -17,6 +18,107 @@ type TableDataInconsistency struct {
 	TableName        string
 	MySQLRowCount    int64
 	PostgresRowCount int64
+}
+
+// 辅助函数：将interface{}转换为int64
+func toInt64(val interface{}) (int64, bool) {
+	switch v := val.(type) {
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint:
+		return int64(v), true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		// 注意：如果uint64过大可能会溢出int64
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+// 定义数据批次结构用于管道传递
+type DataBatch struct {
+	Data [][]interface{}
+	Err  error
+}
+
+// 辅助函数：运行单个Reader
+func runSingleReader(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, table mysql.TableInfo, columns []string, columnTypes map[string]string, batchSize int64, batchInsertSize int, primaryKey string, useKeyPagination bool, orderBy string, batchChan chan<- DataBatch) {
+	var processedRows int64
+	var lastValue interface{}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		var rows *sql.Rows
+		var err error
+
+		// 使用现有的分页查询方法
+		if useKeyPagination {
+			// 使用基于主键的分页
+			rows, err = mysqlConn.GetTableDataWithPagination(table.Name, columns, primaryKey, lastValue, int(batchSize))
+		} else {
+			// 使用传统的OFFSET分页
+			rows, err = mysqlConn.GetTableData(table.Name, columns, int(processedRows), int(batchSize), orderBy)
+		}
+
+		if err != nil {
+			select {
+			case batchChan <- DataBatch{Err: fmt.Errorf("分页获取表 %s 数据失败: %w", table.Name, err)}:
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		// 读取并转换数据
+		batchData, batchLastValue, err := postgresConn.ReadBatchFromRows(rows, columns, columnTypes, int(batchInsertSize), primaryKey)
+		rows.Close()
+
+		if err != nil {
+			select {
+			case batchChan <- DataBatch{Err: fmt.Errorf("读取表 %s 数据失败: %w", table.Name, err)}:
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		if len(batchData) == 0 {
+			break
+		}
+
+		// 发送数据到Writer
+		select {
+		case batchChan <- DataBatch{Data: batchData}:
+			processedRows += int64(len(batchData))
+			if batchLastValue != nil {
+				lastValue = batchLastValue
+			}
+		case <-ctx.Done():
+			return
+		}
+
+		// 如果读取的数据少于batchInsertSize，说明已读完
+		if len(batchData) < int(batchInsertSize) {
+			break
+		}
+	}
 }
 
 // SyncTableData 同步表数据
@@ -168,10 +270,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			}
 
 			// 尝试使用基于主键的分页
-			var lastValue interface{}
 			var primaryKey string
 			var useKeyPagination bool
 			var orderBy string
+			var minId, maxId interface{}
 
 			// 使用 GetTablePrimaryKeys 获取所有主键
 			primaryKeys, err := mysqlConn.GetTablePrimaryKeys(table.Name)
@@ -182,6 +284,12 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				primaryKey = primaryKeys[0]
 				log("表 %s 的主键是 %s，将使用基于主键的分页", table.Name, primaryKey)
 				useKeyPagination = true
+
+				// 尝试获取主键范围，用于并发读取
+				minId, maxId, err = mysqlConn.GetMinMaxPrimaryKeys(table.Name, primaryKey)
+				if err != nil {
+					log("警告: 获取表 %s 主键范围失败: %v，将无法使用并发分片读取", table.Name, err)
+				}
 			} else {
 				// 复合主键
 				useKeyPagination = false
@@ -204,111 +312,238 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			}
 			state := &progressState{}
 
-			for {
-				var rows *sql.Rows
-				var currentBatchSize int
+			// 定义数据批次结构用于管道传递
+			// DataBatch 在外部已经定义过了
 
-				// 使用现有的分页查询方法
-				if useKeyPagination {
-					// 使用基于主键的分页
-					rows, err = mysqlConn.GetTableDataWithPagination(table.Name, columns, primaryKey, lastValue, int(batchSize))
-				} else {
-					// 使用传统的OFFSET分页
-					rows, err = mysqlConn.GetTableData(table.Name, columns, int(processedRows), int(batchSize), orderBy)
-				}
+			// 创建缓冲通道用于传输数据批次
+			// 缓冲区大小设置为并发数的2倍，允许Reader超前Writer
+			batchChan := make(chan DataBatch, config.Conversion.Limits.Concurrency*2)
 
-				if err != nil {
-					errMsg := fmt.Sprintf("分页获取表 %s 数据失败: %v", table.Name, err)
-					logError(errMsg)
-					select {
-					case errorChan <- fmt.Errorf("分页同步表 %s 失败: %w", table.Name, err):
-					default:
-					}
-					return
-				}
+			// 用于等待Writer完成
+			var wgWriter sync.WaitGroup
 
-				// 为每个批次开始新事务
-				tx, err := postgresConn.BeginTransaction(context.Background())
-				if err != nil {
-					errMsg := fmt.Sprintf("开始事务失败: %v", err)
-					logError(errMsg)
-					rows.Close()
-					select {
-					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
-					default:
-					}
-					return
-				}
+			// 上下文用于取消操作
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 
-				// 使用批量插入并获取实际处理的行数
-				currentBatchSize, lastValue, err = postgresConn.BatchInsertDataWithTransactionAndGetLastValue(tx, tableName, columns, columnTypes, batchInsertSize, primaryKey, rows)
-				rows.Close() // 确保关闭rows
-
-				if err != nil {
-					errMsg := fmt.Sprintf("插入表 %s 数据失败: %v", table.Name, err)
-					logError(errMsg)
-					tx.Rollback(context.Background())
-					select {
-					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
-					default:
-					}
-					return
-				}
-
-				// 提交当前批次的事务
-				if err := tx.Commit(context.Background()); err != nil {
-					errMsg := fmt.Sprintf("提交事务失败: %v", err)
-					logError(errMsg)
-					select {
-					case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
-					default:
-					}
-					return
-				}
-
-				// 更新处理的行数
-				if currentBatchSize > 0 {
-					processedRows += int64(currentBatchSize)
-				} else {
-					// 没有更多数据，退出循环
-					log("分页同步表 %s 完成，共处理 %d 行数据", table.Name, processedRows)
-					break
-				}
-
-				// 显示同步进度
-				if config.Run.ShowConsoleLogs {
-					progress := float64(processedRows) / float64(totalRows) * 100
-					if progress > 100 {
-						progress = 100
-					}
-
-					// 生成进度条
-					barLength := 20
-					filledLength := int(progress / 100 * float64(barLength))
-					// 确保空格重复次数不会为负数
-					spaceCount := barLength - filledLength - 1
-					if spaceCount < 0 {
-						spaceCount = 0
-					}
-					bar := strings.Repeat("-", filledLength) + ">" + strings.Repeat(" ", spaceCount)
-
-					// 使用互斥锁保护日志输出
-					mutex.Lock()
-					overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
-					currentTask := *completedTasks + 1
-
-					// 只有当进度条长度或进度百分比变化时才更新（减少闪烁）
-					// 当进度条实际长度变化或进度百分比变化超过0.5%时才更新
-					if state.lastBarLength != filledLength || progress-state.lastProgress >= 0.5 {
-						// 使用ANSI转义序列清除当前行，然后输出新的进度信息
-						// \033[2K 清除整个行，\r 回到行首
-						fmt.Printf("\033[2K\r进度: %.2f%% (%d/%d) : 同步表 %s [%s] %.2f%%", overallProgress, currentTask, totalTasks, table.Name, bar, progress)
-						state.lastBarLength = filledLength
-						state.lastProgress = progress
-					}
-					mutex.Unlock()
-				}
+			// 启动Worker Pool进行并行编码和写入
+			// 根据配置的并发度或默认值设置worker数量
+			numWorkers := config.Conversion.Limits.Concurrency
+			if numWorkers <= 0 {
+				numWorkers = 4
 			}
+			// 限制每个表的最大worker数为4，避免过多连接争用
+			if numWorkers > 4 {
+				numWorkers = 4
+			}
+
+			for i := 0; i < numWorkers; i++ {
+				wgWriter.Add(1)
+				go func() {
+					defer wgWriter.Done()
+
+					for batch := range batchChan {
+						if batch.Err != nil {
+							// 收到错误，传播并退出
+							select {
+							case errorChan <- batch.Err:
+							default:
+							}
+							cancel() // 通知Reader停止
+							return
+						}
+
+						if len(batch.Data) == 0 {
+							continue
+						}
+
+						// 为每个批次开始新事务
+						tx, err := postgresConn.BeginTransaction(context.Background())
+						if err != nil {
+							errMsg := fmt.Sprintf("开始事务失败: %v", err)
+							logError(errMsg)
+							select {
+							case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+							default:
+							}
+							cancel()
+							return
+						}
+
+						// 执行批量写入
+						rowsAffected, err := postgresConn.CopyBatchData(tx, tableName, columns, batch.Data, config.Conversion.Options.LowercaseColumns)
+						if err != nil {
+							errMsg := fmt.Sprintf("插入表 %s 数据失败: %v", table.Name, err)
+							logError(errMsg)
+							tx.Rollback(context.Background())
+							select {
+							case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+							default:
+							}
+							cancel()
+							return
+						}
+
+						// 提交当前批次的事务
+						if err := tx.Commit(context.Background()); err != nil {
+							errMsg := fmt.Sprintf("提交事务失败: %v", err)
+							logError(errMsg)
+							select {
+							case errorChan <- fmt.Errorf("同步表 %s 失败: %w", table.Name, err):
+							default:
+							}
+							cancel()
+							return
+						}
+
+						// 更新处理的行数
+						atomic.AddInt64(&processedRows, rowsAffected)
+
+						// 显示同步进度
+						if config.Run.ShowConsoleLogs {
+							currentProcessed := atomic.LoadInt64(&processedRows)
+							progress := float64(currentProcessed) / float64(totalRows) * 100
+							if progress > 100 {
+								progress = 100
+							}
+
+							// 只有当进度每变化0.5%时才尝试更新，减少锁竞争
+							mutex.Lock()
+							if progress-state.lastProgress >= 0.5 {
+								// 生成进度条
+								barLength := 20
+								filledLength := int(progress / 100 * float64(barLength))
+								spaceCount := barLength - filledLength - 1
+								if spaceCount < 0 {
+									spaceCount = 0
+								}
+								bar := strings.Repeat("-", filledLength) + ">" + strings.Repeat(" ", spaceCount)
+
+								overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
+								currentTask := *completedTasks + 1
+
+								fmt.Printf("\033[2K\r进度: %.2f%% (%d/%d) : 同步表 %s [%s] %.2f%%", overallProgress, currentTask, totalTasks, table.Name, bar, progress)
+								state.lastProgress = progress
+								state.lastBarLength = filledLength
+							}
+							mutex.Unlock()
+						}
+					}
+				}()
+			}
+
+			// Reader Loop (生产者)
+			// 如果可以进行并发读取（有单列主键且成功获取了范围）
+			if useKeyPagination && minId != nil && maxId != nil {
+				// 将范围切分为多个分片
+				numReaders := config.Conversion.Limits.Concurrency
+				if numReaders <= 0 {
+					numReaders = 4
+				}
+
+				// 尝试将minId和maxId转换为int64以计算范围
+				minInt, okMin := toInt64(minId)
+				maxInt, okMax := toInt64(maxId)
+
+				// 只有当主键是数值类型时才能进行简单的范围切分
+				if okMin && okMax {
+					var wgReaders sync.WaitGroup
+					rangeSize := (maxInt - minInt + 1) / int64(numReaders)
+					if rangeSize <= 0 {
+						rangeSize = 1
+						numReaders = 1
+					}
+
+					log("启动 %d 个Reader并发读取表 %s (范围: %d-%d)", numReaders, table.Name, minInt, maxInt)
+
+					for r := 0; r < numReaders; r++ {
+						start := minInt + int64(r)*rangeSize
+						end := start + rangeSize - 1
+						if r == numReaders-1 {
+							end = maxInt
+						}
+
+						wgReaders.Add(1)
+						go func(rangeStart, rangeEnd int64) {
+							defer wgReaders.Done()
+
+							var lastRangeValue interface{}
+							// 在分片内循环读取
+							for {
+								select {
+								case <-ctx.Done():
+									return
+								default:
+								}
+
+								// 读取分片内的一批数据
+								rows, err := mysqlConn.GetTableDataInRange(table.Name, columns, primaryKey, rangeStart, rangeEnd, lastRangeValue, int(batchSize))
+								if err != nil {
+									select {
+									case batchChan <- DataBatch{Err: fmt.Errorf("读取分片数据失败: %w", err)}:
+									case <-ctx.Done():
+									}
+									return
+								}
+
+								// 读取并转换数据
+								batchData, batchLastValue, err := postgresConn.ReadBatchFromRows(rows, columns, columnTypes, int(batchInsertSize), primaryKey)
+								rows.Close()
+
+								if err != nil {
+									select {
+									case batchChan <- DataBatch{Err: fmt.Errorf("转换分片数据失败: %w", err)}:
+									case <-ctx.Done():
+									}
+									return
+								}
+
+								if len(batchData) == 0 {
+									break
+								}
+
+								// 发送数据到Writer
+								select {
+								case batchChan <- DataBatch{Data: batchData}:
+									if batchLastValue != nil {
+										lastRangeValue = batchLastValue
+									}
+								case <-ctx.Done():
+									return
+								}
+
+								// 如果读取的数据少于batchInsertSize，说明该分片内暂时没有更多数据或已读完
+								// 但由于我们在分片内也是分页读取，需要依赖rows数量判断是否结束
+								// ReadBatchFromRows 返回的数据量如果小于请求量，通常意味着读完了
+								if len(batchData) < int(batchInsertSize) {
+									break
+								}
+							}
+						}(start, end)
+					}
+
+					wgReaders.Wait()
+				} else {
+					// 非数值主键，回退到单Reader
+					log("主键非数值类型，回退到单Reader模式")
+					runSingleReader(ctx, mysqlConn, postgresConn, table, columns, columnTypes, batchSize, batchInsertSize, primaryKey, useKeyPagination, orderBy, batchChan)
+				}
+			} else {
+				// 无法并发读取，使用单Reader
+				runSingleReader(ctx, mysqlConn, postgresConn, table, columns, columnTypes, batchSize, batchInsertSize, primaryKey, useKeyPagination, orderBy, batchChan)
+			}
+
+			// 关闭通道，通知Writer结束
+			close(batchChan)
+
+			// 等待Writer完成
+			wgWriter.Wait()
+
+			if ctx.Err() == nil {
+				log("分页同步表 %s 完成，共处理 %d 行数据", table.Name, atomic.LoadInt64(&processedRows))
+			}
+
+			// 数据校验
 
 			// 数据校验
 			var validationResult string
