@@ -1178,14 +1178,14 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 		// 更新进度
 		m.mutex.Lock()
 		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		progress := m.calcProgress()
+		completed := m.completedTasks
+		total := m.totalTasks
 		m.mutex.Unlock()
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表视图 %s 成功\n", progress, m.completedTasks, m.totalTasks, view.ViewName)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表视图 %s 成功\n", progress, completed, total, view.ViewName)
 		}
 
 		m.Log("转换表视图 %s 完成", view.ViewName)
@@ -1241,14 +1241,14 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 				// 更新进度
 				m.mutex.Lock()
 				m.completedTasks++
-				progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+				progress := m.calcProgress()
+				completed := m.completedTasks
+				total := m.totalTasks
 				m.mutex.Unlock()
 
 				// 显示跳过信息（根据配置决定是否在控制台显示）
 				if m.config.Run.ShowConsoleLogs {
-					m.mutex.Lock()
-					fmt.Printf("进度: %.2f%% (%d/%d) : 表 %s 已存在，跳过创建\n", progress, m.completedTasks, m.totalTasks, table.Name)
-					m.mutex.Unlock()
+					fmt.Printf("进度: %.2f%% (%d/%d) : 表 %s 已存在，跳过创建\n", progress, completed, total, table.Name)
 				}
 
 				m.Log("表 %s 已存在，跳过创建", table.Name)
@@ -1302,14 +1302,14 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		// 更新进度
 		m.mutex.Lock()
 		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		progress := m.calcProgress()
+		completed := m.completedTasks
+		total := m.totalTasks
 		m.mutex.Unlock()
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 成功\n", progress, m.completedTasks, m.totalTasks, table.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 成功\n", progress, completed, total, table.Name)
 		}
 
 		m.Log("转换表 %s 成功", table.Name)
@@ -1439,14 +1439,14 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 		// 更新进度
 		m.mutex.Lock()
 		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		progress := m.calcProgress()
+		completed := m.completedTasks
+		total := m.totalTasks
 		m.mutex.Unlock()
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换库函数 %s 成功\n", progress, m.completedTasks, m.totalTasks, function.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换库函数 %s 成功\n", progress, completed, total, function.Name)
 		}
 
 		<-semaphore
@@ -1502,14 +1502,14 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		// 更新进度
 		m.mutex.Lock()
 		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		progress := m.calcProgress()
+		completed := m.completedTasks
+		total := m.totalTasks
 		m.mutex.Unlock()
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : [%s]转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, index.Table, lowercaseIndexName)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : [%s]转换索引 %s 成功\n", progress, completed, total, index.Table, lowercaseIndexName)
 		}
 
 		<-semaphore
@@ -1545,14 +1545,14 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 		// 更新进度
 		m.mutex.Lock()
 		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		progress := m.calcProgress()
+		completed := m.completedTasks
+		total := m.totalTasks
 		m.mutex.Unlock()
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换用户 %s 的权限成功\n", progress, m.completedTasks, m.totalTasks, user.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换用户 %s 的权限成功\n", progress, completed, total, user.Name)
 		}
 
 		<-semaphore
@@ -1588,14 +1588,14 @@ func (m *Manager) convertTablePrivileges(tables []mysql.TableInfo, semaphore cha
 		// 更新进度
 		m.mutex.Lock()
 		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		progress := m.calcProgress()
+		completed := m.completedTasks
+		total := m.totalTasks
 		m.mutex.Unlock()
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 的权限成功\n", progress, m.completedTasks, m.totalTasks, table.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 的权限成功\n", progress, completed, total, table.Name)
 		}
 
 		// 记录到日志文件
@@ -1677,9 +1677,9 @@ func (m *Manager) convertTablePrivilegesNew(tablePrivileges []mysql.TablePrivInf
 		// 更新进度
 		m.mutex.Lock()
 		m.completedTasks++
+		progress := m.calcProgress()
 		completed := m.completedTasks
 		total := m.totalTasks
-		progress := float64(completed) / float64(total) * 100
 		m.mutex.Unlock()
 
 		// 显示转换信息（根据配置决定是否在控制台显示）
@@ -1695,32 +1695,44 @@ func (m *Manager) convertTablePrivilegesNew(tablePrivileges []mysql.TablePrivInf
 // Log 记录日志
 func (m *Manager) Log(format string, args ...interface{}) {
 	logMsg := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	logEntry := fmt.Sprintf("[%s] %s\n", timestamp, logMsg)
 
-	// 写入日志文件
-	if m.config.Run.EnableFileLogging {
-		if m.logFile != nil {
-			if _, err := m.logFile.WriteString(logEntry); err != nil {
-				if m.config.Run.ShowConsoleLogs {
-					fmt.Printf("写入日志文件失败: %v\n", err)
+	if m.config.Run.EnableFileLogging || m.config.Run.ShowLogInConsole {
+		var sb strings.Builder
+		sb.WriteString("[")
+		sb.WriteString(time.Now().Format("2006-01-02 15:04:05"))
+		sb.WriteString("] ")
+		sb.WriteString(logMsg)
+		sb.WriteByte('\n')
+
+		logEntry := sb.String()
+
+		if m.config.Run.EnableFileLogging {
+			if m.logFile != nil {
+				if _, err := m.logFile.WriteString(logEntry); err != nil {
+					if m.config.Run.ShowConsoleLogs {
+						fmt.Printf("写入日志文件失败: %v\n", err)
+					}
 				}
 			}
 		}
-	}
 
-	// 根据配置决定是否在控制台显示
-	if m.config.Run.ShowLogInConsole {
-		fmt.Println(logMsg)
+		if m.config.Run.ShowLogInConsole {
+			fmt.Print(logEntry)
+		}
 	}
 }
 
 // logError 记录错误
 func (m *Manager) logError(errMsg string) {
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	errorLogEntry := fmt.Sprintf("[%s] ERROR: %s\n", timestamp, errMsg)
+	var sb strings.Builder
+	sb.WriteString("[")
+	sb.WriteString(time.Now().Format("2006-01-02 15:04:05"))
+	sb.WriteString("] ERROR: ")
+	sb.WriteString(errMsg)
+	sb.WriteByte('\n')
 
-	// 写入错误日志文件
+	errorLogEntry := sb.String()
+
 	if m.config.Run.EnableFileLogging {
 		if m.errorLogFile != nil {
 			if _, err := m.errorLogFile.WriteString(errorLogEntry); err != nil {
@@ -1731,7 +1743,6 @@ func (m *Manager) logError(errMsg string) {
 		}
 	}
 
-	// 根据配置决定是否在控制台显示
 	if m.config.Run.ShowConsoleLogs {
 		fmt.Printf("错误: %s\n", errMsg)
 	}
@@ -1744,9 +1755,17 @@ func (m *Manager) updateProgress() {
 
 	m.completedTasks++
 	if m.config.Run.ShowProgress && m.totalTasks > 0 {
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
+		progress := m.calcProgress()
 		m.Log("进度: %.2f%% (%d/%d)", progress, m.completedTasks, m.totalTasks)
 	}
+}
+
+// calcProgress 计算进度百分比
+func (m *Manager) calcProgress() float64 {
+	if m.totalTasks == 0 {
+		return 0
+	}
+	return float64(m.completedTasks) / float64(m.totalTasks) * 100
 }
 
 // generateSummaryTable 生成转换汇总表格
