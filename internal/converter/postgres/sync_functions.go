@@ -1335,6 +1335,16 @@ func (c *FunctionConverter) handleUserVariables() {
 
 // mapTypeToPG 辅助函数：映射类型
 func mapTypeToPG(mysqlType string) string {
+	mysqlType = strings.TrimSpace(mysqlType)
+	mysqlType = reTypeMb3Direct.ReplaceAllString(mysqlType, "$1")
+	mysqlType = reTypeMb3Generic.ReplaceAllString(mysqlType, "$1")
+	mysqlType = reMb3Suffix.ReplaceAllString(mysqlType, "")
+	mysqlType = reMb4Suffix.ReplaceAllString(mysqlType, "$1")
+	mysqlType = reCharsetFull.ReplaceAllString(mysqlType, "$1")
+	mysqlType = reCharsetSimple.ReplaceAllString(mysqlType, "$1")
+	mysqlType = reCollate.ReplaceAllString(mysqlType, "$1")
+	mysqlType = strings.TrimSpace(mysqlType)
+
 	switch strings.ToUpper(mysqlType) {
 	case "INT", "MEDIUMINT", "TINYINT": // TINYINT 在 PG 中通常映射为 SMALLINT，但这里为了兼容性也可以映射为 INTEGER
 		return "INTEGER"
@@ -1346,6 +1356,8 @@ func mapTypeToPG(mysqlType string) string {
 		return "BIGINT"
 	case "SMALLINT":
 		return "SMALLINT"
+	case "TEXT", "LONGTEXT", "MEDIUMTEXT", "TINYTEXT":
+		return "TEXT"
 	default:
 		return mysqlType
 	}
