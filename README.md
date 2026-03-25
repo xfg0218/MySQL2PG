@@ -1,28 +1,12 @@
 <div align="center">
 
-[![License][license-badge]][license-url] [![Stars][stars-badge]][stars-url] [![Last Commit][last-commit-badge]][commits-url] [![Language][go-badge]][repo-url] [![Go Version][go-version-badge]][go-url]
+[!\[License\](https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge null)](https://github.com/xfg0218/MySQL2PG/blob/main/LICENSE) [!\[Stars\](https://img.shields.io/github/stars/xfg0218/MySQL2PG?style=for-the-badge\&label=Stars null)](https://github.com/xfg0218/MySQL2PG/stargazers) [!\[Last Commit\](https://img.shields.io/github/last-commit/xfg0218/MySQL2PG?style=for-the-badge\&label=Last%20Commit null)](https://github.com/xfg0218/MySQL2PG/commits/main) [!\[Language\](https://img.shields.io/github/languages/top/xfg0218/MySQL2PG?style=for-the-badge\&logo=go\&logoColor=white null)](https://github.com/xfg0218/MySQL2PG) [!\[Go Version\](https://img.shields.io/badge/Go-1.24%2B-blue?style=for-the-badge\&logo=go null)](https://go.dev/dl/)
 
 </div>
 
-[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
-[license-url]: https://github.com/xfg0218/MySQL2PG/blob/main/LICENSE
-
-[stars-badge]: https://img.shields.io/github/stars/xfg0218/MySQL2PG?style=for-the-badge&label=Stars
-[stars-url]: https://github.com/xfg0218/MySQL2PG/stargazers
-
-[last-commit-badge]: https://img.shields.io/github/last-commit/xfg0218/MySQL2PG?style=for-the-badge&label=Last%20Commit
-[commits-url]: https://github.com/xfg0218/MySQL2PG/commits/main
-
-[go-badge]: https://img.shields.io/github/languages/top/xfg0218/MySQL2PG?style=for-the-badge&logo=go&logoColor=white
-[repo-url]: https://github.com/xfg0218/MySQL2PG
-
-[go-version-badge]: https://img.shields.io/badge/Go-1.24%2B-blue?style=for-the-badge&logo=go
-[go-url]: https://go.dev/dl/
-
-
 Language:  [English](README.md) | [中文](README_CN.md)
 
-# MySQL2PG - High-Performance MySQL to PostgreSQL Conversion Tool
+# MySQL2PG - High-Performance MySQL to PostgreSQL Conversion Toola
 
 MySQL2PG is a professional database conversion tool developed in Go, focusing on seamless migration from MySQL to PostgreSQL. It offers comprehensive conversion capabilities, including table structures, data, views, indexes, functions, users, and user table privileges, while featuring high performance, high reliability, and rich configuration options.
 
@@ -78,16 +62,19 @@ Start
 ## Unique Features
 
 ### 📋 Broad Version Support
+
 - **MySQL Support**: Fully compatible with MySQL 5.7 and above
 - **PostgreSQL Support**: Fully compatible with PostgreSQL 12 and above
 
 ### 🚀 High-Performance Design
+
 - **Concurrent Conversion Engine**: Supports configurable concurrent threads based on hardware, boosting speed by 5-10x compared to single-threaded conversion.
 - **Batch Processing Optimization**: Supports batch insertion, up to 10,000 rows per batch, significantly improving data migration speed.
 - **Connection Pool Management**: Supports custom connection pool settings for MySQL and PostgreSQL, with max connections up to 100+.
 - **Real-time Progress Monitoring**: Displays conversion progress in real-time, updating once per second, keeping users informed of the status.
 
 ### 🎯 Precise Conversion Capability
+
 - **Intelligent Field Type Mapping**: Supports precise conversion of almost all MySQL field types to PostgreSQL, with mapping accuracy reaching 90.9%.
 - **Function Compatibility Conversion**: Supports conversion of common MySQL functions to equivalent PostgreSQL functions, with over 90% accuracy.
 - **Complete Privilege System Migration**: Supports complete mapping of MySQL user privileges and table privileges to PostgreSQL, with 98% accuracy.
@@ -95,26 +82,30 @@ Start
 - **Index Structure Preservation**: Supports conversion of primary keys, unique indexes, normal indexes, and more, with a 98% success rate.
 
 ### ✅ Data Integrity Assurance
+
 - **Million-level Data Support**: Supports conversion of millions of records with 100% data integrity retention.
 - **Multi-dimensional Data Validation**: Automatically validates data consistency after synchronization, with 100% accuracy, supporting batch and incremental validation.
 - **Data Inconsistency Detection**: Automatically tallies tables with mismatched row counts and provides a detailed list of inconsistent tables.
 - **Flexible Sync Strategies**: Supports full synchronization and incremental synchronization (preserving existing data), configurable to truncate tables before sync.
 
 ### 🛠️ Rich Configuration Options
+
 - **Fine-grained Control**: Individually control conversion options for table structures, data, indexes, functions, user privileges, etc.
 - **Table-level Sync Selection**: Supports specifying specific tables for data synchronization, improving flexibility.
 - **Case Sensitivity Control**: Configurable option to convert table fields to lowercase, adapting to different naming conventions.
 - **Network Bandwidth Limiting**: Configurable network bandwidth limit to avoid impacting production environments.
 
 ### 🔧 Convenient Developer Experience
-- **test_only Mode**: Tests connections only without performing conversion, with response time <1 second.
+
+- **test\_only Mode**: Tests connections only without performing conversion, with response time <1 second.
 - **Detailed Logging System**: Supports file logging and console logging, recording every step of the conversion process.
 - **Clear Example Output**: Provides example outputs for various scenarios to help users understand how the tool works.
 - **Comprehensive Error Handling**: Provides detailed error information when errors occur, facilitating troubleshooting.
 
 ## Important Function Details
 
-### test_only Mode
+### test\_only Mode
+
 - **Description**: Only tests database connections without performing any conversion operations. Connection test response time is <1 second.
 - **Configuration**:
   - `mysql.test_only: true` - Only test MySQL connection, do not convert.
@@ -123,13 +114,15 @@ Start
 - **Use Case**: Quickly verify if database connection configurations are correct without running the full conversion flow.
 
 ### Data Validation
+
 - **Description**: Verifies data consistency between MySQL and PostgreSQL after data synchronization to ensure migration integrity.
 - **Configuration**: `validate_data: true` - Enable data validation function.
 - **Method**: Compares the row counts of two tables.
 - **Logic**: If data validation fails, the tool decides whether to interrupt execution based on the `truncate_before_sync` setting.
 - **Use Case**: Ensuring migration integrity, especially during critical data migrations in production environments.
 
-### truncate_before_sync Option
+### truncate\_before\_sync Option
+
 - **Description**: Controls whether to truncate PostgreSQL table data before synchronization, offering flexible sync strategies.
 - **Configuration**:
   - `truncate_before_sync: true` - Truncate table data before sync.
@@ -144,6 +137,7 @@ Start
     - Finally, it displays statistics of inconsistent tables after conversion completes.
 
 ### MySQL Connection Configuration
+
 - **Description**: Allows users to customize MySQL connection parameters to meet specific needs.
 - **Configuration**: `connection_params: charset=utf8mb4&parseTime=false&interpolateParams=true`
 - **Supported Parameters**:
@@ -156,6 +150,7 @@ Start
   - Does not support the `compress` parameter (not implemented by MySQL driver).
 
 ### PostgreSQL Connection Configuration
+
 - **Description**: Allows users to customize PostgreSQL connection parameters to meet specific needs.
 - **Configuration**: `pg_connection_params: search_path=public connect_timeout=10`
 - **Supported Parameters**:
@@ -167,6 +162,7 @@ Start
   - Supports all connection parameters of the PostgreSQL driver.
 
 ### Table Filtering
+
 - **Description**: Provides two table filtering modes to flexibly control which tables to sync.
 - **Whitelist Mode** (`use_table_list`):
   - `conversion.options.use_table_list: true` - Only sync tables in `table_list`.
@@ -180,6 +176,7 @@ Start
   - Table names are case-sensitive; ensure they match the actual database table names.
 
 ### Connection Pool Optimization
+
 - **Description**: Adjust connection pool parameters to improve efficiency.
 - **MySQL Pool**:
   - `max_open_conns: 100` - Max connections increased from 50 to 100.
@@ -189,6 +186,7 @@ Start
 - **Effect**: Improves concurrent processing capability, reduces overhead of creating and destroying connections.
 
 ### Inconsistent Table Statistics
+
 - **Description**: Collects and displays information on all inconsistent tables when data validation fails.
 - **Display**: Shows table name, MySQL row count, and PostgreSQL row count in a table format.
 - **Logic**: Only when `truncate_before_sync: false`, data inconsistency does not interrupt execution but continues and displays statistics at the end.
@@ -197,117 +195,130 @@ Start
 ## Feature Details
 
 ### 1. Table Structure Conversion
+
 Supports conversion of 40+ MySQL field types to PostgreSQL compatible types, with 99.9% mapping accuracy. Supported mappings include:
 
-| MySQL Type | PostgreSQL Type | Description |
-|------------|-----------------|-------------|
-| bigint, bigint(20), etc. | BIGINT | All bigint variants to BIGINT |
-| int, int(11), integer, etc. | INTEGER | All int variants to INTEGER |
-| mediumint, mediumint(9) | INTEGER | mediumint to INTEGER |
-| smallint, smallint(6), etc. | SMALLINT | All smallint variants to SMALLINT |
-| tinyint(1) | BOOLEAN | tinyint(1) to BOOLEAN |
-| tinyint, tinyint(4), etc. | SMALLINT | Other tinyint variants to SMALLINT |
-| decimal, numeric | DECIMAL | decimal kept as DECIMAL, preserving precision |
-| double, double precision | DOUBLE PRECISION | double to DOUBLE PRECISION |
-| float | REAL | float to REAL |
-| char, char(1) | CHAR | char kept as CHAR, preserving length |
-| varchar, varchar(255), etc. | VARCHAR | All varchar variants kept as VARCHAR, preserving length |
-| text, longtext, etc. | TEXT | All text variants to TEXT |
-| blob, longblob, binary, etc. | BYTEA | All binary types to BYTEA |
-| datetime, datetime(6) | TIMESTAMP | datetime to TIMESTAMP, preserving precision |
-| timestamp, timestamp(6) | TIMESTAMP | timestamp kept as TIMESTAMP, preserving precision |
-| date | DATE | date kept as DATE |
-| time | TIME | time kept as TIME, preserving precision |
-| year | INTEGER | year to INTEGER |
-| json, json(1024) | JSON | json to JSON |
-| jsonb | JSONB | jsonb kept as JSONB |
-| enum | VARCHAR(255) | enum to VARCHAR(255) |
-| set | VARCHAR(255) | set to VARCHAR(255) |
-| geometry | GEOMETRY | geometry kept as GEOMETRY |
-| point | POINT | point kept as POINT |
-| linestring | LINESTRING | linestring kept as LINESTRING |
-| polygon | POLYGON | polygon kept as POLYGON |
-| multipoint | MULTIPOINT | multipoint kept as MULTIPOINT |
-| multilinestring | MULTILINESTRING | multilinestring kept as MULTILINESTRING |
-| multipolygon | MULTIPOLYGON | multipolygon kept as MULTIPOLYGON |
-| geometrycollection | GEOMETRYCOLLECTION | geometrycollection kept as GEOMETRYCOLLECTION |
-| bigint AUTO_INCREMENT | BIGSERIAL | Auto-increment bigint to BIGSERIAL |
-| int AUTO_INCREMENT | SERIAL | Auto-increment int to SERIAL |
+| MySQL Type                   | PostgreSQL Type    | Description                                             |
+| ---------------------------- | ------------------ | ------------------------------------------------------- |
+| bigint, bigint(20), etc.     | BIGINT             | All bigint variants to BIGINT                           |
+| int, int(11), integer, etc.  | INTEGER            | All int variants to INTEGER                             |
+| mediumint, mediumint(9)      | INTEGER            | mediumint to INTEGER                                    |
+| smallint, smallint(6), etc.  | SMALLINT           | All smallint variants to SMALLINT                       |
+| tinyint(1)                   | BOOLEAN            | tinyint(1) to BOOLEAN                                   |
+| tinyint, tinyint(4), etc.    | SMALLINT           | Other tinyint variants to SMALLINT                      |
+| decimal, numeric             | DECIMAL            | decimal kept as DECIMAL, preserving precision           |
+| double, double precision     | DOUBLE PRECISION   | double to DOUBLE PRECISION                              |
+| float                        | REAL               | float to REAL                                           |
+| char, char(1)                | CHAR               | char kept as CHAR, preserving length                    |
+| varchar, varchar(255), etc.  | VARCHAR            | All varchar variants kept as VARCHAR, preserving length |
+| text, longtext, etc.         | TEXT               | All text variants to TEXT                               |
+| blob, longblob, binary, etc. | BYTEA              | All binary types to BYTEA                               |
+| datetime, datetime(6)        | TIMESTAMP          | datetime to TIMESTAMP, preserving precision             |
+| timestamp, timestamp(6)      | TIMESTAMP          | timestamp kept as TIMESTAMP, preserving precision       |
+| date                         | DATE               | date kept as DATE                                       |
+| time                         | TIME               | time kept as TIME, preserving precision                 |
+| year                         | INTEGER            | year to INTEGER                                         |
+| json, json(1024)             | JSON               | json to JSON                                            |
+| jsonb                        | JSONB              | jsonb kept as JSONB                                     |
+| enum                         | VARCHAR(255)       | enum to VARCHAR(255)                                    |
+| set                          | VARCHAR(255)       | set to VARCHAR(255)                                     |
+| geometry                     | GEOMETRY           | geometry kept as GEOMETRY                               |
+| point                        | POINT              | point kept as POINT                                     |
+| linestring                   | LINESTRING         | linestring kept as LINESTRING                           |
+| polygon                      | POLYGON            | polygon kept as POLYGON                                 |
+| multipoint                   | MULTIPOINT         | multipoint kept as MULTIPOINT                           |
+| multilinestring              | MULTILINESTRING    | multilinestring kept as MULTILINESTRING                 |
+| multipolygon                 | MULTIPOLYGON       | multipolygon kept as MULTIPOLYGON                       |
+| geometrycollection           | GEOMETRYCOLLECTION | geometrycollection kept as GEOMETRYCOLLECTION           |
+| bigint AUTO\_INCREMENT       | BIGSERIAL          | Auto-increment bigint to BIGSERIAL                      |
+| int AUTO\_INCREMENT          | SERIAL             | Auto-increment int to SERIAL                            |
 
 ### 2. Data Conversion
+
 - Supports million-level data conversion with 100% data integrity retention.
 - Average conversion speed up to 10,000+ rows/second.
 - Supports batch insertion, up to 10,000 rows per batch.
 - Configurable option to truncate table data before sync.
 
 ### 3. View Conversion
+
 Supports complete conversion of MySQL view definitions to PostgreSQL, including SQL parsing, function replacement, and syntax adjustment.
 
 #### Supported Conversion Features:
-1. **Identifier Handling**: Replaces MySQL backticks (`) with PostgreSQL double quotes (").
+
+1. **Identifier Handling**: Replaces MySQL backticks (\`) with PostgreSQL double quotes (").
 2. **Syntax Compatibility**:
    - Converts `LIMIT a,b` to `LIMIT b OFFSET a`.
    - Optimizes table join conditions, automatically adding aliases.
 
 #### Conversion Examples:
 
-| Type | MySQL Syntax | PostgreSQL Syntax | Note |
-|------|--------------|-------------------|------|
-| Basic View | `CREATE VIEW `user_view` ...` | `CREATE VIEW "user_view" ...` | Identifier handling |
-| LIMIT | `... LIMIT 10, 20;` | `... LIMIT 20 OFFSET 10;` | Pagination syntax |
-| IFNULL | `SELECT IFNULL(...)` | `SELECT COALESCE(...)` | Null handling |
-| IF | `SELECT IF(...)` | `SELECT CASE WHEN ...` | Conditional logic |
-| GROUP_CONCAT | `SELECT GROUP_CONCAT(...)` | `SELECT string_agg(...)` | String aggregation |
-| CONCAT | `SELECT CONCAT(...)` | `SELECT ... || ...` | String concatenation |
-| DATE_FORMAT | `SELECT DATE_FORMAT(...)` | `SELECT to_char(...)` | Date formatting |
-| JSON_EXTRACT | `SELECT JSON_EXTRACT(...)` | `SELECT "data" -> 'name'` | JSON extraction |
+| Type          | MySQL Syntax                     | PostgreSQL Syntax             | Note                | <br /> | <br />               |
+| ------------- | -------------------------------- | ----------------------------- | ------------------- | :----- | :------------------- |
+| Basic View    | `CREATE VIEW ` user\_view ` ...` | `CREATE VIEW "user_view" ...` | Identifier handling | <br /> | <br />               |
+| LIMIT         | `... LIMIT 10, 20;`              | `... LIMIT 20 OFFSET 10;`     | Pagination syntax   | <br /> | <br />               |
+| IFNULL        | `SELECT IFNULL(...)`             | `SELECT COALESCE(...)`        | Null handling       | <br /> | <br />               |
+| IF            | `SELECT IF(...)`                 | `SELECT CASE WHEN ...`        | Conditional logic   | <br /> | <br />               |
+| GROUP\_CONCAT | `SELECT GROUP_CONCAT(...)`       | `SELECT string_agg(...)`      | String aggregation  | <br /> | <br />               |
+| CONCAT        | `SELECT CONCAT(...)`             | \`SELECT ...                  | <br />              | ...\`  | String concatenation |
+| DATE\_FORMAT  | `SELECT DATE_FORMAT(...)`        | `SELECT to_char(...)`         | Date formatting     | <br /> | <br />               |
+| JSON\_EXTRACT | `SELECT JSON_EXTRACT(...)`       | `SELECT "data" -> 'name'`     | JSON extraction     | <br /> | <br />               |
 
 (Detailed function mapping tables omitted for brevity, see Chinese README for full list if needed, or assume similar coverage)
 
 View conversion accuracy reaches 98%, supporting batch conversion (10 per batch).
 
 ### 4. Stored Procedure/Function Conversion
+
 - Supports 50+ common MySQL functions to PostgreSQL equivalents.
 - Function conversion accuracy > 95%.
 - Supports batch conversion (5 per batch).
 
 ### 5. Index Conversion
+
 - Supports primary keys, unique indexes, normal indexes, etc.
 - Index conversion success rate 99%.
 - Supports batch conversion (20 per batch).
 
 ### 6. User Conversion
+
 - Supports complete mapping of MySQL user privileges to PostgreSQL.
 - Privilege conversion accuracy 98%.
 - Supports batch conversion (10 per batch).
 
 ### 7. Table Privilege Conversion
+
 - Supports table-level privilege setting conversion.
 - Ensures PostgreSQL table privileges match MySQL.
 - Individually controllable.
 
 ### 8. Data Validation
+
 - Verifies MySQL and PostgreSQL data consistency, 100% accuracy.
 - Supports batch validation.
 - Automatically tallies mismatched tables.
 
 ### 9. Concurrent Conversion
+
 - Configurable 10-50 concurrent threads.
 - 5-10x speedup over single-threaded.
 - Adjustable based on system resources.
 
 ### 10. Real-time Progress
+
 - Real-time progress display, updates 1/sec.
 - Shows time statistics per stage.
 - Configurable on/off.
 
 ### 11. Configurable Connection Pools
+
 - Custom settings for MySQL/PostgreSQL pools.
 - MySQL: max connections, max idle, max lifetime.
 - PostgreSQL: max connections.
 - Max connections up to 100+.
 
-### 12. test_only Mode
+### 12. test\_only Mode
+
 - Test connections only, no conversion.
 - Response time < 1s.
 - Displays version info.
@@ -424,52 +435,62 @@ run:
 
 ### Core Parameters
 
-#### 1. test_only
+#### 1. test\_only
+
 - **Type**: Boolean
 - **Default**: false
 - **Function**: Only test connections.
 
-#### 2. validate_data
+#### 2. validate\_data
+
 - **Type**: Boolean
 - **Default**: true
 - **Function**: Verify data consistency after sync.
 
-#### 3. truncate_before_sync
+#### 3. truncate\_before\_sync
+
 - **Type**: Boolean
 - **Default**: true
 - **Function**: Truncate PostgreSQL table before sync.
 
-#### 4. use_table_list
+#### 4. use\_table\_list
+
 - **Type**: Boolean
 - **Default**: false
 - **Function**: Only sync specified tables.
 
-#### 5. table_list
+#### 5. table\_list
+
 - **Type**: String Array
-- **Default**: []
+- **Default**: \[]
 - **Function**: List of tables to sync.
 
 #### 6. concurrency
+
 - **Type**: Integer
 - **Default**: 10
 - **Function**: Number of concurrent threads.
 
-#### 7. max_rows_per_batch
+#### 7. max\_rows\_per\_batch
+
 - **Type**: Integer
 - **Default**: 10000
 - **Function**: Max rows per batch sync.
 
-#### 8. batch_insert_size
+#### 8. batch\_insert\_size
+
 - **Type**: Integer
 - **Default**: 10000
 - **Function**: Batch insert size.
 
-#### 9. show_progress
+#### 9. show\_progress
+
 - **Type**: Boolean
 - **Default**: true
 - **Function**: Show task progress.
 
-#### 10. lowercase_columns
+#### 10. lowercase\_columns
+
 - **Type**: Boolean
 - **Default**: true
 - **Function**: Convert field names to lowercase.
@@ -477,6 +498,7 @@ run:
 ## Best Practices
 
 ### 1. Production Environment
+
 ```yaml
 conversion:
   options:
@@ -488,6 +510,7 @@ conversion:
 ```
 
 ### 2. Incremental Sync (Preserve Data)
+
 ```yaml
 conversion:
   options:
@@ -499,6 +522,7 @@ conversion:
 ```
 
 ### 3. Quick Test
+
 ```yaml
 mysql:
   test_only: true
@@ -507,6 +531,7 @@ postgresql:
 ```
 
 ### 4. Performance Optimization
+
 ```yaml
 conversion:
   limits:
@@ -676,24 +701,29 @@ sys	0m6.487s
 ## FAQ
 
 ### 1. What if data validation fails?
+
 - Check `truncate_before_sync` setting.
 - If `true`, check if other processes are writing to PostgreSQL.
 - If `false`, the tool continues but records inconsistent tables.
 
 ### 2. How to improve conversion speed?
+
 - Increase `concurrency`.
 - Increase `max_rows_per_batch` and `batch_insert_size`.
 - Ensure stable and sufficient network bandwidth.
 
 ### 3. What if connection errors occur?
+
 - Check database connection config.
 - Ensure MySQL and PostgreSQL services are running.
 - Check network stability.
 
 ### 4. How to test connection only?
+
 - Set `mysql.test_only: true` or `postgresql.test_only: true`.
 
 ### 5. Primary Key Conflicts
+
 When primary key conflicts occur, an error is reported. Choose to skip or truncate table data based on the situation.
 
 ```sql
