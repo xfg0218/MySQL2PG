@@ -405,7 +405,19 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 	}
 
 	upperLine := strings.ToUpper(line)
-	if strings.HasPrefix(upperLine, "CONSTRAINT") || strings.HasPrefix(upperLine, "KEY") || strings.HasPrefix(upperLine, "INDEX") || strings.HasPrefix(upperLine, "FULLTEXT") {
+
+	isKeyword := false
+	if strings.HasPrefix(upperLine, "CONSTRAINT ") || strings.HasPrefix(upperLine, "CONSTRAINT(") {
+		isKeyword = true
+	} else if strings.HasPrefix(upperLine, "KEY ") || strings.HasPrefix(upperLine, "KEY(") {
+		isKeyword = true
+	} else if strings.HasPrefix(upperLine, "INDEX ") || strings.HasPrefix(upperLine, "INDEX(") {
+		isKeyword = true
+	} else if strings.HasPrefix(upperLine, "FULLTEXT ") || strings.HasPrefix(upperLine, "FULLTEXT(") {
+		isKeyword = true
+	}
+
+	if isKeyword {
 		parts := strings.Fields(line)
 		if len(parts) < 2 {
 			isConstraint = true
@@ -413,7 +425,7 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 		}
 		upperSecondPart := strings.ToUpper(parts[1])
 		isDataType := false
-		for _, t := range []string{"INT", "TEXT", "VARCHAR", "CHAR", "BOOLEAN", "DATE", "TIME", "TIMESTAMP", "DECIMAL", "DOUBLE", "FLOAT", "BLOB", "BYTEA", "JSON"} {
+		for _, t := range []string{"INT", "TEXT", "VARCHAR", "CHAR", "BOOLEAN", "DATE", "TIME", "TIMESTAMP", "DECIMAL", "DOUBLE", "FLOAT", "BLOB", "BYTEA", "JSON", "ENUM", "SET"} {
 			if strings.Contains(upperSecondPart, t) {
 				isDataType = true
 				break
