@@ -3,6 +3,7 @@ package mysql
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -165,10 +166,57 @@ func (c *Connection) GetTableDataWithPagination(tableName string, columns []stri
 	return rows, nil
 }
 
+// GetTableDataWithCompositePagination 使用基于复合主键的游标分页获取表数据
+func (c *Connection) GetTableDataWithCompositePagination(tableName string, columns []string, primaryKeys []string, lastValues []interface{}, limit int) (*sql.Rows, error) {
+	if len(primaryKeys) == 0 {
+		return nil, fmt.Errorf("复合主键列表为空")
+	}
+	if lastValues != nil && len(lastValues) != len(primaryKeys) {
+		return nil, fmt.Errorf("复合主键游标值数量不匹配: keys=%d values=%d", len(primaryKeys), len(lastValues))
+	}
+
+	var quotedColumns []string
+	for _, col := range columns {
+		quotedColumns = append(quotedColumns, fmt.Sprintf("`%s`", col))
+	}
+	columnsStr := strings.Join(quotedColumns, ", ")
+
+	var quotedKeys []string
+	for _, k := range primaryKeys {
+		quotedKeys = append(quotedKeys, fmt.Sprintf("`%s`", k))
+	}
+	orderBy := strings.Join(quotedKeys, ", ")
+
+	query := fmt.Sprintf("SELECT %s FROM `%s`", columnsStr, tableName)
+	var args []interface{}
+
+	if lastValues != nil {
+		var orConds []string
+		for i := 0; i < len(primaryKeys); i++ {
+			var andConds []string
+			for j := 0; j < i; j++ {
+				andConds = append(andConds, fmt.Sprintf("`%s` = ?", primaryKeys[j]))
+				args = append(args, lastValues[j])
+			}
+			andConds = append(andConds, fmt.Sprintf("`%s` > ?", primaryKeys[i]))
+			args = append(args, lastValues[i])
+			orConds = append(orConds, "("+strings.Join(andConds, " AND ")+")")
+		}
+		query += " WHERE " + strings.Join(orConds, " OR ")
+	}
+
+	query += fmt.Sprintf(" ORDER BY %s LIMIT %d", orderBy, limit)
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("获取表数据失败: %w", err)
+	}
+
+	return rows, nil
+}
+
 // GetTablePrimaryKeys 获取表的主键列名列表
 func (c *Connection) GetTablePrimaryKeys(tableName string) ([]string, error) {
-	// 使用SHOW KEYS FROM语句获取主键信息，避免查询information_schema导致的权限问题
-	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
 	query := fmt.Sprintf("SHOW KEYS FROM `%s` WHERE Key_name = 'PRIMARY'", tableName)
 
 	rows, err := c.db.Query(query)
@@ -178,37 +226,42 @@ func (c *Connection) GetTablePrimaryKeys(tableName string) ([]string, error) {
 	defer rows.Close()
 
 	var primaryKeys []string
-	for rows.Next() {
-		// SHOW KEYS FROM返回的字段顺序：
-		// Table, Non_unique, Key_name, Seq_in_index, Column_name, Collation, Cardinality, Sub_part, Packed, Null, Index_type, Comment, Index_comment, Visible, Expression
-		// 尝试扫描，忽略列数不匹配的错误（为了兼容不同版本的MySQL）
-		columns, _ := rows.Columns()
-		values := make([]interface{}, len(columns))
-		for i := range values {
-			values[i] = new(interface{})
-		}
+	// SHOW KEYS FROM 返回: Table, Non_unique, Key_name, Seq_in_index, Column_name, ...
+	// 直接扫描需要的列: Column_name (第5个), Seq_in_index (第4个)
+	// 按 Seq_in_index 排序确保主键顺序正确
+	type pkInfo struct {
+		columnName string
+		seqIndex   int
+	}
+	var pkList []pkInfo
 
-		if err := rows.Scan(values...); err != nil {
+	for rows.Next() {
+		var table string
+		var nonUnique int
+		var keyName string
+		var seqInIndex int
+		var columnName string
+
+		if err := rows.Scan(&table, &nonUnique, &keyName, &seqInIndex, &columnName); err != nil {
 			return nil, fmt.Errorf("扫描主键信息失败: %w", err)
 		}
 
-		var columnName string
-		// Column_name通常是第5列 (索引4)
-		if len(columns) >= 5 {
-			if val, ok := (*values[4].(*interface{})).([]byte); ok {
-				columnName = string(val)
-			} else if val, ok := (*values[4].(*interface{})).(string); ok {
-				columnName = val
-			}
-		}
-
 		if columnName != "" {
-			primaryKeys = append(primaryKeys, columnName)
+			pkList = append(pkList, pkInfo{columnName: columnName, seqIndex: seqInIndex})
 		}
 	}
 
-	if len(primaryKeys) == 0 {
+	if len(pkList) == 0 {
 		return nil, fmt.Errorf("表 %s 没有主键", tableName)
+	}
+
+	// 按 seqInIndex 排序
+	sort.Slice(pkList, func(i, j int) bool {
+		return pkList[i].seqIndex < pkList[j].seqIndex
+	})
+
+	for _, pk := range pkList {
+		primaryKeys = append(primaryKeys, pk.columnName)
 	}
 
 	return primaryKeys, nil
@@ -252,25 +305,27 @@ func (c *Connection) GetMinMaxPrimaryKeys(tableName string, primaryKey string) (
 
 // GetTableDataInRange 获取指定主键范围内的表数据
 func (c *Connection) GetTableDataInRange(tableName string, columns []string, primaryKey string, minId, maxId interface{}, lastValue interface{}, limit int) (*sql.Rows, error) {
-	var quotedColumns []string
-	for _, col := range columns {
-		quotedColumns = append(quotedColumns, fmt.Sprintf("`%s`", col))
+	var sb strings.Builder
+	sb.Grow(len(columns) * 20)
+
+	for i, col := range columns {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("`")
+		sb.WriteString(col)
+		sb.WriteString("`")
 	}
-	columnsStr := strings.Join(quotedColumns, ", ")
+	columnsStr := sb.String()
 
 	var query string
 	var args []interface{}
 
-	// 构建查询条件：id >= minId AND id <= maxId
-	// 并且如果是分页后续请求，还需要 id > lastValue
-
 	if lastValue != nil {
-		// 分页后续请求：WHERE id > lastValue AND id <= maxId
 		query = fmt.Sprintf("SELECT %s FROM `%s` WHERE `%s` > ? AND `%s` <= ? ORDER BY `%s` LIMIT %d",
 			columnsStr, tableName, primaryKey, primaryKey, primaryKey, limit)
 		args = []interface{}{lastValue, maxId}
 	} else {
-		// 初始请求：WHERE id >= minId AND id <= maxId
 		query = fmt.Sprintf("SELECT %s FROM `%s` WHERE `%s` >= ? AND `%s` <= ? ORDER BY `%s` LIMIT %d",
 			columnsStr, tableName, primaryKey, primaryKey, primaryKey, limit)
 		args = []interface{}{minId, maxId}
