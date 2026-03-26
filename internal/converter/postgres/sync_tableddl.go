@@ -425,8 +425,8 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 		}
 		upperSecondPart := strings.ToUpper(parts[1])
 		isDataType := false
-		for _, t := range []string{"INT", "TEXT", "VARCHAR", "CHAR", "BOOLEAN", "DATE", "TIME", "TIMESTAMP", "DECIMAL", "DOUBLE", "FLOAT", "BLOB", "BYTEA", "JSON", "ENUM", "SET"} {
-			if strings.Contains(upperSecondPart, t) {
+		for _, t := range []string{"BIGINT", "SMALLINT", "MEDIUMINT", "TINYINT", "INTEGER", "INT", "TEXT", "LONGTEXT", "MEDIUMTEXT", "TINYTEXT", "VARCHAR", "CHAR", "BOOLEAN", "DATE", "TIME", "TIMESTAMP", "DECIMAL", "DOUBLE", "FLOAT", "NUMERIC", "REAL", "BLOB", "BYTEA", "BINARY", "VARBINARY", "JSON", "ENUM", "SET"} {
+			if strings.HasPrefix(upperSecondPart, t) {
 				isDataType = true
 				break
 			}
@@ -701,7 +701,27 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool) (*ConvertTableDDLRe
 
 		upperTrimmedLine := strings.ToUpper(trimmedLine)
 
-		if reIndexPattern.MatchString(upperTrimmedLine) ||
+		skipIndexLine := false
+		if reIndexPattern.MatchString(upperTrimmedLine) {
+			parts := strings.Fields(trimmedLine)
+			if len(parts) < 2 {
+				skipIndexLine = true
+			} else {
+				upperSecondPart := strings.ToUpper(parts[1])
+				isDataType := false
+				for _, t := range []string{"BIGINT", "SMALLINT", "MEDIUMINT", "TINYINT", "INTEGER", "INT", "TEXT", "LONGTEXT", "MEDIUMTEXT", "TINYTEXT", "VARCHAR", "CHAR", "BOOLEAN", "DATE", "TIME", "TIMESTAMP", "DECIMAL", "DOUBLE", "FLOAT", "NUMERIC", "REAL", "BLOB", "BYTEA", "BINARY", "VARBINARY", "JSON", "ENUM", "SET"} {
+					if strings.HasPrefix(upperSecondPart, t) {
+						isDataType = true
+						break
+					}
+				}
+				if !isDataType {
+					skipIndexLine = true
+				}
+			}
+		}
+
+		if skipIndexLine ||
 			strings.Contains(upperTrimmedLine, "FOREIGN KEY") ||
 			strings.Contains(upperTrimmedLine, "USING BTREE") ||
 			strings.Contains(upperTrimmedLine, "USING HASH") ||
