@@ -2553,6 +2553,7 @@ CREATE TABLE case_167_merge (
 
 -- 创建 PRIMARY KEY ... USING BTREE 测试表（修复主键丢失问题）
 -- 典型案例：MySQL 8.0 默认在主键后添加 USING BTREE，迁移时需确保主键不丢失
+-- 使用 MySQL 5.7+ 兼容的排序规则：utf8mb4_general_ci（5.7 和 8.0 都支持）
 DROP TABLE IF EXISTS case_168_merge;
 CREATE TABLE `case_168_merge` (
   `normalize_id` int NOT NULL AUTO_INCREMENT,
@@ -2566,5 +2567,5 @@ CREATE TABLE `case_168_merge` (
   `update_by` int DEFAULT NULL,
   `update_time` datetime DEFAULT NULL,
   PRIMARY KEY (`normalize_id`) USING BTREE
-) ENGINE=InnoDB AUTO_INCREMENT=12506 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC;
+) ENGINE=InnoDB AUTO_INCREMENT=12506 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci ROW_FORMAT=DYNAMIC;
 
