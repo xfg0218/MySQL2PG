@@ -73,6 +73,10 @@ jobs:
             image: 'postgres:14'
           - version: '16'
             image: 'postgres:16'
+          - version: '17'
+            image: 'postgres:17'
+          - version: '18'
+            image: 'postgres:18'
         # Exclude incompatible combinations if any
         exclude:
           # All combinations are supported
