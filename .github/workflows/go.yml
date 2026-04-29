@@ -77,9 +77,6 @@ jobs:
             image: 'postgres:17'
           - version: '18'
             image: 'postgres:18'
-        # Exclude incompatible combinations if any
-        exclude:
-          # All combinations are supported
     services:
       mysql:
         image: ${{ matrix.mysql.image }}
