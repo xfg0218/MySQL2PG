@@ -2518,15 +2518,17 @@ CREATE TABLE case_164_org_tree (
     ON UPDATE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自关联组织树';
 
--- 创建 CHECK ENFORCED / NOT ENFORCED 测试表（MySQL 8.0）
+-- 创建 CHECK 约束测试表（兼容 MySQL 5.7+）
+-- 注：MySQL 5.7 解析但忽略 CHECK 约束，8.0.16+ 才真正执行
+-- ENFORCED / NOT ENFORCED 是 8.0.16+ 特性，这里使用兼容语法
 DROP TABLE IF EXISTS case_165_check_enforced;
 CREATE TABLE case_165_check_enforced (
   id BIGINT NOT NULL PRIMARY KEY,
   amount DECIMAL(12,2) NOT NULL,
   status TINYINT NOT NULL,
-  CONSTRAINT chk_case_165_amount_nonneg CHECK (amount >= 0) ENFORCED,
-  CONSTRAINT chk_case_165_status CHECK (status IN (0, 1, 2)) NOT ENFORCED
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='MySQL8 CHECK 约束测试';
+  CONSTRAINT chk_case_165_amount_nonneg CHECK (amount >= 0),
+  CONSTRAINT chk_case_165_status CHECK (status IN (0, 1, 2))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='CHECK 约束测试';
 
 -- 创建 ENGINE=MEMORY + ROW_FORMAT + COMMENT 组合表
 DROP TABLE IF EXISTS case_166_memory_rowfmt;
@@ -2551,6 +2553,7 @@ CREATE TABLE case_167_merge (
 
 -- 创建 PRIMARY KEY ... USING BTREE 测试表（修复主键丢失问题）
 -- 典型案例：MySQL 8.0 默认在主键后添加 USING BTREE，迁移时需确保主键不丢失
+-- 使用 MySQL 5.7+ 兼容的排序规则：utf8mb4_general_ci（5.7 和 8.0 都支持）
 DROP TABLE IF EXISTS case_168_merge;
 CREATE TABLE `case_168_merge` (
   `normalize_id` int NOT NULL AUTO_INCREMENT,
@@ -2564,5 +2567,5 @@ CREATE TABLE `case_168_merge` (
   `update_by` int DEFAULT NULL,
   `update_time` datetime DEFAULT NULL,
   PRIMARY KEY (`normalize_id`) USING BTREE
-) ENGINE=InnoDB AUTO_INCREMENT=12506 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC;
+) ENGINE=InnoDB AUTO_INCREMENT=12506 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci ROW_FORMAT=DYNAMIC;
 
