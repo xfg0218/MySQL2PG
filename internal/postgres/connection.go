@@ -893,3 +893,18 @@ func parseMySQLPoint(data []byte) (string, error) {
 	// 格式化为PostgreSQL Point格式 (x,y)
 	return fmt.Sprintf("(%v,%v)", x, y), nil
 }
+
+// GetCharset 获取 PostgreSQL 的字符集
+func (c *Connection) GetCharset() (string, error) {
+	query := `
+		SELECT pg_encoding_to_char(encoding)
+		FROM pg_database
+		WHERE datname = $1
+	`
+	var charset string
+	err := c.pool.QueryRow(context.Background(), query, c.config.Database).Scan(&charset)
+	if err != nil {
+		return "", fmt.Errorf("获取 PostgreSQL 字符集失败：%w", err)
+	}
+	return charset, nil
+}

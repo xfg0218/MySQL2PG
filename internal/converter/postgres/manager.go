@@ -64,6 +64,27 @@ type Manager struct {
 	inconsistentTables []TableDataInconsistency
 	// 存储表名到列名映射的映射
 	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
+	// 评估模式：只评估不写入
+	assessmentMode bool
+	// 评估结果（仅在评估模式下填充）
+	assessmentResults *AssessmentResults
+}
+
+// AssessmentResults 评估结果
+type AssessmentResults struct {
+	TableErrors       map[string]error       // 表转换错误
+	ViewErrors        map[string]error       // 视图转换错误
+	FunctionErrors    map[string]error       // 函数转换错误
+	IndexErrors       map[string]error       // 索引转换错误
+	TableWarnings     map[string][]string    // 表转换警告
+	ViewWarnings      map[string][]string    // 视图转换警告
+	FunctionWarnings  map[string][]string    // 函数转换警告
+	IndexWarnings     map[string][]string    // 索引转换警告
+	ConversionStats   []ConversionStageStat  // 转换统计
+	TotalRows         int64                  // 总行数
+	TableDDLResults   map[string]string      // 表 DDL 转换结果（成功转换后的 PostgreSQL DDL）
+	ViewDDLResults    map[string]string      // 视图 DDL 转换结果
+	FunctionDDLResults map[string]string     // 函数 DDL 转换结果
 }
 
 // ConversionStageStat 转换阶段统计信息

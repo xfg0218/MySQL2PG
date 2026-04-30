@@ -23,6 +23,12 @@ func main() {
 		http.ListenAndServe("localhost:6060", nil)
 	}()
 
+	// 检测 assess 子命令
+	if isAssess, assessArgs := detectAssessCommand(os.Args[1:]); isAssess {
+		runAssess(assessArgs)
+		return
+	}
+
 	// 检测 report 子命令
 	if isReport, reportArgs := detectReportCommand(os.Args[1:]); isReport {
 		runReport(reportArgs)
@@ -171,13 +177,18 @@ func main() {
 
 // showHelp 显示帮助信息
 func showHelp() {
-	fmt.Println("MySQL2PG - 高性能MySQL到PostgreSQL转换工具")
+	fmt.Println("MySQL2PG - 高性能 MySQL 到 PostgreSQL 转换工具")
 	fmt.Println("使用方法:")
 	fmt.Println("  mysql2pg [配置文件路径]")
 	fmt.Println("  mysql2pg -c [配置文件路径]")
-	fmt.Println("  mysql2pg report -l <conversion.log>  从日志生成HTML报告")
+	fmt.Println("  mysql2pg assess <配置文件> [选项]  迁移前评估")
+	fmt.Println("  mysql2pg report -l <conversion.log>  从日志生成 HTML 报告")
 	fmt.Println("  mysql2pg -v|--version 显示版本信息")
 	fmt.Println("  mysql2pg -h|--help 显示帮助信息")
+	fmt.Println()
+	fmt.Println("子命令:")
+	fmt.Println("  assess   迁移前评估，生成详细的兼容性报告和风险提示")
+	fmt.Println("  report   从转换日志生成 HTML 报告")
 	fmt.Println()
 	fmt.Println("配置文件说明:")
 	fmt.Println("  配置文件为YAML格式，包含MySQL连接信息、PostgreSQL连接信息、转换选项等")

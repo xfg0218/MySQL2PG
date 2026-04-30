@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -513,6 +514,25 @@ func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
 	return views, nil
 }
 
+// GetViewDDL 获取视图 DDL（使用 SHOW CREATE VIEW 获取格式化的定义）
+func (c *Connection) GetViewDDL(viewName string) (string, error) {
+	query := `SHOW CREATE VIEW ` + viewName
+	var tableName, createView, charset, collation string
+	err := c.db.QueryRow(query).Scan(&tableName, &createView, &charset, &collation)
+	if err != nil {
+		return "", fmt.Errorf("获取视图 DDL 失败：%w", err)
+	}
+
+	// 格式化视图定义，将 CREATE VIEW 和 AS SELECT 分开
+	// SHOW CREATE VIEW 返回的是单行字符串，需要添加换行符
+	// 例如：CREATE ... VIEW ... AS SELECT ...
+	// 使用正则表达式替换 AS select/SELECT，支持大小写
+	re := regexp.MustCompile(`(?i)\s+AS\s+SELECT\s+`)
+	createView = re.ReplaceAllString(createView, "\nAS\nSELECT ")
+
+	return createView, nil
+}
+
 // GetFunctions 获取所有函数信息
 func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 	// 使用SHOW FUNCTION STATUS获取函数列表，避免查询information_schema导致的权限问题
@@ -676,8 +696,13 @@ func (c *Connection) GetUsers() ([]UserInfo, error) {
 	rows, err := c.db.Query(`
 		SELECT user, host 
 		FROM mysql.user 
-		WHERE user != 'root' AND user != 'mysql.sys' AND user != 'mysql.session' AND user != 'mysql.infoschema' AND user != 'mysql.pfsadmin' AND user != 'mysql.pfs' AND user != 'mysql.pfs_admin' AND user != 'mysql.pfs_admin_role' AND user != 'mysql.pfs_role_admin' AND user != 'mysql.pfs_role_admin_role' AND user != 'mysql.pfs_role_admin_role_role' AND user != 'mysql.pfs_role_admin_role_role_role' AND user != 'mysql.pfsadmin'
-	}
+		WHERE user != 'root' AND user != 'mysql.sys' AND 
+		user != 'mysql.session' AND user != 'mysql.infoschema' AND 
+		user != 'mysql.pfsadmin' AND user != 'mysql.pfs' AND 
+		user != 'mysql.pfs_admin' AND user != 'mysql.pfs_admin_role' AND 
+		user != 'mysql.pfs_role_admin' AND user != 'mysql.pfs_role_admin_role' AND 
+		user != 'mysql.pfs_role_admin_role_role' AND 
+		user != 'mysql.pfs_role_admin_role_role_role' AND user != 'mysql.pfsadmin'
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("获取用户列表失败: %w", err)
