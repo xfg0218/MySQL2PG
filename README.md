@@ -284,7 +284,7 @@ conversion:
   - **Dark Terminal Design**: JetBrains Mono font, DM Sans body, neon accent colors (cyan, blue, green, red, amber, purple).
   - **Summary Stat Cards**: Tables, rows, views, indexes, functions, errors count.
   - **Performance Bar Charts**: Stage-wise duration visualization with progress bars.
-  - **Table Details**: Per-table status with badges (已转换，已存在，数据一致，数据不一致，空表).
+  - **Table Details**: Per-table status with badges.
   - **Error/Warning Sections**: Deduplicated error messages and warnings linked to tables.
   - **Inconsistency Report**: Tables with row count mismatches (MySQL vs PostgreSQL).
   - **Progress Tracking**: Shows migration completion status (complete/in-progress).
