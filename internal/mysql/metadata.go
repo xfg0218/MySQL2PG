@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -67,7 +68,13 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 	var err error
 
 	// 使用INFORMATION_SCHEMA.TABLES查询，只获取TABLE类型的对象，过滤掉视图
-	query := "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = ? AND table_type = 'BASE TABLE'"
+	query := `
+		SELECT table_name
+		FROM INFORMATION_SCHEMA.TABLES
+		WHERE table_schema = ?
+		  AND table_type = 'BASE TABLE'
+		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+	`
 	rows, err = c.db.Query(query, c.config.Database)
 
 	if err != nil {
@@ -121,17 +128,24 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 		tableNames = filteredTableNames
 	}
 
-	// 使用并发获取表信息
-	type tableResult struct {
-		table TableInfo
-		err   error
+	// 使用配置中的 max_open_conns 作为并发数，避免连接池竞争
+	maxConcurrent := c.config.MaxOpenConns
+	if maxConcurrent <= 0 {
+		maxConcurrent = 10 // 默认值
 	}
 
-	resultChan := make(chan tableResult, len(tableNames))
-	var wg sync.WaitGroup
+	// ========== 阶段 1: 并发获取所有表的 DDL ==========
+	ddlMap := make(map[string]string)
+	ddlErrorMap := make(map[string]error)
 
-	// 增加并发数量，充分利用数据库连接池
-	maxConcurrent := 20
+	type ddlResult struct {
+		tableName string
+		ddl       string
+		err       error
+	}
+
+	ddlChan := make(chan ddlResult, len(tableNames))
+	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, maxConcurrent)
 
 	for _, tableName := range tableNames {
@@ -139,120 +153,197 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 		go func(name string) {
 			defer wg.Done()
 
-			// 获取信号量
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
-			// 创建一个带超时的上下文
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
 
-			// 使用带超时的查询获取表DDL
-			var ddl string
-			query := fmt.Sprintf("SHOW CREATE TABLE `%s`", name)
-
-			// 使用Rows而不是Row，以便动态获取列数
-			rows, err := c.db.QueryContext(ctx, query)
-			if err != nil {
-				// 检查错误是否是因为权限不足导致的SHOW VIEW命令被拒绝
-				if strings.Contains(err.Error(), "SHOW VIEW command denied") || strings.Contains(err.Error(), "1142") {
-					// 这是一个视图，当前用户没有权限查看其DDL，跳过该视图
-					resultChan <- tableResult{}
-					return
-				}
-				// 其他错误，返回错误信息
-				resultChan <- tableResult{err: fmt.Errorf("获取表DDL失败: %w", err)}
-				return
-			}
-			defer rows.Close()
-
-			// 获取列信息
-			columns, err := rows.Columns()
-			if err != nil {
-				resultChan <- tableResult{err: fmt.Errorf("获取结果列信息失败: %w", err)}
-				return
-			}
-
-			// 检查是否有行数据
-			if !rows.Next() {
-				resultChan <- tableResult{err: fmt.Errorf("SHOW CREATE TABLE没有返回结果")}
-				return
-			}
-
-			// 创建足够的字符串指针来存储结果
-			vals := make([]interface{}, len(columns))
-			valPtrs := make([]*string, len(columns))
-			for i := range vals {
-				valPtrs[i] = new(string)
-				vals[i] = valPtrs[i]
-			}
-
-			// 扫描结果
-			if err := rows.Scan(vals...); err != nil {
-				resultChan <- tableResult{err: fmt.Errorf("扫描表DDL结果失败: %w", err)}
-				return
-			}
-
-			// 提取DDL信息（通常在第2个字段，索引1）
-			ddlFound := false
-			if len(valPtrs) > 1 && *valPtrs[1] != "" {
-				ddl = *valPtrs[1]
-				ddlFound = true
-			} else if len(valPtrs) > 3 && *valPtrs[3] != "" {
-				// 处理某些情况下DDL可能在第4个字段的情况
-				ddl = *valPtrs[3]
-				ddlFound = true
-			}
-
-			if !ddlFound {
-				resultChan <- tableResult{err: fmt.Errorf("无法从SHOW CREATE TABLE结果中提取DDL")}
-				return
-			}
-
-			// 获取表的列信息
-			tableColumns, err := c.getTableColumns(name)
-			if err != nil {
-				resultChan <- tableResult{err: fmt.Errorf("获取表列信息失败: %w", err)}
-				return
-			}
-
-			// 获取表的索引信息
-			indexes, err := c.getTableIndexes(name)
-			if err != nil {
-				resultChan <- tableResult{err: fmt.Errorf("获取表索引信息失败: %w", err)}
-				return
-			}
-
-			resultChan <- tableResult{
-				table: TableInfo{
-					Name:    name,
-					DDL:     ddl,
-					Columns: tableColumns,
-					Indexes: indexes,
-				},
-			}
+			ddl, err := c.getTableDDL(ctx, name)
+			ddlChan <- ddlResult{name, ddl, err}
 		}(tableName)
 	}
 
-	// 等待所有goroutine完成
 	go func() {
 		wg.Wait()
-		close(resultChan)
+		close(ddlChan)
 	}()
 
-	// 收集结果
-	var tables []TableInfo
-	for result := range resultChan {
+	for result := range ddlChan {
 		if result.err != nil {
-			return nil, result.err
-		}
-		// 只添加成功获取到DDL的表
-		if result.table.DDL != "" {
-			tables = append(tables, result.table)
+			ddlErrorMap[result.tableName] = result.err
+		} else {
+			ddlMap[result.tableName] = result.ddl
 		}
 	}
 
+	if len(ddlErrorMap) > 0 {
+		for tableName, err := range ddlErrorMap {
+			return nil, fmt.Errorf("获取表 %s 的 DDL 失败：%w", tableName, err)
+		}
+	}
+
+	// ========== 阶段 2: 并发获取所有表的列信息 ==========
+	columnsMap := make(map[string][]ColumnInfo)
+	columnsErrorMap := make(map[string]error)
+
+	type columnsResult struct {
+		tableName string
+		columns   []ColumnInfo
+		err       error
+	}
+
+	columnsChan := make(chan columnsResult, len(tableNames))
+	var wg2 sync.WaitGroup
+	semaphore2 := make(chan struct{}, maxConcurrent)
+
+	for _, tableName := range tableNames {
+		wg2.Add(1)
+		go func(name string) {
+			defer wg2.Done()
+
+			semaphore2 <- struct{}{}
+			defer func() { <-semaphore2 }()
+
+			columns, err := c.getTableColumns(name)
+			columnsChan <- columnsResult{name, columns, err}
+		}(tableName)
+	}
+
+	go func() {
+		wg2.Wait()
+		close(columnsChan)
+	}()
+
+	for result := range columnsChan {
+		if result.err != nil {
+			columnsErrorMap[result.tableName] = result.err
+		} else {
+			columnsMap[result.tableName] = result.columns
+		}
+	}
+
+	if len(columnsErrorMap) > 0 {
+		for tableName, err := range columnsErrorMap {
+			return nil, fmt.Errorf("获取表 %s 的列信息失败：%w", tableName, err)
+		}
+	}
+
+	// ========== 阶段 3: 并发获取所有表的索引信息 ==========
+	indexesMap := make(map[string][]IndexInfo)
+	indexesErrorMap := make(map[string]error)
+
+	type indexesResult struct {
+		tableName string
+		indexes   []IndexInfo
+		err       error
+	}
+
+	indexesChan := make(chan indexesResult, len(tableNames))
+	var wg3 sync.WaitGroup
+	semaphore3 := make(chan struct{}, maxConcurrent)
+
+	for _, tableName := range tableNames {
+		wg3.Add(1)
+		go func(name string) {
+			defer wg3.Done()
+
+			semaphore3 <- struct{}{}
+			defer func() { <-semaphore3 }()
+
+			indexes, err := c.getTableIndexes(name)
+			indexesChan <- indexesResult{name, indexes, err}
+		}(tableName)
+	}
+
+	go func() {
+		wg3.Wait()
+		close(indexesChan)
+	}()
+
+	for result := range indexesChan {
+		if result.err != nil {
+			indexesErrorMap[result.tableName] = result.err
+		} else {
+			indexesMap[result.tableName] = result.indexes
+		}
+	}
+
+	if len(indexesErrorMap) > 0 {
+		for tableName, err := range indexesErrorMap {
+			return nil, fmt.Errorf("获取表 %s 的索引信息失败：%w", tableName, err)
+		}
+	}
+
+	// ========== 合并三个阶段的结果 ==========
+	var tables []TableInfo
+	for _, tableName := range tableNames {
+		tables = append(tables, TableInfo{
+			Name:    tableName,
+			DDL:     ddlMap[tableName],
+			Columns: columnsMap[tableName],
+			Indexes: indexesMap[tableName],
+		})
+	}
+
 	return tables, nil
+}
+
+// getTableDDL 获取单个表的 DDL
+func (c *Connection) getTableDDL(ctx context.Context, tableName string) (string, error) {
+	var ddl string
+	query := fmt.Sprintf("SHOW CREATE TABLE `%s`", tableName)
+
+	rows, err := c.db.QueryContext(ctx, query)
+	if err != nil {
+		// 检查错误是否是因为权限不足导致的 SHOW VIEW 命令被拒绝
+		if strings.Contains(err.Error(), "SHOW VIEW command denied") || strings.Contains(err.Error(), "1142") {
+			return "", fmt.Errorf("权限不足，无法查看表 %s 的 DDL: %w", tableName, err)
+		}
+		return "", fmt.Errorf("获取表 DDL 失败：%w", err)
+	}
+	defer rows.Close()
+
+	// 获取列信息
+	columns, err := rows.Columns()
+	if err != nil {
+		return "", fmt.Errorf("获取结果列信息失败：%w", err)
+	}
+
+	// 检查是否有行数据
+	if !rows.Next() {
+		return "", fmt.Errorf("SHOW CREATE TABLE 没有返回结果")
+	}
+
+	// 创建足够的字符串指针来存储结果
+	vals := make([]interface{}, len(columns))
+	valPtrs := make([]*string, len(columns))
+	for i := range vals {
+		valPtrs[i] = new(string)
+		vals[i] = valPtrs[i]
+	}
+
+	// 扫描结果
+	if err := rows.Scan(vals...); err != nil {
+		return "", fmt.Errorf("扫描表 DDL 结果失败：%w", err)
+	}
+
+	// 提取 DDL 信息（通常在第 2 个字段，索引 1）
+	ddlFound := false
+	if len(valPtrs) > 1 && *valPtrs[1] != "" {
+		ddl = *valPtrs[1]
+		ddlFound = true
+	} else if len(valPtrs) > 3 && *valPtrs[3] != "" {
+		// 处理某些情况下 DDL 可能在第 4 个字段的情况
+		ddl = *valPtrs[3]
+		ddlFound = true
+	}
+
+	if !ddlFound {
+		return "", fmt.Errorf("无法从 SHOW CREATE TABLE 结果中提取 DDL")
+	}
+
+	return ddl, nil
 }
 
 // getTableColumns 获取表的列信息
@@ -339,13 +430,67 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	return indexes, nil
 }
 
+// GetAllIndexes 获取所有表的索引信息
+func (c *Connection) GetAllIndexes() ([]IndexInfo, error) {
+	// 使用 information_schema.statistics 查询所有索引信息
+	query := `
+		SELECT table_name, index_name, non_unique, column_name, seq_in_index
+		FROM information_schema.statistics
+		WHERE table_schema = ?
+		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+		ORDER BY table_name, index_name, seq_in_index
+	`
+	rows, err := c.db.Query(query, c.config.Database)
+	if err != nil {
+		return nil, fmt.Errorf("查询索引信息失败：%w", err)
+	}
+	defer rows.Close()
+
+	// 使用 map 来按索引名分组
+	indexMap := make(map[string]*IndexInfo)
+
+	for rows.Next() {
+		var tableName, indexName, columnName string
+		var nonUnique int
+		var seqInIndex sql.NullString
+
+		if err := rows.Scan(&tableName, &indexName, &nonUnique, &columnName, &seqInIndex); err != nil {
+			return nil, fmt.Errorf("扫描索引信息失败：%w", err)
+		}
+
+		key := tableName + "." + indexName
+		if _, exists := indexMap[key]; !exists {
+			indexMap[key] = &IndexInfo{
+				Name:     indexName,
+				Table:    tableName,
+				IsUnique: nonUnique == 0,
+			}
+		}
+
+		indexMap[key].Columns = append(indexMap[key].Columns, columnName)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历索引结果失败：%w", err)
+	}
+
+	// 将 map 转换为 slice
+	var indexes []IndexInfo
+	for _, idx := range indexMap {
+		indexes = append(indexes, *idx)
+	}
+
+	return indexes, nil
+}
+
 // GetViews 获取所有视图信息
 func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
-	// 查询视图定义
+	// 查询视图定义，过滤掉系统数据库的视图
 	query := `
-		SELECT table_name, view_definition 
-		FROM INFORMATION_SCHEMA.VIEWS 
+		SELECT table_name, view_definition
+		FROM INFORMATION_SCHEMA.VIEWS
 		WHERE table_schema = ?
+		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
 	`
 	rows, err := c.db.Query(query, database)
 	if err != nil {
@@ -367,6 +512,25 @@ func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
 	}
 
 	return views, nil
+}
+
+// GetViewDDL 获取视图 DDL（使用 SHOW CREATE VIEW 获取格式化的定义）
+func (c *Connection) GetViewDDL(viewName string) (string, error) {
+	query := `SHOW CREATE VIEW ` + viewName
+	var tableName, createView, charset, collation string
+	err := c.db.QueryRow(query).Scan(&tableName, &createView, &charset, &collation)
+	if err != nil {
+		return "", fmt.Errorf("获取视图 DDL 失败：%w", err)
+	}
+
+	// 格式化视图定义，将 CREATE VIEW 和 AS SELECT 分开
+	// SHOW CREATE VIEW 返回的是单行字符串，需要添加换行符
+	// 例如：CREATE ... VIEW ... AS SELECT ...
+	// 使用正则表达式替换 AS select/SELECT，支持大小写
+	re := regexp.MustCompile(`(?i)\s+AS\s+SELECT\s+`)
+	createView = re.ReplaceAllString(createView, "\nAS\nSELECT ")
+
+	return createView, nil
 }
 
 // GetFunctions 获取所有函数信息
@@ -532,7 +696,13 @@ func (c *Connection) GetUsers() ([]UserInfo, error) {
 	rows, err := c.db.Query(`
 		SELECT user, host 
 		FROM mysql.user 
-		WHERE user != 'root' AND user != 'mysql.sys' AND user != 'mysql.session'
+		WHERE user != 'root' AND user != 'mysql.sys' AND 
+		user != 'mysql.session' AND user != 'mysql.infoschema' AND 
+		user != 'mysql.pfsadmin' AND user != 'mysql.pfs' AND 
+		user != 'mysql.pfs_admin' AND user != 'mysql.pfs_admin_role' AND 
+		user != 'mysql.pfs_role_admin' AND user != 'mysql.pfs_role_admin_role' AND 
+		user != 'mysql.pfs_role_admin_role_role' AND 
+		user != 'mysql.pfs_role_admin_role_role_role' AND user != 'mysql.pfsadmin'
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("获取用户列表失败: %w", err)

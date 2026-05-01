@@ -36,7 +36,7 @@ var (
 	// 匹配 JSON_ARRAY 函数
 	reJSONArray = regexp.MustCompile(`(?i)json_array\s*\(`)
 	// 匹配 JSON_QUOTE 函数
-	reJSONQuote = regexp.MustCompile(`(?i)json_quote\s*\(`)
+	reJSONQuote = regexp.MustCompile(`(?i)json_quote\s*\(\s*([^)]+)\s*\)`)
 	// 匹配 JSON_UNQUOTE 函数
 	reJSONUnquote        = regexp.MustCompile(`(?i)json_unquote\s*\(\s*([^)]+)\s*\)`)
 	reJSONUnquoteExtract = regexp.MustCompile(`(?i)json_unquote\s*\(\s*json_extract\s*\(\s*([^,]+)\s*,\s*([^)]+)\)\s*\)`)
@@ -52,24 +52,6 @@ var (
 	reJSONValid = regexp.MustCompile(`(?i)json_valid\s*\([^)]*\)`)
 	// 匹配 JSON_VALUE 函数
 	reJSONValue = regexp.MustCompile(`(?i)json_value\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
-	// 匹配 JSON_INSERT 函数
-	reJSONInsert = regexp.MustCompile(`(?i)json_insert\s*\(`)
-	// 匹配 JSON_SET 函数
-	reJSONSet = regexp.MustCompile(`(?i)json_set\s*\(`)
-	// 匹配 JSON_REPLACE 函数
-	reJSONReplace = regexp.MustCompile(`(?i)json_replace\s*\(`)
-	// 匹配 JSON_REMOVE 函数
-	reJSONRemove = regexp.MustCompile(`(?i)json_remove\s*\(`)
-	// 匹配 JSON_ARRAY_APPEND 函数
-	reJSONArrayAppend = regexp.MustCompile(`(?i)json_array_append\s*\(`)
-	// 匹配 JSON_ARRAY_INSERT 函数
-	reJSONArrayInsert = regexp.MustCompile(`(?i)json_array_insert\s*\(`)
-	// 匹配 JSON_MERGE 函数
-	reJSONMerge = regexp.MustCompile(`(?i)json_merge\s*\(`)
-	// 匹配 JSON_MERGE_PATCH 函数
-	reJSONMergePatch = regexp.MustCompile(`(?i)json_merge_patch\s*\(`)
-	// 匹配 JSON_MERGE_PRESERVE 函数
-	reJSONMergePreserve = regexp.MustCompile(`(?i)json_merge_preserve\s*\(`)
 	// 匹配 DATE_ADD 函数
 	reDATE_ADD = regexp.MustCompile(`(?i)date_add\s*\(\s*([^,]+)\s*,\s*interval\s+([^)]+)\)`)
 	// 匹配 DATE_SUB 函数
@@ -180,10 +162,22 @@ var (
 	reJSONKeysView = regexp.MustCompile(`(?i)\bjson_keys\s*\(\s*([^)]+)\)`)
 	// 匹配 JSON_LENGTH 函数 (MySQL 8.0+) - 用于视图
 	reJSONLengthView = regexp.MustCompile(`(?i)\bjson_length\s*\(\s*([^)]+)\)`)
+	// 匹配 JSON_ARRAY_INSERT 函数 (MySQL 9.0+) - 用于视图
+	reJSONArrayInsert = regexp.MustCompile(`(?i)\bjson_array_insert\s*\(\s*([^,]+)\s*,\s*'([^']+?)'\s*,\s*([^)]+)\)`)
 	// 匹配 INSTR 函数 (MySQL)
 	reInstr = regexp.MustCompile(`(?i)\binstr\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 RLIKE 操作符 (MySQL 8.0+) - 支持括号内的情况
 	reRLike = regexp.MustCompile(`(?i)(\([^)]+)\s+rlike\s+'([^']+)'`)
+	// 匹配 REGEXP_INSTR 函数 (MySQL 8.0+) - 2 参数版本
+	reRegexpInstr = regexp.MustCompile(`(?i)\bregexp_instr\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
+	// 匹配 REGEXP_INSTR 函数 (MySQL 8.0.17+/9.0+) - 6 参数完整版本
+	reRegexpInstrFull = regexp.MustCompile(`(?i)\bregexp_instr\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\)`)
+	// 匹配 REGEXP_SUBSTR 函数 (MySQL 8.0+) - 2 参数版本
+	reRegexpSubstr = regexp.MustCompile(`(?i)\bregexp_substr\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
+	// 匹配 REGEXP_SUBSTR 函数 (MySQL 8.0.17+/9.0+) - 4 参数版本（带 occurrence）
+	reRegexpSubstrFull = regexp.MustCompile(`(?i)\bregexp_substr\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\)`)
+	// 匹配 REGEXP_REPLACE 函数 (MySQL 8.0+) - 三个参数
+	reRegexpReplace = regexp.MustCompile(`(?i)\bregexp_replace\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 CAST(x AS SIGNED) 函数
 	reCastSigned = regexp.MustCompile(`(?i)\bcast\s*\(\s*([^)]+)\s+as\s+signed\)`)
 	// 匹配 CAST(x AS CHAR) 函数
@@ -229,6 +223,36 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to replace REGEXP_LIKE in view definition for view '%s'", viewName)
 	}
 
+	// 将 REGEXP_INSTR 完整版本 (6 参数) 转换为 PostgreSQL (MySQL 8.0.17+/9.0+)
+	processed = replaceRegexpInstrFullExpressions(processed)
+	if processed == "" {
+		return "", fmt.Errorf("failed to replace REGEXP_INSTR full in view definition for view '%s'", viewName)
+	}
+
+	// 将 REGEXP_INSTR(str, pattern) 转换为 POSITION(substring in str) 或 regexp_match (PostgreSQL)
+	processed = replaceRegexpInstrExpressions(processed)
+	if processed == "" {
+		return "", fmt.Errorf("failed to replace REGEXP_INSTR in view definition for view '%s'", viewName)
+	}
+
+	// 将 REGEXP_SUBSTR 完整版本 (4 参数) 转换为 PostgreSQL (MySQL 8.0.17+/9.0+)
+	processed = replaceRegexpSubstrFullExpressions(processed)
+	if processed == "" {
+		return "", fmt.Errorf("failed to replace REGEXP_SUBSTR full in view definition for view '%s'", viewName)
+	}
+
+	// 将 REGEXP_SUBSTR(str, pattern) 转换为 SUBSTRING(str from pattern) (PostgreSQL)
+	processed = replaceRegexpSubstrExpressions(processed)
+	if processed == "" {
+		return "", fmt.Errorf("failed to replace REGEXP_SUBSTR in view definition for view '%s'", viewName)
+	}
+
+	// 将 REGEXP_REPLACE(str, pattern, repl) 转换为 regexp_replace(str, pattern, repl) (PostgreSQL)
+	processed = replaceRegexpReplaceExpressions(processed)
+	if processed == "" {
+		return "", fmt.Errorf("failed to replace REGEXP_REPLACE in view definition for view '%s'", viewName)
+	}
+
 	// 将 LOCATE(substr, str) 转换为 STRPOS(str, substr) (PostgreSQL)
 	processed = replaceLocateExpressions(processed)
 	if processed == "" {
@@ -263,6 +287,9 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 
 	// 将 JSON_LENGTH 转换为 JSONB_ARRAY_LENGTH (PostgreSQL)
 	processed = replaceJSONLengthView(processed)
+
+	// 将 JSON_ARRAY_INSERT 转换为 JSONB_INSERT (PostgreSQL, MySQL 9.0+)
+	processed = replaceJSONArrayInsert(processed)
 
 	// 将 INSTR(str, substr) 转换为 STRPOS(str, substr) (PostgreSQL)
 	processed = replaceInstrExpressions(processed)
@@ -323,7 +350,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 
 		expr := strings.TrimSpace(innerNoDistinct)
 
-		// 构建 PostgreSQL string_agg 表达式
+		// 构建 PostgreSQL string_agg 表达式（ORDER BY 需位于聚合函数内部）
 		var sb strings.Builder
 		sb.WriteString("string_agg(")
 		if hasDistinct {
@@ -332,15 +359,15 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		sb.WriteString("CAST(")
 		sb.WriteString(expr)
 		sb.WriteString(" AS text)")
-		if orderBy != "" {
-			// 将 MySQL ORDER BY 转换为 PostgreSQL 格式
-			pgOrderBy := convertMySQLOrderByToPG(orderBy)
-			sb.WriteString(", ")
-			sb.WriteString(pgOrderBy)
-		}
 		sb.WriteString(", '")
-		sb.WriteString(sep)
+		sb.WriteString(strings.ReplaceAll(sep, `'`, `''`))
 		sb.WriteString("')")
+		if orderBy != "" {
+			// PostgreSQL 语法：string_agg(expr, sep ORDER BY ...)
+			pgOrderBy := convertMySQLOrderByToPG(orderBy)
+			sb.WriteString(" ORDER BY ")
+			sb.WriteString(stripOrderByKeyword(pgOrderBy))
+		}
 
 		return sb.String()
 	})
@@ -441,7 +468,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	// 修正常见MySQL函数差异/关键字，JSON函数转换
 	processed = reJSONObject.ReplaceAllString(processed, "json_build_object(")
 	processed = reJSONArray.ReplaceAllString(processed, "json_build_array(")
-	processed = reJSONQuote.ReplaceAllString(processed, "jsonb_quote(")
+	processed = replaceJSONQuoteExpressions(processed)
 	processed = reJSONUnquoteExtract.ReplaceAllStringFunc(processed, func(m string) string {
 		match := reJSONUnquoteExtract.FindStringSubmatch(m)
 		if len(match) < 3 {
@@ -478,29 +505,16 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		}
 		return buildJSONPathExpr(strings.TrimSpace(match[1]), strings.TrimSpace(match[2]), true)
 	})
-	processed = reJSONInsert.ReplaceAllString(processed, "jsonb_insert(")
-	processed = reJSONSet.ReplaceAllString(processed, "jsonb_set(")
-	processed = reJSONReplace.ReplaceAllString(processed, "jsonb_set(")
-	processed = reJSONRemove.ReplaceAllString(processed, "jsonb_delete(")
-	// JSON_ARRAY_APPEND(arr, path, value) -> arr || json_build_array(value)
-	processed = reJSONArrayAppend.ReplaceAllStringFunc(processed, func(m string) string {
-		// 匹配JSON_ARRAY_APPEND(arr, path, value)，简单处理为数组拼接
-		parts := strings.SplitN(m[17:len(m)-1], ",", 3)
-		if len(parts) < 3 {
-			return m // 格式不正确，返回原始字符串
-		}
-		arr := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[2])
-		return fmt.Sprintf("%s || json_build_array(%s)", arr, value)
-	})
-	// JSON_ARRAY_INSERT(arr, path, value) -> jsonb_insert
-	processed = reJSONArrayInsert.ReplaceAllString(processed, "jsonb_insert(")
-	// JSON_MERGE -> jsonb_concat
-	processed = reJSONMerge.ReplaceAllString(processed, "jsonb_concat(")
-	// JSON_MERGE_PATCH -> jsonb_merge_patch
-	processed = reJSONMergePatch.ReplaceAllString(processed, "jsonb_merge_patch(")
-	// JSON_MERGE_PRESERVE -> jsonb_concat
-	processed = reJSONMergePreserve.ReplaceAllString(processed, "jsonb_concat(")
+	// 使用可执行的 PostgreSQL JSONB 语法替换（避免仅替换函数名导致语法错误）
+	processed = replaceJSONSetCompatible(processed)
+	processed = replaceJSONInsertCompatible(processed)
+	processed = replaceJSONReplaceCompatible(processed)
+	processed = replaceJSONRemoveCompatible(processed)
+	processed = replaceJSONArrayAppendCompatible(processed)
+	processed = replaceJSONArrayInsertCompatible(processed)
+	processed = replaceJSONMergeCompatible(processed)
+	processed = replaceJSONMergePatchCompatible(processed)
+	processed = replaceJSONMergePreserveCompatible(processed)
 
 	// MySQL INSERT(str, pos, len, newstr) -> PostgreSQL OVERLAY(str PLACING newstr FROM pos FOR len)
 	processed = reINSERT.ReplaceAllStringFunc(processed, func(m string) string {
@@ -650,56 +664,32 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		if len(match) < 3 {
 			return m
 		}
-		// 匹配 DATE_ADD(date, INTERVAL expr unit) -> date + expr * interval '1 unit'
+		// 匹配 DATE_ADD(date, INTERVAL expr unit) -> date + (expr * interval '1 unit')
 		datePart := strings.TrimSpace(match[1])
 		intervalPart := strings.TrimSpace(match[2])
-		// 简单处理，假设格式为 '1 day' 或 '2 hours'
 		parts := strings.SplitN(intervalPart, " ", 2)
-		var sb strings.Builder
 		if len(parts) < 2 {
-			sb.WriteString(datePart)
-			sb.WriteString(" + ")
-			sb.WriteString(intervalPart)
-			sb.WriteString("::interval")
-			return sb.String()
+			return fmt.Sprintf("(%s + (%s)::interval)", datePart, intervalPart)
 		}
 		num := strings.TrimSpace(parts[0])
-		unit := strings.TrimSpace(parts[1])
-		sb.WriteString(datePart)
-		sb.WriteString(" + ")
-		sb.WriteString(num)
-		sb.WriteString("::interval '1 ")
-		sb.WriteString(unit)
-		sb.WriteString("'")
-		return sb.String()
+		unit := normalizeIntervalUnit(strings.TrimSpace(parts[1]))
+		return fmt.Sprintf("(%s + ((%s) * interval '1 %s'))", datePart, num, unit)
 	})
 	processed = reDATE_SUB.ReplaceAllStringFunc(processed, func(m string) string {
 		match := reDATE_SUB.FindStringSubmatch(m)
 		if len(match) < 3 {
 			return m
 		}
-		// 匹配 DATE_SUB(date, INTERVAL expr unit) -> date - expr * interval '1 unit'
+		// 匹配 DATE_SUB(date, INTERVAL expr unit) -> date - (expr * interval '1 unit')
 		datePart := strings.TrimSpace(match[1])
 		intervalPart := strings.TrimSpace(match[2])
-		// 简单处理，假设格式为 '1 day' 或 '2 hours'
 		parts := strings.SplitN(intervalPart, " ", 2)
-		var sb strings.Builder
 		if len(parts) < 2 {
-			sb.WriteString(datePart)
-			sb.WriteString(" - ")
-			sb.WriteString(intervalPart)
-			sb.WriteString("::interval")
-			return sb.String()
+			return fmt.Sprintf("(%s - (%s)::interval)", datePart, intervalPart)
 		}
 		num := strings.TrimSpace(parts[0])
-		unit := strings.TrimSpace(parts[1])
-		sb.WriteString(datePart)
-		sb.WriteString(" - ")
-		sb.WriteString(num)
-		sb.WriteString("::interval '1 ")
-		sb.WriteString(unit)
-		sb.WriteString("'")
-		return sb.String()
+		unit := normalizeIntervalUnit(strings.TrimSpace(parts[1]))
+		return fmt.Sprintf("(%s - ((%s) * interval '1 %s'))", datePart, num, unit)
 	})
 	if processed == "" {
 		return "", fmt.Errorf("failed to process DATE_ADD/DATE_SUB functions in view definition for view '%s'", viewName)
@@ -1081,6 +1071,290 @@ func convertMySQLOrderByToPG(orderBy string) string {
 	return result
 }
 
+// stripOrderByKeyword 移除 ORDER BY 前缀，保留排序表达式。
+func stripOrderByKeyword(orderBy string) string {
+	trimmed := strings.TrimSpace(orderBy)
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "order by ") {
+		return strings.TrimSpace(trimmed[len("order by "):])
+	}
+	return trimmed
+}
+
+// normalizeIntervalUnit 规范化 interval 单位，确保输出可被 PostgreSQL 解析。
+func normalizeIntervalUnit(unit string) string {
+	upper := strings.ToUpper(strings.TrimSpace(unit))
+	switch upper {
+	case "MICROSECOND", "MICROSECONDS":
+		return "microsecond"
+	case "SECOND", "SECONDS":
+		return "second"
+	case "MINUTE", "MINUTES":
+		return "minute"
+	case "HOUR", "HOURS":
+		return "hour"
+	case "DAY", "DAYS":
+		return "day"
+	case "WEEK", "WEEKS":
+		return "week"
+	case "MONTH", "MONTHS":
+		return "month"
+	case "YEAR", "YEARS":
+		return "year"
+	default:
+		// 兜底处理，避免注入特殊字符导致 SQL 非法
+		cleaned := strings.ToLower(strings.TrimSpace(unit))
+		cleaned = strings.ReplaceAll(cleaned, "_", " ")
+		return cleaned
+	}
+}
+
+// replaceJSONQuoteExpressions 将 JSON_QUOTE(expr) 转换为 to_jsonb(expr)::text。
+func replaceJSONQuoteExpressions(s string) string {
+	return reJSONQuote.ReplaceAllString(s, "to_jsonb($1)::text")
+}
+
+// replaceJSONSetCompatible 将 JSON_SET 转换为 PostgreSQL 可执行 JSONB_SET 调用。
+func replaceJSONSetCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_set", func(args []string) (string, bool) {
+		return buildJSONSetExpression(args, true)
+	})
+}
+
+// replaceJSONInsertCompatible 将 JSON_INSERT 转换为 PostgreSQL 可执行 JSONB_SET 调用。
+func replaceJSONInsertCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_insert", func(args []string) (string, bool) {
+		return buildJSONSetExpression(args, true)
+	})
+}
+
+// replaceJSONReplaceCompatible 将 JSON_REPLACE 转换为 PostgreSQL 可执行 JSONB_SET 调用。
+func replaceJSONReplaceCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_replace", func(args []string) (string, bool) {
+		return buildJSONSetExpression(args, false)
+	})
+}
+
+// replaceJSONRemoveCompatible 将 JSON_REMOVE 转换为 PostgreSQL 可执行 #- 链式删除表达式。
+func replaceJSONRemoveCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_remove", func(args []string) (string, bool) {
+		if len(args) < 2 {
+			return "", false
+		}
+		result := fmt.Sprintf("(%s)::jsonb", strings.TrimSpace(args[0]))
+		for i := 1; i < len(args); i++ {
+			path, ok := mysqlJSONPathArgToPGTextArray(strings.TrimSpace(args[i]))
+			if !ok {
+				return "", false
+			}
+			result = fmt.Sprintf("(%s #- %s)", result, path)
+		}
+		return result, true
+	})
+}
+
+// replaceJSONArrayAppendCompatible 将 JSON_ARRAY_APPEND 转为可执行 JSONB 数组拼接。
+func replaceJSONArrayAppendCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_array_append", func(args []string) (string, bool) {
+		if len(args) < 3 || len(args)%2 == 0 {
+			return "", false
+		}
+		result := fmt.Sprintf("(%s)::jsonb", strings.TrimSpace(args[0]))
+		for i := 2; i < len(args); i += 2 {
+			value := strings.TrimSpace(args[i])
+			result = fmt.Sprintf("(%s || jsonb_build_array(%s))", result, value)
+		}
+		return result, true
+	})
+}
+
+// replaceJSONArrayInsertCompatible 将 JSON_ARRAY_INSERT 转为可执行 JSONB_INSERT 调用。
+func replaceJSONArrayInsertCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_array_insert", func(args []string) (string, bool) {
+		if len(args) < 3 || len(args)%2 == 0 {
+			return "", false
+		}
+		result := fmt.Sprintf("(%s)::jsonb", strings.TrimSpace(args[0]))
+		for i := 1; i+1 < len(args); i += 2 {
+			path, ok := mysqlJSONPathArgToPGTextArray(strings.TrimSpace(args[i]))
+			if !ok {
+				return "", false
+			}
+			value := strings.TrimSpace(args[i+1])
+			result = fmt.Sprintf("jsonb_insert(%s, %s, to_jsonb(%s), true)", result, path, value)
+		}
+		return result, true
+	})
+}
+
+// replaceJSONMergeCompatible 将 JSON_MERGE 转换为 JSONB 连接表达式。
+func replaceJSONMergeCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_merge", buildJSONMergeExpression)
+}
+
+// replaceJSONMergePatchCompatible 将 JSON_MERGE_PATCH 转换为 JSONB 连接表达式。
+func replaceJSONMergePatchCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_merge_patch", buildJSONMergeExpression)
+}
+
+// replaceJSONMergePreserveCompatible 将 JSON_MERGE_PRESERVE 转换为 JSONB 连接表达式。
+func replaceJSONMergePreserveCompatible(s string) string {
+	return rewriteFunctionCalls(s, "json_merge_preserve", buildJSONMergeExpression)
+}
+
+// buildJSONSetExpression 构建 JSON_SET/INSERT/REPLACE 对应的嵌套 JSONB_SET 表达式。
+func buildJSONSetExpression(args []string, createIfMissing bool) (string, bool) {
+	if len(args) < 3 || len(args)%2 == 0 {
+		return "", false
+	}
+	result := fmt.Sprintf("(%s)::jsonb", strings.TrimSpace(args[0]))
+	for i := 1; i+1 < len(args); i += 2 {
+		path, ok := mysqlJSONPathArgToPGTextArray(strings.TrimSpace(args[i]))
+		if !ok {
+			return "", false
+		}
+		value := strings.TrimSpace(args[i+1])
+		result = fmt.Sprintf("jsonb_set(%s, %s, to_jsonb(%s), %t)", result, path, value, createIfMissing)
+	}
+	return result, true
+}
+
+// buildJSONMergeExpression 构建 JSON_MERGE* 的 JSONB 连接表达式。
+func buildJSONMergeExpression(args []string) (string, bool) {
+	if len(args) < 2 {
+		return "", false
+	}
+	result := fmt.Sprintf("(%s)::jsonb", strings.TrimSpace(args[0]))
+	for i := 1; i < len(args); i++ {
+		result = fmt.Sprintf("(%s || (%s)::jsonb)", result, strings.TrimSpace(args[i]))
+	}
+	return result, true
+}
+
+// rewriteFunctionCalls 按函数名重写调用，支持嵌套参数和引号场景。
+func rewriteFunctionCalls(s string, functionName string, rewriter func(args []string) (string, bool)) string {
+	out := s
+	idx := 0
+	for {
+		pos, openParen := findFunctionCall(out, functionName, idx)
+		if pos == -1 {
+			break
+		}
+		endParen, ok := findMatchingParenInViewExpr(out, openParen)
+		if !ok {
+			idx = openParen + 1
+			continue
+		}
+		args := splitTopLevelCommas(out[openParen+1 : endParen])
+		replacement, rewritten := rewriter(args)
+		if !rewritten {
+			idx = endParen + 1
+			continue
+		}
+		out = out[:pos] + replacement + out[endParen+1:]
+		idx = pos + len(replacement)
+	}
+	return out
+}
+
+// findFunctionCall 查找下一个函数调用起点和左括号位置。
+func findFunctionCall(s string, functionName string, start int) (int, int) {
+	target := strings.ToLower(functionName)
+	if target == "" {
+		return -1, -1
+	}
+	lower := strings.ToLower(s)
+	for i := start; i < len(s); i++ {
+		if !strings.HasPrefix(lower[i:], target) {
+			continue
+		}
+		if i > 0 && isIdentChar(s[i-1]) {
+			continue
+		}
+		j := i + len(target)
+		if j < len(s) && isIdentChar(s[j]) {
+			continue
+		}
+		for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+			j++
+		}
+		if j < len(s) && s[j] == '(' {
+			return i, j
+		}
+	}
+	return -1, -1
+}
+
+// mysqlJSONPathArgToPGTextArray 将 MySQL JSON 路径参数转换为 PostgreSQL text[] 字面量。
+func mysqlJSONPathArgToPGTextArray(pathArg string) (string, bool) {
+	trimmed := strings.TrimSpace(pathArg)
+	if len(trimmed) < 2 {
+		return "", false
+	}
+	quote := trimmed[0]
+	if (quote != '\'' && quote != '"') || trimmed[len(trimmed)-1] != quote {
+		return "", false
+	}
+	path := trimmed[1 : len(trimmed)-1]
+	return mysqlJSONPathToPGTextArray(path)
+}
+
+// mysqlJSONPathToPGTextArray 将 MySQL JSON 路径字符串转换为 PostgreSQL text[] 字面量。
+func mysqlJSONPathToPGTextArray(path string) (string, bool) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", false
+	}
+	if trimmed == "$" {
+		return "'{}'", true
+	}
+	trimmed = strings.TrimPrefix(trimmed, "$")
+	trimmed = strings.TrimPrefix(trimmed, ".")
+
+	var segments []string
+	var token strings.Builder
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
+		switch ch {
+		case '.':
+			if token.Len() > 0 {
+				segments = append(segments, token.String())
+				token.Reset()
+			}
+		case '[':
+			if token.Len() > 0 {
+				segments = append(segments, token.String())
+				token.Reset()
+			}
+			closeIdx := strings.IndexByte(trimmed[i+1:], ']')
+			if closeIdx < 0 {
+				return "", false
+			}
+			seg := strings.TrimSpace(trimmed[i+1 : i+1+closeIdx])
+			if seg == "" {
+				return "", false
+			}
+			segments = append(segments, strings.Trim(seg, `"'`))
+			i = i + closeIdx + 1
+		default:
+			token.WriteByte(ch)
+		}
+	}
+	if token.Len() > 0 {
+		segments = append(segments, token.String())
+	}
+	if len(segments) == 0 {
+		return "'{}'", true
+	}
+	for i := range segments {
+		seg := strings.TrimSpace(strings.Trim(segments[i], `"'`))
+		seg = strings.ReplaceAll(seg, `"`, `\"`)
+		seg = strings.ReplaceAll(seg, `'`, `''`)
+		segments[i] = seg
+	}
+	return fmt.Sprintf("'{%s}'", strings.Join(segments, ",")), true
+}
+
 func buildJSONPathExpr(base string, rawPath string, textResult bool) string {
 	path := strings.TrimSpace(rawPath)
 	if len(path) >= 2 && ((path[0] == '\'' && path[len(path)-1] == '\'') || (path[0] == '"' && path[len(path)-1] == '"')) {
@@ -1376,6 +1650,42 @@ func replaceJSONLengthView(s string) string {
 	})
 }
 
+// replaceJSONArrayInsert 将 JSON_ARRAY_INSERT(doc, path, val) 转换为 JSONB_INSERT
+// MySQL 9.0+: JSON_ARRAY_INSERT(doc, '$[0]', val)
+// PostgreSQL: JSONB_INSERT(doc::jsonb, '{0}', val::jsonb)
+func replaceJSONArrayInsert(s string) string {
+	return reJSONArrayInsert.ReplaceAllStringFunc(s, func(match string) string {
+		submatch := reJSONArrayInsert.FindStringSubmatch(match)
+		if len(submatch) < 4 {
+			return match
+		}
+		doc := strings.TrimSpace(submatch[1])
+		path := strings.TrimSpace(submatch[2])
+		val := strings.TrimSpace(submatch[3])
+
+		// 转换 MySQL JSON 路径 '$[0]' 为 PostgreSQL 路径 '{0}'
+		pgPath := mysqlJsonPathToPostgresPath(path)
+
+		return fmt.Sprintf("JSONB_INSERT(%s::jsonb, '%s', %s::jsonb)", doc, pgPath, val)
+	})
+}
+
+// mysqlJsonPathToPostgresPath 将 MySQL JSON 路径转换为 PostgreSQL 路径
+// '$[0]' -> '{0}'
+// '$.array[0]' -> '{array,0}'
+func mysqlJsonPathToPostgresPath(path string) string {
+	// 移除前缀 $
+	p := strings.TrimPrefix(path, "$")
+	// 替换 . 为 ,
+	p = strings.ReplaceAll(p, ".", ",")
+	// 替换 [ 为 ,
+	p = strings.ReplaceAll(p, "[", ",")
+	// 替换 ] 为空
+	p = strings.ReplaceAll(p, "]", "")
+	// 包裹在 {} 中
+	return "{" + p + "}"
+}
+
 // replaceInstrExpressions 将 INSTR(str, substr) 转换为 STRPOS(str, substr)
 // MySQL INSTR: 返回子串首次出现的位置（从 1 开始）
 // PostgreSQL STRPOS: 功能相同
@@ -1396,6 +1706,90 @@ func replaceInstrExpressions(s string) string {
 // PostgreSQL ~: 区分大小写的正则匹配
 func replaceRLikeExpressions(s string) string {
 	return reRLike.ReplaceAllString(s, "($1 ~ '$2')")
+}
+
+// replaceRegexpInstrFullExpressions 将 REGEXP_INSTR 完整版本 (6 参数) 转换为 PostgreSQL
+// MySQL 8.0.17+/9.0+: REGEXP_INSTR(expr, pat[, pos[, occurrence[, return_option[, match_type]]]])
+// PostgreSQL: 使用 regexp_matches 数组索引
+func replaceRegexpInstrFullExpressions(s string) string {
+	return reRegexpInstrFull.ReplaceAllStringFunc(s, func(match string) string {
+		submatch := reRegexpInstrFull.FindStringSubmatch(match)
+		if len(submatch) < 7 {
+			return match
+		}
+		str := strings.TrimSpace(submatch[1])
+		pattern := strings.TrimSpace(submatch[2])
+		// pos := strings.TrimSpace(submatch[3])  // 起始位置，暂不处理
+		occurrence := strings.TrimSpace(submatch[4]) // 第 N 个匹配
+		// returnOpt := strings.TrimSpace(submatch[5])  // 0=返回开始位置，1=返回结束位置
+		// matchType := strings.TrimSpace(submatch[6])  // 'c'=区分大小写，'i'=不区分
+
+		// PostgreSQL 方案：(regexp_matches(str, pattern, 'g'))[occurrence]
+		return fmt.Sprintf("(regexp_matches(%s, %s, 'g'))[%s]", str, pattern, occurrence)
+	})
+}
+
+// replaceRegexpInstrExpressions 将 REGEXP_INSTR(str, pattern[, pos]) 转换为 STRPOS 或 regexp_instr
+// MySQL REGEXP_INSTR: 返回正则表达式匹配的位置（从 1 开始）
+// PostgreSQL: 使用 STRPOS + SUBSTRING 或自定义函数
+// 注意：PostgreSQL 没有直接等价的函数，这里使用 CASE WHEN ~ THEN 1 ELSE 0 模拟
+func replaceRegexpInstrExpressions(s string) string {
+	return reRegexpInstr.ReplaceAllStringFunc(s, func(match string) string {
+		submatch := reRegexpInstr.FindStringSubmatch(match)
+		if len(submatch) < 3 {
+			return match
+		}
+		str := strings.TrimSpace(submatch[1])
+		pattern := strings.TrimSpace(submatch[2])
+
+		// PostgreSQL 方案：使用正则匹配返回布尔值，转换为 1/0
+		// pattern 已经包含引号，不需要额外添加
+		return fmt.Sprintf("(CASE WHEN %s ~ %s THEN 1 ELSE 0 END)", str, pattern)
+	})
+}
+
+// replaceRegexpSubstrFullExpressions 将 REGEXP_SUBSTR 完整版本 (4 参数) 转换为 PostgreSQL
+// MySQL 8.0.17+/9.0+: REGEXP_SUBSTR(str, pattern[, pos[, occurrence]])
+// PostgreSQL: 使用 regexp_matches 数组索引
+func replaceRegexpSubstrFullExpressions(s string) string {
+	return reRegexpSubstrFull.ReplaceAllStringFunc(s, func(match string) string {
+		submatch := reRegexpSubstrFull.FindStringSubmatch(match)
+		if len(submatch) < 5 {
+			return match
+		}
+		str := strings.TrimSpace(submatch[1])
+		pattern := strings.TrimSpace(submatch[2])
+		// pos := strings.TrimSpace(submatch[3])  // 起始位置，暂不处理
+		occurrence := strings.TrimSpace(submatch[4]) // 第 N 个匹配
+
+		// PostgreSQL 方案：(regexp_matches(str, pattern, 'g'))[occurrence]
+		return fmt.Sprintf("(regexp_matches(%s, %s, 'g'))[%s]", str, pattern, occurrence)
+	})
+}
+
+// replaceRegexpSubstrExpressions 将 REGEXP_SUBSTR(str, pattern[, pos]) 转换为 SUBSTRING
+// MySQL REGEXP_SUBSTR: 返回正则表达式匹配的子串
+// PostgreSQL SUBSTRING: SUBSTRING(str FROM pattern)
+func replaceRegexpSubstrExpressions(s string) string {
+	return reRegexpSubstr.ReplaceAllStringFunc(s, func(match string) string {
+		submatch := reRegexpSubstr.FindStringSubmatch(match)
+		if len(submatch) < 3 {
+			return match
+		}
+		str := strings.TrimSpace(submatch[1])
+		pattern := strings.TrimSpace(submatch[2])
+
+		// PostgreSQL: SUBSTRING(str FROM pattern)
+		// pattern 已经包含引号，不需要额外添加
+		return fmt.Sprintf("SUBSTRING(%s FROM %s)", str, pattern)
+	})
+}
+
+// replaceRegexpReplaceExpressions 将 REGEXP_REPLACE(str, pattern, repl) 转换为 regexp_replace
+// MySQL REGEXP_REPLACE: 使用正则表达式替换
+// PostgreSQL regexp_replace: 语法相同，直接转换
+func replaceRegexpReplaceExpressions(s string) string {
+	return reRegexpReplace.ReplaceAllString(s, "regexp_replace($1, $2, $3)")
 }
 
 // replaceCastSignedExpressions 将 CAST(x AS SIGNED) 转换为 CAST(x AS INTEGER)

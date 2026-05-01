@@ -1,14 +1,55 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/yourusername/mysql2pg/internal/config"
 )
+
+// MySQLVersionInfo MySQL 版本信息
+type MySQLVersionInfo struct {
+	Major int
+	Minor int
+	Patch int
+	Full  string
+	Is57  bool // MySQL 5.7
+	Is80  bool // MySQL 8.0
+	Is84  bool // MySQL 8.4 LTS
+	Is90  bool // MySQL 9.0+
+}
+
+// IsVersionGreaterOrEqual 检查当前版本是否大于等于指定版本
+func (m *MySQLVersionInfo) IsVersionGreaterOrEqual(major, minor int) bool {
+	if m.Major > major {
+		return true
+	}
+	if m.Major == major {
+		return m.Minor >= minor
+	}
+	return false
+}
+
+// SupportsRegexpInstrFull 是否支持完整的 REGEXP_INSTR 函数（6 参数版本）
+func (m *MySQLVersionInfo) SupportsRegexpInstrFull() bool {
+	return m.Is90 || (m.Is80 && m.Minor >= 17)
+}
+
+// SupportsJsonArrayInsert 是否支持 JSON_ARRAY_INSERT 函数
+func (m *MySQLVersionInfo) SupportsJsonArrayInsert() bool {
+	return m.Is90
+}
+
+// SupportsJsonTable 是否支持 JSON_TABLE 函数
+func (m *MySQLVersionInfo) SupportsJsonTable() bool {
+	return m.Major >= 8
+}
 
 // Connection MySQL连接管理器
 type Connection struct {
@@ -165,6 +206,46 @@ func (c *Connection) GetTableDataWithPagination(tableName string, columns []stri
 	return rows, nil
 }
 
+// GetTableDataWithCompositeKeyPagination 使用复合主键分页获取表数据
+// 性能优化：使用 WHERE (k1,k2,k3) > (?,?,?) 替代 OFFSET，避免大偏移量时的性能下降
+// MySQL 8.0+ 支持行构造函数比较
+func (c *Connection) GetTableDataWithCompositeKeyPagination(tableName string, columns []string, primaryKeys []string, lastValues []interface{}, limit int) (*sql.Rows, error) {
+	// 使用反引号包围表名、列名和主键
+	var quotedColumns []string
+	for _, col := range columns {
+		quotedColumns = append(quotedColumns, fmt.Sprintf("`%s`", col))
+	}
+	columnsStr := strings.Join(quotedColumns, ", ")
+
+	var quotedPrimaryKeys []string
+	for _, pk := range primaryKeys {
+		quotedPrimaryKeys = append(quotedPrimaryKeys, fmt.Sprintf("`%s`", pk))
+	}
+	primaryKeyStr := strings.Join(quotedPrimaryKeys, ", ")
+
+	var query string
+	var args []interface{}
+
+	if lastValues != nil && len(lastValues) > 0 {
+		// 使用行构造函数进行复合主键比较：WHERE (k1,k2) > (?,?)
+		placeholderStr := strings.Repeat("?, ", len(primaryKeys)-1) + "?"
+		query = fmt.Sprintf("SELECT %s FROM `%s` WHERE (%s) > (%s) ORDER BY %s LIMIT %d",
+			columnsStr, tableName, primaryKeyStr, placeholderStr, primaryKeyStr, limit)
+		args = lastValues
+	} else {
+		// 第一批数据，不需要 WHERE 条件
+		query = fmt.Sprintf("SELECT %s FROM `%s` ORDER BY %s LIMIT %d",
+			columnsStr, tableName, primaryKeyStr, limit)
+	}
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("获取表数据失败：%w", err)
+	}
+
+	return rows, nil
+}
+
 // GetTablePrimaryKeys 获取表的主键列名列表
 func (c *Connection) GetTablePrimaryKeys(tableName string) ([]string, error) {
 	// 使用SHOW KEYS FROM语句获取主键信息，避免查询information_schema导致的权限问题
@@ -265,6 +346,59 @@ func (c *Connection) GetVersion() (string, error) {
 	return version, nil
 }
 
+// GetVersionInfo 获取 MySQL 详细版本信息
+func (c *Connection) GetVersionInfo() (*MySQLVersionInfo, error) {
+	version, err := c.GetVersion()
+	if err != nil {
+		return nil, err
+	}
+	return ParseMySQLVersion(version), nil
+}
+
+// ParseMySQLVersion 解析 MySQL 版本字符串
+func ParseMySQLVersion(version string) *MySQLVersionInfo {
+	info := &MySQLVersionInfo{
+		Full: version,
+	}
+
+	// 移除可能的后缀，如 "-MySQL", "-log", 等
+	cleanVersion := version
+	if idx := strings.Index(version, "-"); idx != -1 {
+		cleanVersion = version[:idx]
+	}
+
+	// 解析版本号 "major.minor.patch"
+	parts := strings.Split(cleanVersion, ".")
+	if len(parts) >= 2 {
+		major, err := strconv.Atoi(parts[0])
+		if err == nil {
+			info.Major = major
+		}
+		minor, err := strconv.Atoi(parts[1])
+		if err == nil {
+			info.Minor = minor
+		}
+		if len(parts) >= 3 {
+			patchStr := parts[2]
+			re := regexp.MustCompile(`^\d+`)
+			if match := re.FindString(patchStr); match != "" {
+				patch, err := strconv.Atoi(match)
+				if err == nil {
+					info.Patch = patch
+				}
+			}
+		}
+	}
+
+	// 设置版本标志
+	info.Is57 = info.Major == 5 && info.Minor == 7
+	info.Is80 = info.Major == 8 && info.Minor == 0
+	info.Is84 = info.Major == 8 && info.Minor == 4
+	info.Is90 = info.Major >= 9
+
+	return info
+}
+
 // TestConnection 测试MySQL连接
 func TestConnection(config *config.MySQLConfig) error {
 	// 测试连接时不使用压缩
@@ -276,3 +410,51 @@ func TestConnection(config *config.MySQLConfig) error {
 
 	return nil
 }
+
+// GetCharsetAndCollation 获取数据库的字符集和排序规则
+func (c *Connection) GetCharsetAndCollation() (string, string, error) {
+	var charset, collation string
+	
+	// 获取数据库字符集
+	query := `
+		SELECT default_character_set_name, default_collation_name
+		FROM information_schema.SCHEMATA
+		WHERE schema_name = ?
+	`
+	err := c.db.QueryRow(query, c.config.Database).Scan(&charset, &collation)
+	if err != nil {
+		// 如果查询失败，尝试使用 SHOW VARIABLES
+		charset, collation, err = c.getCharsetFromVariables()
+		if err != nil {
+			return "", "", fmt.Errorf("获取字符集失败：%w", err)
+		}
+	}
+	
+	return charset, collation, nil
+}
+
+// getCharsetFromVariables 从系统变量获取字符集
+func (c *Connection) getCharsetFromVariables() (string, string, error) {
+	var charset, collation string
+	
+	if err := c.db.QueryRow("SHOW VARIABLES LIKE 'character_set_database'").Scan(&charset, &charset); err != nil {
+		return "", "", err
+	}
+	
+	if err := c.db.QueryRow("SHOW VARIABLES LIKE 'collation_database'").Scan(&collation, &collation); err != nil {
+		return "", "", err
+	}
+	
+	return charset, collation, nil
+}
+
+// GetTableDDL 获取表的 DDL（导出方法）
+func (c *Connection) GetTableDDL(ctx context.Context, tableName string) (string, error) {
+	return c.getTableDDL(ctx, tableName)
+}
+
+// GetTableIndexes 获取表的索引信息（导出方法）
+func (c *Connection) GetTableIndexes(tableName string) ([]IndexInfo, error) {
+	return c.getTableIndexes(tableName)
+}
+

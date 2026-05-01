@@ -49,6 +49,40 @@ log_abnormal() {
     echo -e "${YELLOW}[ABNORMAL] $1${NC}" >&2
 }
 
+# trim_whitespace 去除字符串首尾空白字符，保留中间内容。
+trim_whitespace() {
+    printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# escape_sed_replacement 转义 sed 替换值中的特殊字符。
+escape_sed_replacement() {
+    printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
+}
+
+# update_config_key 更新全局唯一配置项的值。
+update_config_key() {
+    local target_key=$1
+    local indent=$2
+    local value=$3
+    local escaped_value
+    escaped_value=$(escape_sed_replacement "$value")
+
+    sed -i '' "s|^[[:space:]]*$target_key: .*|$indent$target_key: $escaped_value|" "$CONFIG_FILE"
+}
+
+# update_section_config_key 在指定配置段内更新配置项的值。
+update_section_config_key() {
+    local start_section=$1
+    local end_section=$2
+    local target_key=$3
+    local indent=$4
+    local value=$5
+    local escaped_value
+    escaped_value=$(escape_sed_replacement "$value")
+
+    sed -i '' "/^$start_section:/,/^$end_section:/ s|^[[:space:]]*$target_key: .*|$indent$target_key: $escaped_value|" "$CONFIG_FILE"
+}
+
 # 打印调试信息
 log_info "Script directory: $(dirname "$0")"
 log_info "Project root: $PROJECT_ROOT"
@@ -165,45 +199,47 @@ update_config() {
     # Process set_args (semicolon separated key=value)
     IFS=';' read -ra ADDR <<< "$set_args"
     for pair in "${ADDR[@]}"; do
+        if [ -z "$pair" ]; then
+            continue
+        fi
+
         # Split pair into key and value
-        local key=$(echo "$pair" | cut -d'=' -f1)
-        local value=$(echo "$pair" | cut -d'=' -f2)
+        local key="${pair%%=*}"
+        local value="${pair#*=}"
+
+        if [ "$pair" = "$key" ]; then
+            log_abnormal "Invalid key=value pair: $pair"
+            continue
+        fi
         
         # Trim whitespace
-        key=$(echo "$key" | xargs)
-        value=$(echo "$value" | xargs)
+        key=$(trim_whitespace "$key")
+        value=$(trim_whitespace "$value")
         
         # Determine how to update based on key
         case "$key" in
-            "mysql.max_open_conns")
-                sed -i '' '/^mysql:/,/^postgresql:/ s/max_open_conns: .*/max_open_conns: '"$value"'/' "$CONFIG_FILE"
+            "mysql."*)
+                local mysql_key=${key#mysql.}
+                update_section_config_key "mysql" "postgresql" "$mysql_key" "  " "$value"
                 ;;
-            "mysql.max_idle_conns")
-                sed -i '' '/^mysql:/,/^postgresql:/ s/max_idle_conns: .*/max_idle_conns: '"$value"'/' "$CONFIG_FILE"
-                ;;
-            "postgresql.max_conns")
-                sed -i '' '/^postgresql:/,/^conversion:/ s/max_conns: .*/max_conns: '"$value"'/' "$CONFIG_FILE"
-                ;;
-            "mysql.test_only")
-                sed -i '' '/^mysql:/,/^postgresql:/ s/test_only: .*/test_only: '"$value"'/' "$CONFIG_FILE"
-                ;;
-            "postgresql.test_only")
-                sed -i '' '/^postgresql:/,/^conversion:/ s/test_only: .*/test_only: '"$value"'/' "$CONFIG_FILE"
+            "postgresql."*)
+                local postgresql_key=${key#postgresql.}
+                update_section_config_key "postgresql" "conversion" "$postgresql_key" "  " "$value"
                 ;;
             "conversion.options."*)
                 local opt_key=${key#conversion.options.}
                 # Indentation for options is 4 spaces
-                sed -i '' "s/^[[:space:]]*$opt_key: .*/    $opt_key: $value/" "$CONFIG_FILE"
+                update_config_key "$opt_key" "    " "$value"
                 ;;
             "conversion.limits."*)
                 local limit_key=${key#conversion.limits.}
                 # Indentation for limits is 4 spaces
-                sed -i '' "s/^[[:space:]]*$limit_key: .*/    $limit_key: $value/" "$CONFIG_FILE"
+                update_config_key "$limit_key" "    " "$value"
                 ;;
             "run."*)
                 local run_key=${key#run.}
                 # Indentation for run is 2 spaces
-                sed -i '' "s/^[[:space:]]*$run_key: .*/  $run_key: $value/" "$CONFIG_FILE"
+                update_config_key "$run_key" "  " "$value"
                 ;;
             *)
                 log_abnormal "Unknown key format: $key"
@@ -414,6 +450,9 @@ run_test 48 "All Options Disabled" "conversion.options.tableddl=false;conversion
 # 49. Single Table Full Sync (Use Table List)
 run_test 49 "Single Table Full Sync" "conversion.options.use_table_list=true;conversion.options.table_list=[case_01_integers];conversion.options.tableddl=true;conversion.options.data=true;conversion.options.indexes=true;conversion.options.validate_data=true"
 
+# 50. Version Flag Compatibility Baseline
+run_test 50 "Version Flag Compatibility Baseline" "conversion.options.tableddl=true"
+
 # ==============================================================================
 # CLI 子命令测试
 # ==============================================================================
@@ -523,10 +562,10 @@ run_test 77 "Empty Table List Behavior" "conversion.options.use_table_list=true;
 run_test 78 "use_table_list Mutuality" "conversion.options.use_table_list=true;conversion.options.table_list=[case_01_integers];conversion.options.tableddl=true;conversion.options.data=true;conversion.options.indexes=false;conversion.options.view=false;conversion.options.functions=false"
 
 # 79. connection_params Custom DSN Passing
-run_test 79 "MySQL connection_params Custom" "conversion.options.tableddl=true;conversion.options.data=true"
+run_test 79 "MySQL connection_params Custom" "mysql.connection_params=charset=utf8mb4&parseTime=true&interpolateParams=true&readTimeout=5s&writeTimeout=5s&timeout=10s;conversion.options.tableddl=true;conversion.options.data=true"
 
 # 80. pg_connection_params Custom Passing
-run_test 80 "PostgreSQL pg_connection_params Custom" "conversion.options.tableddl=true;conversion.options.data=true"
+run_test 80 "PostgreSQL pg_connection_params Custom" "postgresql.pg_connection_params=search_path=public connect_timeout=10 statement_timeout=0;conversion.options.tableddl=true;conversion.options.data=true"
 
 # 81. concurrency=1 Serial Execution
 run_test 81 "Serial Execution (concurrency=1)" "conversion.limits.concurrency=1;conversion.options.tableddl=true;conversion.options.data=true;conversion.options.exclude_use_table_list=true;conversion.options.exclude_table_list=[case_45_stored_generated,case_59_complex_generated]"

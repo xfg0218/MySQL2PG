@@ -18,7 +18,7 @@ type DistributionKeyInfo struct {
 }
 
 // GetCurrentDistributionKey 获取表的当前分布键（Greenplum/Yugabyte）
-func GetCurrentDistributionKey(pool *pgxpool.Pool, tableName string, schemaName string) (*DistributionKeyInfo, error) {
+func GetCurrentDistributionKey(pool *pgxpool.Pool, tableName string, schemaName string, lowercaseColumns bool) (*DistributionKeyInfo, error) {
 	ctx := context.Background()
 
 	// Greenplum 查询分布键
@@ -59,6 +59,10 @@ func GetCurrentDistributionKey(pool *pgxpool.Pool, tableName string, schemaName 
 		var col string
 		if err := rows.Scan(&col); err != nil {
 			return nil, err
+		}
+		// 如果启用 lowercaseColumns，将列名转换为小写
+		if lowercaseColumns {
+			col = strings.ToLower(col)
 		}
 		columns = append(columns, col)
 	}
@@ -118,9 +122,14 @@ func GenerateAlterDistributionKeySQL(tableName string, schemaName string, newDis
 }
 
 // AdjustDistributionKey 调整表的分布键
-func AdjustDistributionKey(pool *pgxpool.Pool, tableName string, schemaName string, uniqueColumns []string, logFunc func(string, ...interface{})) (bool, error) {
+func AdjustDistributionKey(pool *pgxpool.Pool, tableName string, schemaName string, uniqueColumns []string, lowercaseColumns bool, logFunc func(string, ...interface{})) (bool, error) {
+	// 处理默认 Schema
+	if schemaName == "" {
+		schemaName = "public" // 默认 schema
+	}
+
 	// 1. 查询当前分布键
-	currentDistKey, err := GetCurrentDistributionKey(pool, tableName, schemaName)
+	currentDistKey, err := GetCurrentDistributionKey(pool, tableName, schemaName, lowercaseColumns)
 	if err != nil {
 		return false, fmt.Errorf("查询当前分布键失败: %w", err)
 	}
@@ -132,7 +141,7 @@ func AdjustDistributionKey(pool *pgxpool.Pool, tableName string, schemaName stri
 	if len(newDistKey) == len(currentDistKey.Columns) {
 		same := true
 		for i := range newDistKey {
-			if newDistKey[i] != currentDistKey.Columns[i] {
+			if !strings.EqualFold(newDistKey[i], currentDistKey.Columns[i]) {
 				same = false
 				break
 			}

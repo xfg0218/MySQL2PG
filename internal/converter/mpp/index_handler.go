@@ -1,7 +1,6 @@
 package mpp
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 
@@ -21,12 +20,12 @@ type IndexHandler struct {
 }
 
 // HandleUniqueIndex 处理单个 UNIQUE INDEX
-// 返回: shouldCreate bool, err error
+// 返回：shouldCreate bool, err error
 func (h *IndexHandler) HandleUniqueIndex(index mysql.IndexInfo, lowercaseColumns bool) (shouldCreate bool, err error) {
-	// MPP 模式未启用，跳过 UNIQUE INDEX
+	// MPP 模式未启用，跳过分布键调整但继续创建 UNIQUE INDEX
 	if !h.Config.Enabled {
-		h.LogFunc("跳过 UNIQUE 索引 %s（表 %s），MPP 模式未启用", index.Name, index.Table)
-		return false, nil
+		h.LogFunc("跳过 UNIQUE 索引 %s（表 %s）的 MPP 分布键调整（MPP 模式未启用）", index.Name, index.Table)
+		return true, nil // 继续创建 UNIQUE INDEX
 	}
 
 	// 检测 MPP 数据库类型（带缓存）
@@ -38,18 +37,16 @@ func (h *IndexHandler) HandleUniqueIndex(index mysql.IndexInfo, lowercaseColumns
 		uniqueColumns := h.collectUniqueColumns(index, lowercaseColumns)
 
 		// 调整分布键
-		adjusted, err := AdjustDistributionKey(h.PostgresDB, index.Table, h.Schema, uniqueColumns, h.LogFunc)
+		adjusted, err := AdjustDistributionKey(h.PostgresDB, index.Table, h.Schema, uniqueColumns, lowercaseColumns, h.LogFunc)
 		if err != nil {
-			h.ErrorFunc("调整表 %s 分布键失败: %v", index.Table, err)
-			return false, fmt.Errorf("调整分布键失败: %w", err)
-		}
-
-		if adjusted {
+			h.ErrorFunc("调整表 %s 分布键失败：%v（将直接创建 UNIQUE 索引）", index.Table, err)
+			// 分布键调整失败不影响 UNIQUE INDEX 创建，继续执行
+		} else if adjusted {
 			h.LogFunc("表 %s 分布键已调整，准备创建 UNIQUE 索引 %s", index.Table, index.Name)
 		}
 	} else {
 		// 非支持的 MPP 数据库（如 YugabyteDB 或标准 PostgreSQL），跳过分布键调整，正常创建 UNIQUE 索引
-		h.LogFunc("跳过表 %s 分布键调整（数据库类型: %s），直接创建 UNIQUE 索引 %s", index.Table, mppDBType, index.Name)
+		h.LogFunc("跳过表 %s 分布键调整（数据库类型：%s），直接创建 UNIQUE 索引 %s", index.Table, mppDBType, index.Name)
 	}
 
 	return true, nil

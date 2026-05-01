@@ -149,7 +149,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			// 获取批量大小配置
 			batchSize := int64(config.Conversion.Limits.MaxRowsPerBatch)
 			if batchSize <= 0 {
-				batchSize = 10000 // 默认值，提高到10000以提高性能
+				batchSize = 50000 // 默认值，提高到10000以提高性能
 			}
 
 			batchInsertSize := config.Conversion.Limits.BatchInsertSize
@@ -162,6 +162,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			var primaryKey string
 			var useKeyPagination bool
 			var orderBy string
+			// 复合主键分页支持 - 性能优化
+			var useCompositeKeyPagination bool = false
+			var compositePrimaryKeys []string
+			var compositeLastValues []interface{}
 
 			// 使用 GetTablePrimaryKeys 获取所有主键
 			primaryKeys, err := mysqlConn.GetTablePrimaryKeys(table.Name)
@@ -173,15 +177,12 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				log("表 %s 的主键是 %s，将使用基于主键的分页", table.Name, primaryKey)
 				useKeyPagination = true
 			} else {
-				// 复合主键
-				useKeyPagination = false
-				// 构建 ORDER BY 子句
-				var quotedKeys []string
-				for _, k := range primaryKeys {
-					quotedKeys = append(quotedKeys, fmt.Sprintf("`%s`", k))
-				}
-				orderBy = strings.Join(quotedKeys, ", ")
-				log("表 %s 有复合主键 %v，将使用传统的OFFSET分页（带ORDER BY）", table.Name, primaryKeys)
+				// 复合主键 - 性能优化：使用行构造函数分页替代 OFFSET
+				// MySQL 8.0+ 支持 WHERE (k1,k2) > (val1,val2) 语法
+				useKeyPagination = true
+				useCompositeKeyPagination = true
+				compositePrimaryKeys = primaryKeys
+				log("表 %s 有复合主键 %v，将使用基于复合主键的分页（行构造函数）", table.Name, primaryKeys)
 			}
 
 			// 同步数据
@@ -203,15 +204,17 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 				var rows *sql.Rows
 				var currentBatchSize int
 
-				// 使用现有的分页查询方法
-				if useKeyPagination {
-					// 使用基于主键的分页
+				// 使用分页查询方法 - 性能优化
+				if useCompositeKeyPagination {
+					// 使用复合主键分页（行构造函数）
+					rows, err = mysqlConn.GetTableDataWithCompositeKeyPagination(table.Name, columns, compositePrimaryKeys, compositeLastValues, int(batchSize))
+				} else if useKeyPagination {
+					// 使用基于单主键的分页
 					rows, err = mysqlConn.GetTableDataWithPagination(table.Name, columns, primaryKey, lastValue, int(batchSize))
 				} else {
-					// 使用传统的OFFSET分页
+					// 使用传统的 OFFSET 分页（无主键或复合主键降级）
 					rows, err = mysqlConn.GetTableData(table.Name, columns, int(processedRows), int(batchSize), orderBy)
 				}
-
 				if err != nil {
 					errMsg := fmt.Sprintf("分页获取表 %s 数据失败: %v", table.Name, err)
 					logError(errMsg)

@@ -423,23 +423,28 @@ SELECT
 FROM 
     case_01_integers;
 
--- 视图21：使用MySQL 8.0的正则表达式函数（兼容MySQL 5.7）
+-- 视图 21：使用 MySQL 8.0 的正则表达式函数（MySQL 8.0+）
+-- 注意：REGEXP_REPLACE, REGEXP_INSTR, REGEXP_SUBSTR 是 MySQL 8.0+ 特有函数
+-- PostgreSQL 12+ 支持 regexp_replace()，但 REGEXP_INSTR/SUBSTR 需要转换
+-- 已注释：MySQL 5.7 不支持这些函数，仅用于 MySQL 8.0+ 测试
+/****
 CREATE OR REPLACE VIEW view_case25_mysql8_regexp AS
-SELECT 
+SELECT
     c1,
     c2,
     c3,
     c4,
     c5,
     c6,
-    (c1 RLIKE '^[A-Za-z]+$') AS is_alpha_c1,
-    (c2 RLIKE '^[0-9]+$') AS is_numeric_c2,
-    c3 AS cleaned_c3, -- MySQL 5.7不支持REGEXP_REPLACE
-    INSTR(c4, 'test') AS test_pos_c4, -- MySQL 5.7不支持REGEXP_INSTR
-    c5 AS numbers_c5, -- MySQL 5.7不支持REGEXP_SUBSTR
-    LENGTH(c6) - LENGTH(REPLACE(c6, 'a', '')) AS a_count_c6 -- 模拟REGEXP_COUNT
-FROM 
+    (c1 RLIKE '^[A-Za-z]+$') AS is_alpha_c1,  -- RLIKE → ~ (PostgreSQL 正则匹配)
+    (c2 RLIKE '^[0-9]+') AS is_numeric_c2,   -- RLIKE → ~
+    REGEXP_REPLACE(c3, '[0-9]+', '#') AS cleaned_c3,  -- REGEXP_REPLACE → regexp_replace()
+    REGEXP_INSTR(c4, 'test') AS test_pos_c4,  -- REGEXP_INSTR → CASE WHEN ~ THEN 1 ELSE 0
+    REGEXP_SUBSTR(c5, '[A-Za-z]+') AS numbers_c5,  -- REGEXP_SUBSTR → SUBSTRING(from pattern)
+    LENGTH(c6) - LENGTH(REPLACE(c6, 'a', '')) AS a_count_c6  -- 模拟 REGEXP_COUNT
+FROM
     case_05_charsets;
+****/
 
 -- 视图22：使用MySQL 8.0的GIS空间函数
 /****

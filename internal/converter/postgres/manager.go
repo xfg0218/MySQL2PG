@@ -13,6 +13,36 @@ import (
 	"github.com/yourusername/mysql2pg/internal/postgres"
 )
 
+// ConversionContext 转换上下文，包含版本信息
+type ConversionContext struct {
+	MySQLVersion     *mysql.MySQLVersionInfo
+	PostgreSQLVersion *postgres.PostgreSQLVersionInfo
+	Config           *config.Config
+}
+
+// shouldUseAdvancedRegexp 是否使用高级 REGEXP 转换
+func (c *ConversionContext) shouldUseAdvancedRegexp() bool {
+	// MySQL 9.0+ 或 MySQL 8.0.17+ 使用完整参数版本
+	return c.MySQLVersion.SupportsRegexpInstrFull()
+}
+
+// shouldUseJsonTableLateral JSON_TABLE 是否转换为 LATERAL
+func (c *ConversionContext) shouldUseJsonTableLateral() bool {
+	// MySQL 8.0+ 且 PostgreSQL 12+ 支持
+	return c.MySQLVersion.SupportsJsonTable() && c.PostgreSQLVersion.Major >= 12
+}
+
+// shouldUseJsonbPathQuery 是否使用 JSONB 路径查询
+func (c *ConversionContext) shouldUseJsonbPathQuery() bool {
+	// PostgreSQL 14+ 支持 JSONB 路径查询
+	return c.PostgreSQLVersion.SupportsJsonbPath
+}
+
+// shouldUseJsonArrayInsert 是否支持 JSON_ARRAY_INSERT 转换
+func (c *ConversionContext) shouldUseJsonArrayInsert() bool {
+	return c.MySQLVersion.SupportsJsonArrayInsert()
+}
+
 // Manager 转换管理器
 type Manager struct {
 	mysqlConn      *mysql.Connection
@@ -23,12 +53,38 @@ type Manager struct {
 	totalTasks     int
 	completedTasks int
 	mutex          sync.Mutex
+	// 版本信息
+	mysqlVersion     *mysql.MySQLVersionInfo
+	postgreSQLVersion *postgres.PostgreSQLVersionInfo
+	// 转换上下文
+	conversionCtx *ConversionContext
 	// 存储每个转换阶段的信息
 	conversionStats []ConversionStageStat
 	// 存储数据校验不一致的表信息
 	inconsistentTables []TableDataInconsistency
 	// 存储表名到列名映射的映射
 	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
+	// 评估模式：只评估不写入
+	assessmentMode bool
+	// 评估结果（仅在评估模式下填充）
+	assessmentResults *AssessmentResults
+}
+
+// AssessmentResults 评估结果
+type AssessmentResults struct {
+	TableErrors       map[string]error       // 表转换错误
+	ViewErrors        map[string]error       // 视图转换错误
+	FunctionErrors    map[string]error       // 函数转换错误
+	IndexErrors       map[string]error       // 索引转换错误
+	TableWarnings     map[string][]string    // 表转换警告
+	ViewWarnings      map[string][]string    // 视图转换警告
+	FunctionWarnings  map[string][]string    // 函数转换警告
+	IndexWarnings     map[string][]string    // 索引转换警告
+	ConversionStats   []ConversionStageStat  // 转换统计
+	TotalRows         int64                  // 总行数
+	TableDDLResults   map[string]string      // 表 DDL 转换结果（成功转换后的 PostgreSQL DDL）
+	ViewDDLResults    map[string]string      // 视图 DDL 转换结果
+	FunctionDDLResults map[string]string     // 函数 DDL 转换结果
 }
 
 // ConversionStageStat 转换阶段统计信息

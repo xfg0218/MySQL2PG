@@ -23,6 +23,12 @@ func main() {
 		http.ListenAndServe("localhost:6060", nil)
 	}()
 
+	// 检测 assess 子命令
+	if isAssess, assessArgs := detectAssessCommand(os.Args[1:]); isAssess {
+		runAssess(assessArgs)
+		return
+	}
+
 	// 检测 report 子命令
 	if isReport, reportArgs := detectReportCommand(os.Args[1:]); isReport {
 		runReport(reportArgs)
@@ -171,13 +177,22 @@ func main() {
 
 // showHelp 显示帮助信息
 func showHelp() {
-	fmt.Println("MySQL2PG - 高性能MySQL到PostgreSQL转换工具")
+	fmt.Println("MySQL2PG - 高性能 MySQL 到 PostgreSQL 转换工具")
 	fmt.Println("使用方法:")
 	fmt.Println("  mysql2pg [配置文件路径]")
 	fmt.Println("  mysql2pg -c [配置文件路径]")
-	fmt.Println("  mysql2pg report -l <conversion.log>  从日志生成HTML报告")
+	fmt.Println("  mysql2pg assess <配置文件> [选项]  迁移前评估")
+	fmt.Println("  mysql2pg report -l <conversion.log>  从日志生成 HTML 报告")
 	fmt.Println("  mysql2pg -v|--version 显示版本信息")
 	fmt.Println("  mysql2pg -h|--help 显示帮助信息")
+	fmt.Println()
+	fmt.Println("子命令:")
+	fmt.Println("  assess   迁移前评估，生成详细的兼容性报告和风险提示（v3.4.0 新增）")
+	fmt.Println("           评估模式会分析所有表、视图、函数、索引、用户和权限，")
+	fmt.Println("           生成 HTML 评估报告，包含总体评分、风险等级和详细清单。")
+	fmt.Println("  report   从转换日志生成 HTML 报告")
+	fmt.Println("           支持从 conversion.log 和 errors.log 生成可视化报告，")
+	fmt.Println("           包含统计卡片、性能柱状图、表明细和错误警告信息。")
 	fmt.Println()
 	fmt.Println("配置文件说明:")
 	fmt.Println("  配置文件为YAML格式，包含MySQL连接信息、PostgreSQL连接信息、转换选项等")
@@ -242,13 +257,19 @@ func showHelp() {
 	fmt.Println("  show_log_in_console: 是否在控制台显示Log日志输出 (默认: false)")
 	fmt.Println()
 	fmt.Println("重要功能说明:")
-	fmt.Println("  1. test_only模式: 仅测试数据库连接，不执行转换，连接测试响应时间<1秒")
-	fmt.Println("  2. 数据校验: 同步数据后验证MySQL和PostgreSQL的数据一致性，确保数据迁移的完整性")
-	fmt.Println("  3. truncate_before_sync选项: 控制是否在同步数据前清空PostgreSQL中的表数据")
-	fmt.Println("  4. 数据不一致表统计: 当数据校验失败时，收集并显示所有数据不一致的表信息")
-	fmt.Println("  5. 零数据处理: 支持零数据行表的完整同步流程，包括进度显示和验证")
-	fmt.Println("  6. 完整的资源清理: 所有数据库连接和资源都会被正确释放，避免资源泄漏")
-	fmt.Println("  7. 完善的性能分析: 监听本地 6060 端口，用于性能分析")
+	fmt.Println("  1. test_only 模式：仅测试数据库连接，不执行转换，连接测试响应时间<1 秒")
+	fmt.Println("  2. assess 评估模式：迁移前兼容性评估，生成 HTML 评估报告（v3.4.0 新增）")
+	fmt.Println("     - 总体评分：0-100 的兼容性评分")
+	fmt.Println("     - 风险等级：低/中/高风险，基于不兼容对象数量")
+	fmt.Println("     - 详细清单：表、视图、函数、索引、用户、权限的风险评估")
+	fmt.Println("     - 风险描述：每个对象的具体不兼容问题和建议")
+	fmt.Println("  3. 数据校验：同步数据后验证 MySQL 和 PostgreSQL 的数据一致性，确保数据迁移的完整性")
+	fmt.Println("  4. truncate_before_sync 选项：控制是否在同步数据前清空 PostgreSQL 中的表数据")
+	fmt.Println("  5. 数据不一致表统计：当数据校验失败时，收集并显示所有数据不一致的表信息")
+	fmt.Println("  6. 零数据处理：支持零数据行表的完整同步流程，包括进度显示和验证")
+	fmt.Println("  7. HTML 迁移报告：从转换日志生成可视化 HTML 报告（深色主题，单文件）")
+	fmt.Println("  8. 完整的资源清理：所有数据库连接和资源都会被正确释放，避免资源泄漏")
+	fmt.Println("  9. 完善的性能分析：监听本地 6060 端口，用于性能分析")
 }
 
 // showVersion 显示版本信息

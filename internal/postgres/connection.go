@@ -18,6 +18,27 @@ import (
 	"github.com/yourusername/mysql2pg/internal/config"
 )
 
+// PostgreSQLVersionInfo PostgreSQL 版本信息
+type PostgreSQLVersionInfo struct {
+	Major               int  // 主版本号
+	Minor               int  // 次版本号
+	Full                string // 完整版本字符串
+	SupportsJsonbPath   bool // PG 14+ 支持 JSONB 路径查询
+	SupportsAdvancedAgg bool // PG 13+ 支持高级聚合
+	SupportsSqlJson     bool // PG 16+ 支持 SQL/JSON 标准
+}
+
+// IsVersionGreaterOrEqual 检查当前版本是否大于等于指定版本
+func (p *PostgreSQLVersionInfo) IsVersionGreaterOrEqual(major, minor int) bool {
+	if p.Major > major {
+		return true
+	}
+	if p.Major == major {
+		return p.Minor >= minor
+	}
+	return false
+}
+
 // Connection PostgreSQL连接管理器
 type Connection struct {
 	pool   *pgxpool.Pool
@@ -493,6 +514,44 @@ func (c *Connection) GetVersion() (string, error) {
 	return version, nil
 }
 
+// GetVersionInfo 获取 PostgreSQL 详细版本信息
+func (c *Connection) GetVersionInfo() (*PostgreSQLVersionInfo, error) {
+	version, err := c.GetVersion()
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostgreSQLVersion(version), nil
+}
+
+// ParsePostgreSQLVersion 解析 PostgreSQL 版本字符串
+// 支持格式："PostgreSQL 16.3 on x86_64...", "14.5", "12.0" 等
+func ParsePostgreSQLVersion(version string) *PostgreSQLVersionInfo {
+	info := &PostgreSQLVersionInfo{
+		Full: version,
+	}
+
+	// 使用正则表达式提取版本号
+	re := regexp.MustCompile(`(?:PostgreSQL\s+)?(\d+)\.(\d+)`)
+	matches := re.FindStringSubmatch(version)
+	if len(matches) >= 3 {
+		major, err := strconv.Atoi(matches[1])
+		if err == nil {
+			info.Major = major
+		}
+		minor, err := strconv.Atoi(matches[2])
+		if err == nil {
+			info.Minor = minor
+		}
+	}
+
+	// 设置特性标志
+	info.SupportsJsonbPath = info.Major >= 14
+	info.SupportsAdvancedAgg = info.Major >= 13
+	info.SupportsSqlJson = info.Major >= 16
+
+	return info
+}
+
 // TestConnection 测试PostgreSQL连接
 func TestConnection(config *config.PostgreSQLConfig) error {
 	// 测试连接时不使用压缩
@@ -833,4 +892,19 @@ func parseMySQLPoint(data []byte) (string, error) {
 
 	// 格式化为PostgreSQL Point格式 (x,y)
 	return fmt.Sprintf("(%v,%v)", x, y), nil
+}
+
+// GetCharset 获取 PostgreSQL 的字符集
+func (c *Connection) GetCharset() (string, error) {
+	query := `
+		SELECT pg_encoding_to_char(encoding)
+		FROM pg_database
+		WHERE datname = $1
+	`
+	var charset string
+	err := c.pool.QueryRow(context.Background(), query, c.config.Database).Scan(&charset)
+	if err != nil {
+		return "", fmt.Errorf("获取 PostgreSQL 字符集失败：%w", err)
+	}
+	return charset, nil
 }

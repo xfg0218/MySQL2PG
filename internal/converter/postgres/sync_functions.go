@@ -551,22 +551,26 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 	body = c.processIfFunction(body)
 
 	// 7. 字符串和数学函数替换
-	replacements := map[*regexp.Regexp]string{
+	// 使用有序规则，避免存在前后依赖的模式被随机 map 遍历顺序破坏。
+	orderedReplacements := []struct {
+		re   *regexp.Regexp
+		repl string
+	}{
 		// reCharLength:   "LENGTH($1)", // PG supports char_length
-		reRegexp:       "~",
-		reSetVar:       "$1 := ",
-		reNow:          "CURRENT_TIMESTAMP",
-		reCurrentDate:  "CURRENT_DATE",
-		reSysDate:      "CURRENT_TIMESTAMP",
-		reUnixTime:     "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)",
-		reUnixTime2:    "EXTRACT(EPOCH FROM $1)",
-		reFromUnix:     "TO_TIMESTAMP($1)",
-		reDateFormat:   "TO_CHAR($1, '$2')",
-		reSubstringIdx: "SPLIT_PART($1, '$2', $3)",
+		{reRegexp, "~"},
+		{reSetVar, "$1 := "},
+		{reNow, "CURRENT_TIMESTAMP"},
+		{reCurrentDate, "CURRENT_DATE"},
+		{reSysDate, "CURRENT_TIMESTAMP"},
+		{reUnixTime, "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)"},
+		{reUnixTime2, "EXTRACT(EPOCH FROM $1)"},
+		{reFromUnix, "TO_TIMESTAMP($1)"},
+		{reDateFormat, "TO_CHAR($1, '$2')"},
+		{reSubstringIdx, "SPLIT_PART($1, '$2', $3)"},
 		// reLeft:         "LEFT($1, $2)", // PG supports LEFT
 		// reRight:        "RIGHT($1, $2)", // PG supports RIGHT
-		reSubstring1: "SUBSTRING($1 FROM $2)",
-		reSubstring2: "SUBSTRING($1 FROM $2 FOR $3)",
+		{reSubstring1, "SUBSTRING($1 FROM $2)"},
+		{reSubstring2, "SUBSTRING($1 FROM $2 FOR $3)"},
 		// reReplace:      "REPLACE($1, '$2', '$3')", // PG supports REPLACE
 		// reCeiling:      "CEIL($1)", // PG supports CEILING/CEIL
 		// reFloor:        "FLOOR($1)", // PG supports FLOOR
@@ -580,21 +584,22 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 		// reSin:          "SIN($1)", // PG supports SIN
 		// reCos:          "COS($1)", // PG supports COS
 		// reTan:          "TAN($1)", // PG supports TAN
-		reLeave:   "EXIT;",
-		reIterate: "CONTINUE;",
-		reRepeat:  "LOOP",
-		reUntil:   "EXIT WHEN $1; END LOOP;",
+		{reLeave, "EXIT;"},
+		{reIterate, "CONTINUE;"},
+		// 先处理完整的 UNTIL ... END REPEAT，再处理单独的 REPEAT。
+		{reUntil, "EXIT WHEN $1; END LOOP;"},
+		{reRepeat, "LOOP"},
 		// reIsNull:       "($1 IS NULL)", // Handled by processIsNull
 		// reNullIf:       "NULLIF($1, $2)", // PG supports NULLIF, removal prevents regex breakage
-		reNullCase: "NULL", // 修复 nullcase 错误，假设其为 NULL
-		reYear:     "EXTRACT(YEAR FROM $1)",
-		reMonth:    "EXTRACT(MONTH FROM $1)",
-		reDay:      "EXTRACT(DAY FROM $1)",
+		{reNullCase, "NULL"}, // 修复 nullcase 错误，假设其为 NULL
+		{reYear, "EXTRACT(YEAR FROM $1)"},
+		{reMonth, "EXTRACT(MONTH FROM $1)"},
+		{reDay, "EXTRACT(DAY FROM $1)"},
 		// reDateDiff:     "($1::date - $2::date)", // DATEDIFF(a, b) -> a - b (days) - 移至 processDateDiff 处理
 	}
 
-	for re, repl := range replacements {
-		body = re.ReplaceAllString(body, repl)
+	for _, item := range orderedReplacements {
+		body = item.re.ReplaceAllString(body, item.repl)
 	}
 
 	// ROW_COUNT() 处理
