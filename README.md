@@ -123,6 +123,7 @@ Start
 ### 🔧 Convenient Developer Experience
 
 - **test\_only Mode**: Tests connections only without performing conversion, with response time <1 second.
+- **assess Mode**: New in v3.4.0! Pre-migration compatibility assessment with detailed HTML reports showing risks and suggestions.
 - **Detailed Logging System**: Supports file logging and console logging, recording every step of the conversion process.
 - **Clear Example Output**: Provides example outputs for various scenarios to help users understand how the tool works.
 - **Comprehensive Error Handling**: Provides detailed error information when errors occur, facilitating troubleshooting.
@@ -608,6 +609,25 @@ The report generates a **single-file dark-themed HTML** dashboard with:
 - Warnings and errors sections
 - Progress tracking (complete vs in-progress)
 - All entries deduplicated by table name
+
+### 4. Pre-Migration Assessment (New in v3.4.0)
+
+```bash
+# Run assessment mode
+./mysql2pg assess config.yml
+
+# Assessment will:
+# 1. Test MySQL and PostgreSQL connections
+# 2. Analyze all tables, views, functions, indexes, users, and privileges
+# 3. Generate compatibility report with risk levels
+# 4. Create HTML assessment report (assessment-YYYY-MM-DD_HHmmss.html)
+```
+
+The assessment report includes:
+- **Overall Score**: 0-100 compatibility score
+- **Risk Level**: Low/Medium/High based on incompatible objects
+- **Detailed Lists**: Tables, views, functions, indexes, users, privileges with risk assessments
+- **Risk Descriptions**: Specific incompatibilities and suggestions for each object
 
 ## Important Parameters Detailed
 
