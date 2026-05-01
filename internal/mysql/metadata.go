@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -136,38 +137,38 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 	// ========== 阶段 1: 并发获取所有表的 DDL ==========
 	ddlMap := make(map[string]string)
 	ddlErrorMap := make(map[string]error)
-	
+
 	type ddlResult struct {
 		tableName string
 		ddl       string
 		err       error
 	}
-	
+
 	ddlChan := make(chan ddlResult, len(tableNames))
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, maxConcurrent)
-	
+
 	for _, tableName := range tableNames {
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
-			
+
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
-			
+
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
-			
+
 			ddl, err := c.getTableDDL(ctx, name)
 			ddlChan <- ddlResult{name, ddl, err}
 		}(tableName)
 	}
-	
+
 	go func() {
 		wg.Wait()
 		close(ddlChan)
 	}()
-	
+
 	for result := range ddlChan {
 		if result.err != nil {
 			ddlErrorMap[result.tableName] = result.err
@@ -175,7 +176,7 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 			ddlMap[result.tableName] = result.ddl
 		}
 	}
-	
+
 	if len(ddlErrorMap) > 0 {
 		for tableName, err := range ddlErrorMap {
 			return nil, fmt.Errorf("获取表 %s 的 DDL 失败：%w", tableName, err)
@@ -185,35 +186,35 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 	// ========== 阶段 2: 并发获取所有表的列信息 ==========
 	columnsMap := make(map[string][]ColumnInfo)
 	columnsErrorMap := make(map[string]error)
-	
+
 	type columnsResult struct {
 		tableName string
 		columns   []ColumnInfo
 		err       error
 	}
-	
+
 	columnsChan := make(chan columnsResult, len(tableNames))
 	var wg2 sync.WaitGroup
 	semaphore2 := make(chan struct{}, maxConcurrent)
-	
+
 	for _, tableName := range tableNames {
 		wg2.Add(1)
 		go func(name string) {
 			defer wg2.Done()
-			
+
 			semaphore2 <- struct{}{}
 			defer func() { <-semaphore2 }()
-			
+
 			columns, err := c.getTableColumns(name)
 			columnsChan <- columnsResult{name, columns, err}
 		}(tableName)
 	}
-	
+
 	go func() {
 		wg2.Wait()
 		close(columnsChan)
 	}()
-	
+
 	for result := range columnsChan {
 		if result.err != nil {
 			columnsErrorMap[result.tableName] = result.err
@@ -221,7 +222,7 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 			columnsMap[result.tableName] = result.columns
 		}
 	}
-	
+
 	if len(columnsErrorMap) > 0 {
 		for tableName, err := range columnsErrorMap {
 			return nil, fmt.Errorf("获取表 %s 的列信息失败：%w", tableName, err)
@@ -231,35 +232,35 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 	// ========== 阶段 3: 并发获取所有表的索引信息 ==========
 	indexesMap := make(map[string][]IndexInfo)
 	indexesErrorMap := make(map[string]error)
-	
+
 	type indexesResult struct {
 		tableName string
 		indexes   []IndexInfo
 		err       error
 	}
-	
+
 	indexesChan := make(chan indexesResult, len(tableNames))
 	var wg3 sync.WaitGroup
 	semaphore3 := make(chan struct{}, maxConcurrent)
-	
+
 	for _, tableName := range tableNames {
 		wg3.Add(1)
 		go func(name string) {
 			defer wg3.Done()
-			
+
 			semaphore3 <- struct{}{}
 			defer func() { <-semaphore3 }()
-			
+
 			indexes, err := c.getTableIndexes(name)
 			indexesChan <- indexesResult{name, indexes, err}
 		}(tableName)
 	}
-	
+
 	go func() {
 		wg3.Wait()
 		close(indexesChan)
 	}()
-	
+
 	for result := range indexesChan {
 		if result.err != nil {
 			indexesErrorMap[result.tableName] = result.err
@@ -267,7 +268,7 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 			indexesMap[result.tableName] = result.indexes
 		}
 	}
-	
+
 	if len(indexesErrorMap) > 0 {
 		for tableName, err := range indexesErrorMap {
 			return nil, fmt.Errorf("获取表 %s 的索引信息失败：%w", tableName, err)
@@ -287,7 +288,6 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 
 	return tables, nil
 }
-
 
 // getTableDDL 获取单个表的 DDL
 func (c *Connection) getTableDDL(ctx context.Context, tableName string) (string, error) {
@@ -430,6 +430,59 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	return indexes, nil
 }
 
+// GetAllIndexes 获取所有表的索引信息
+func (c *Connection) GetAllIndexes() ([]IndexInfo, error) {
+	// 使用 information_schema.statistics 查询所有索引信息
+	query := `
+		SELECT table_name, index_name, non_unique, column_name, seq_in_index
+		FROM information_schema.statistics
+		WHERE table_schema = ?
+		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+		ORDER BY table_name, index_name, seq_in_index
+	`
+	rows, err := c.db.Query(query, c.config.Database)
+	if err != nil {
+		return nil, fmt.Errorf("查询索引信息失败：%w", err)
+	}
+	defer rows.Close()
+
+	// 使用 map 来按索引名分组
+	indexMap := make(map[string]*IndexInfo)
+
+	for rows.Next() {
+		var tableName, indexName, columnName string
+		var nonUnique int
+		var seqInIndex sql.NullString
+
+		if err := rows.Scan(&tableName, &indexName, &nonUnique, &columnName, &seqInIndex); err != nil {
+			return nil, fmt.Errorf("扫描索引信息失败：%w", err)
+		}
+
+		key := tableName + "." + indexName
+		if _, exists := indexMap[key]; !exists {
+			indexMap[key] = &IndexInfo{
+				Name:     indexName,
+				Table:    tableName,
+				IsUnique: nonUnique == 0,
+			}
+		}
+
+		indexMap[key].Columns = append(indexMap[key].Columns, columnName)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历索引结果失败：%w", err)
+	}
+
+	// 将 map 转换为 slice
+	var indexes []IndexInfo
+	for _, idx := range indexMap {
+		indexes = append(indexes, *idx)
+	}
+
+	return indexes, nil
+}
+
 // GetViews 获取所有视图信息
 func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
 	// 查询视图定义，过滤掉系统数据库的视图
@@ -459,6 +512,25 @@ func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
 	}
 
 	return views, nil
+}
+
+// GetViewDDL 获取视图 DDL（使用 SHOW CREATE VIEW 获取格式化的定义）
+func (c *Connection) GetViewDDL(viewName string) (string, error) {
+	query := `SHOW CREATE VIEW ` + viewName
+	var tableName, createView, charset, collation string
+	err := c.db.QueryRow(query).Scan(&tableName, &createView, &charset, &collation)
+	if err != nil {
+		return "", fmt.Errorf("获取视图 DDL 失败：%w", err)
+	}
+
+	// 格式化视图定义，将 CREATE VIEW 和 AS SELECT 分开
+	// SHOW CREATE VIEW 返回的是单行字符串，需要添加换行符
+	// 例如：CREATE ... VIEW ... AS SELECT ...
+	// 使用正则表达式替换 AS select/SELECT，支持大小写
+	re := regexp.MustCompile(`(?i)\s+AS\s+SELECT\s+`)
+	createView = re.ReplaceAllString(createView, "\nAS\nSELECT ")
+
+	return createView, nil
 }
 
 // GetFunctions 获取所有函数信息
@@ -624,7 +696,13 @@ func (c *Connection) GetUsers() ([]UserInfo, error) {
 	rows, err := c.db.Query(`
 		SELECT user, host 
 		FROM mysql.user 
-		WHERE user != 'root' AND user != 'mysql.sys' AND user != 'mysql.session'
+		WHERE user != 'root' AND user != 'mysql.sys' AND 
+		user != 'mysql.session' AND user != 'mysql.infoschema' AND 
+		user != 'mysql.pfsadmin' AND user != 'mysql.pfs' AND 
+		user != 'mysql.pfs_admin' AND user != 'mysql.pfs_admin_role' AND 
+		user != 'mysql.pfs_role_admin' AND user != 'mysql.pfs_role_admin_role' AND 
+		user != 'mysql.pfs_role_admin_role_role' AND 
+		user != 'mysql.pfs_role_admin_role_role_role' AND user != 'mysql.pfsadmin'
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("获取用户列表失败: %w", err)

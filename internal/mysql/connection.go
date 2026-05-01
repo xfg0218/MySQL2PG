@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"regexp"
@@ -409,3 +410,51 @@ func TestConnection(config *config.MySQLConfig) error {
 
 	return nil
 }
+
+// GetCharsetAndCollation 获取数据库的字符集和排序规则
+func (c *Connection) GetCharsetAndCollation() (string, string, error) {
+	var charset, collation string
+	
+	// 获取数据库字符集
+	query := `
+		SELECT default_character_set_name, default_collation_name
+		FROM information_schema.SCHEMATA
+		WHERE schema_name = ?
+	`
+	err := c.db.QueryRow(query, c.config.Database).Scan(&charset, &collation)
+	if err != nil {
+		// 如果查询失败，尝试使用 SHOW VARIABLES
+		charset, collation, err = c.getCharsetFromVariables()
+		if err != nil {
+			return "", "", fmt.Errorf("获取字符集失败：%w", err)
+		}
+	}
+	
+	return charset, collation, nil
+}
+
+// getCharsetFromVariables 从系统变量获取字符集
+func (c *Connection) getCharsetFromVariables() (string, string, error) {
+	var charset, collation string
+	
+	if err := c.db.QueryRow("SHOW VARIABLES LIKE 'character_set_database'").Scan(&charset, &charset); err != nil {
+		return "", "", err
+	}
+	
+	if err := c.db.QueryRow("SHOW VARIABLES LIKE 'collation_database'").Scan(&collation, &collation); err != nil {
+		return "", "", err
+	}
+	
+	return charset, collation, nil
+}
+
+// GetTableDDL 获取表的 DDL（导出方法）
+func (c *Connection) GetTableDDL(ctx context.Context, tableName string) (string, error) {
+	return c.getTableDDL(ctx, tableName)
+}
+
+// GetTableIndexes 获取表的索引信息（导出方法）
+func (c *Connection) GetTableIndexes(tableName string) ([]IndexInfo, error) {
+	return c.getTableIndexes(tableName)
+}
+

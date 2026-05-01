@@ -142,3 +142,18 @@ func detectReportCommand(args []string) (bool, []string) {
 	}
 	return false, nil
 }
+
+// detectAssessCommand 检测是否是 assess 子命令
+// 返回 (isAssess, remainingArgs)
+func detectAssessCommand(args []string) (bool, []string) {
+	for i, arg := range args {
+		if strings.TrimLeft(arg, "-") == "assess" {
+			// 移除 assess 参数，返回剩余参数
+			remaining := make([]string, 0, len(args)-1)
+			remaining = append(remaining, args[:i]...)
+			remaining = append(remaining, args[i+1:]...)
+			return true, remaining
+		}
+	}
+	return false, nil
+}
