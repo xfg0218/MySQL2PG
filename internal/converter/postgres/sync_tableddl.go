@@ -3,6 +3,7 @@ package postgres
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -303,8 +304,19 @@ func parseTableInfo(mysqlDDL string) (tableName string, isTemporary bool, tableC
 }
 
 type partitionRangeDefinition struct {
-	name     string
-	lessThan string
+	name       string
+	lessThan   string   // RANGE 分区：VALUES LESS THAN (...)
+	valuesIn   string   // LIST 分区：VALUES IN (...)
+	partitions int      // HASH/KEY 分区：PARTITIONS N
+}
+
+// PartitionInfo 存储完整的分区信息
+type PartitionInfo struct {
+	PartitionType  string                    // RANGE, LIST, HASH, KEY
+	Expression     string                    // 分区表达式
+	RangeDefs      []partitionRangeDefinition // RANGE 分区定义
+	ListDefs       []partitionRangeDefinition // LIST 分区定义
+	PartitionCount int                       // HASH/KEY 分区的分区数量
 }
 
 func findMatchingParen(input string, openIdx int) int {
@@ -323,11 +335,112 @@ func findMatchingParen(input string, openIdx int) int {
 	return -1
 }
 
-func parseRangePartitionInfo(mysqlDDL string) (string, []partitionRangeDefinition) {
+// parsePartitionInfo 解析 MySQL 分区信息（支持 RANGE、LIST、HASH、KEY）
+func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
+	// 1. 尝试从 /*!XXXXX ... */ 注释中提取 RANGE 分区信息
+	matches := rePartitionCommentRange.FindStringSubmatch(mysqlDDL)
+	if len(matches) >= 3 {
+		expr := strings.TrimSpace(matches[1])
+		defSection := matches[2]
+
+		// 解析 RANGE 分区定义
+		rePartitionDef := regexp.MustCompile(`(?is)PARTITION\s+"?([a-zA-Z0-9_]+)"?\s+VALUES\s+LESS\s+THAN\s*\(\s*([^)]+)\s*\)`)
+		defMatches := rePartitionDef.FindAllStringSubmatch(defSection, -1)
+		if len(defMatches) > 0 {
+			partitionDefs := make([]partitionRangeDefinition, 0, len(defMatches))
+			for _, defMatch := range defMatches {
+				if len(defMatch) < 3 {
+					continue
+				}
+				partitionDefs = append(partitionDefs, partitionRangeDefinition{
+					name:     strings.TrimSpace(defMatch[1]),
+					lessThan: strings.TrimSpace(defMatch[2]),
+				})
+			}
+			return &PartitionInfo{
+				PartitionType: "RANGE",
+				Expression:    expr,
+				RangeDefs:     partitionDefs,
+			}
+		}
+		return &PartitionInfo{
+			PartitionType: "RANGE",
+			Expression:    expr,
+		}
+	}
+
+	// 2. 尝试从 /*!XXXXX ... */ 注释中提取 LIST 分区信息
+	matches = rePartitionCommentList.FindStringSubmatch(mysqlDDL)
+	if len(matches) >= 3 {
+		expr := strings.TrimSpace(matches[1])
+		defSection := matches[2]
+
+		// 解析 LIST 分区定义
+		rePartitionDef := regexp.MustCompile(`(?is)PARTITION\s+"?([a-zA-Z0-9_]+)"?\s+VALUES\s+IN\s*\(([^)]+)\)`)
+		defMatches := rePartitionDef.FindAllStringSubmatch(defSection, -1)
+		if len(defMatches) > 0 {
+			partitionDefs := make([]partitionRangeDefinition, 0, len(defMatches))
+			for _, defMatch := range defMatches {
+				if len(defMatch) < 3 {
+					continue
+				}
+				partitionDefs = append(partitionDefs, partitionRangeDefinition{
+					name:     strings.TrimSpace(defMatch[1]),
+					valuesIn: strings.TrimSpace(defMatch[2]),
+				})
+			}
+			return &PartitionInfo{
+				PartitionType: "LIST",
+				Expression:    expr,
+				ListDefs:      partitionDefs,
+			}
+		}
+		return &PartitionInfo{
+			PartitionType: "LIST",
+			Expression:    expr,
+		}
+	}
+
+	// 3. 尝试从 /*!XXXXX ... */ 注释中提取 HASH 分区信息
+	matches = rePartitionCommentHash.FindStringSubmatch(mysqlDDL)
+	if len(matches) >= 3 {
+		expr := strings.TrimSpace(matches[1])
+		partitionCount := 0
+		if len(matches) >= 4 {
+			partitionCount, _ = strconv.Atoi(strings.TrimSpace(matches[3]))
+		}
+		return &PartitionInfo{
+			PartitionType:  "HASH",
+			Expression:     expr,
+			PartitionCount: partitionCount,
+		}
+	}
+
+	// 4. 尝试从 /*!XXXXX ... */ 注释中提取 KEY 分区信息
+	matches = rePartitionCommentKey.FindStringSubmatch(mysqlDDL)
+	if len(matches) >= 3 {
+		expr := strings.TrimSpace(matches[1])
+		partitionCount := 0
+		if len(matches) >= 4 {
+			partitionCount, _ = strconv.Atoi(strings.TrimSpace(matches[3]))
+		}
+		return &PartitionInfo{
+			PartitionType:  "KEY",
+			Expression:     expr,
+			PartitionCount: partitionCount,
+		}
+	}
+
+	// 5. 注释中提取失败，使用原有逻辑搜索标准 PARTITION BY RANGE
+	return parseRangePartitionInfoLegacy(mysqlDDL)
+}
+
+// parseRangePartitionInfoLegacy 旧版解析函数（保持向后兼容）
+func parseRangePartitionInfoLegacy(mysqlDDL string) *PartitionInfo {
 	upperDDL := strings.ToUpper(mysqlDDL)
 	rangeIdx := strings.Index(upperDDL, "PARTITION BY RANGE")
 	if rangeIdx == -1 {
-		return "", nil
+		return nil
 	}
 
 	rangeSegment := mysqlDDL[rangeIdx:]
@@ -335,36 +448,45 @@ func parseRangePartitionInfo(mysqlDDL string) (string, []partitionRangeDefinitio
 
 	rangeTokenIdx := strings.Index(rangeUpperSegment, "RANGE")
 	if rangeTokenIdx == -1 {
-		return "", nil
+		return nil
 	}
 
 	exprOpenIdx := strings.Index(rangeSegment[rangeTokenIdx+len("RANGE"):], "(")
 	if exprOpenIdx == -1 {
-		return "", nil
+		return nil
 	}
 	exprOpenIdx += rangeTokenIdx + len("RANGE")
 
 	exprCloseIdx := findMatchingParen(rangeSegment, exprOpenIdx)
 	if exprCloseIdx == -1 {
-		return "", nil
+		return nil
 	}
 	expr := strings.TrimSpace(rangeSegment[exprOpenIdx+1 : exprCloseIdx])
 
 	defOpenRel := strings.Index(rangeSegment[exprCloseIdx+1:], "(")
 	if defOpenRel == -1 {
-		return expr, nil
+		return &PartitionInfo{
+			PartitionType: "RANGE",
+			Expression:    expr,
+		}
 	}
 	defOpenIdx := exprCloseIdx + 1 + defOpenRel
 	defCloseIdx := findMatchingParen(rangeSegment, defOpenIdx)
 	if defCloseIdx == -1 {
-		return expr, nil
+		return &PartitionInfo{
+			PartitionType: "RANGE",
+			Expression:    expr,
+		}
 	}
 
 	defSection := rangeSegment[defOpenIdx+1 : defCloseIdx]
 	rePartitionDef := regexp.MustCompile(`(?is)PARTITION\s+"?([a-zA-Z0-9_]+)"?\s+VALUES\s+LESS\s+THAN\s*\(\s*([^)]+)\s*\)`)
 	matches := rePartitionDef.FindAllStringSubmatch(defSection, -1)
 	if len(matches) == 0 {
-		return expr, nil
+		return &PartitionInfo{
+			PartitionType: "RANGE",
+			Expression:    expr,
+		}
 	}
 
 	partitions := make([]partitionRangeDefinition, 0, len(matches))
@@ -378,7 +500,23 @@ func parseRangePartitionInfo(mysqlDDL string) (string, []partitionRangeDefinitio
 		})
 	}
 
-	return expr, partitions
+	return &PartitionInfo{
+		PartitionType: "RANGE",
+		Expression:    expr,
+		RangeDefs:     partitions,
+	}
+}
+
+// 旧版 parseRangePartitionInfo 函数保留用于向后兼容
+func parseRangePartitionInfo(mysqlDDL string) (string, []partitionRangeDefinition) {
+	info := parsePartitionInfo(mysqlDDL)
+	if info == nil {
+		return "", nil
+	}
+	if info.PartitionType == "RANGE" {
+		return info.Expression, info.RangeDefs
+	}
+	return "", nil
 }
 
 func convertPartitionExpression(mysqlExpr string) string {
@@ -946,7 +1084,9 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 
 	columnNamesMap := make(map[string]string)
 	columnCommentsMap := make(map[string]string)
-	partitionExpression, partitionDefs := parseRangePartitionInfo(mysqlDDL)
+
+	// 使用新的 parsePartitionInfo 函数，支持多种分区类型
+	partitionInfo := parsePartitionInfo(mysqlDDL)
 
 	tableName, isTemporary, tableComment, columnsStart, columnsEnd, err := parseTableInfo(mysqlDDL)
 	if err != nil {
@@ -1173,17 +1313,43 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 	}
 
 	var partitionDDLs []string
-	if !isTemporary && partitionExpression != "" && len(partitionDefs) > 0 {
-		pgPartitionExpr := convertPartitionExpression(partitionExpression)
-		result.WriteString(fmt.Sprintf(` PARTITION BY RANGE (%s)`, pgPartitionExpr))
-		prevUpper := "MINVALUE"
-		for _, partitionDef := range partitionDefs {
-			currentUpper := normalizePartitionBound(partitionDef.lessThan)
-			partitionTableName := fmt.Sprintf(`"%s_%s"`, tableName, partitionDef.name)
-			partitionDDL := fmt.Sprintf(`CREATE TABLE %s PARTITION OF "%s" FOR VALUES FROM (%s) TO (%s)`,
-				partitionTableName, tableName, prevUpper, currentUpper)
-			partitionDDLs = append(partitionDDLs, partitionDDL)
-			prevUpper = currentUpper
+	if !isTemporary && partitionInfo != nil && partitionInfo.Expression != "" {
+		pgPartitionExpr := convertPartitionExpression(partitionInfo.Expression)
+
+		// 根据分区类型生成不同的 PostgreSQL DDL
+		switch partitionInfo.PartitionType {
+		case "RANGE":
+			// PostgreSQL 支持 RANGE 分区
+			if len(partitionInfo.RangeDefs) > 0 {
+				result.WriteString(fmt.Sprintf(` PARTITION BY RANGE (%s)`, pgPartitionExpr))
+				prevUpper := "MINVALUE"
+				for _, partitionDef := range partitionInfo.RangeDefs {
+					currentUpper := normalizePartitionBound(partitionDef.lessThan)
+					partitionTableName := fmt.Sprintf(`"%s_%s"`, tableName, partitionDef.name)
+					partitionDDL := fmt.Sprintf(`CREATE TABLE %s PARTITION OF "%s" FOR VALUES FROM (%s) TO (%s)`,
+						partitionTableName, tableName, prevUpper, currentUpper)
+					partitionDDLs = append(partitionDDLs, partitionDDL)
+					prevUpper = currentUpper
+				}
+			}
+
+		case "LIST":
+			// PostgreSQL 支持 LIST 分区
+			if len(partitionInfo.ListDefs) > 0 {
+				result.WriteString(fmt.Sprintf(` PARTITION BY LIST (%s)`, pgPartitionExpr))
+				for _, partitionDef := range partitionInfo.ListDefs {
+					partitionTableName := fmt.Sprintf(`"%s_%s"`, tableName, partitionDef.name)
+					partitionDDL := fmt.Sprintf(`CREATE TABLE %s PARTITION OF "%s" FOR VALUES IN (%s)`,
+						partitionTableName, tableName, partitionDef.valuesIn)
+					partitionDDLs = append(partitionDDLs, partitionDDL)
+				}
+			}
+
+		case "HASH", "KEY":
+			// PostgreSQL 不支持 HASH/KEY 分区语法，记录警告
+			// PostgreSQL 11+ 支持 HASH 分区，但语法不同：PARTITION BY HASH (expr)
+			// 这里暂时跳过，只创建主表
+			// TODO: 未来可以添加 HASH 分区转换支持
 		}
 	}
 	finalDDL := result.String()

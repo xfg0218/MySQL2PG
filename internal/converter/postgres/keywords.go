@@ -3,10 +3,23 @@ package postgres
 import "regexp"
 
 var (
+	// 支持任意 MySQL 版本号的分区注释语法
+	// /*!50100 ... */、/*!50500 ... */、/*!80000 ... */、/*!90000 ... */ 等
+	// 版本号格式：5 位或以上数字
 	rePartition        = regexp.MustCompile(`(?is)PARTITION\s+BY\s+.*`)
-	rePartitionComment = regexp.MustCompile(`(?is)/\*!50100\s+PARTITION\s+BY\s+.*?\*/`)
+	rePartitionComment = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+.*?\*/`)
 	rePartitionSimple  = regexp.MustCompile(`(?is)PARTITION\s+BY\s+KEY\s*\(.*?\)\s*\(.*?\)\s*\)`)
 	rePartitionComplex = regexp.MustCompile(`(?is)PARTITION\s+BY\s+.*?\)\s*\)\s*`)
+
+	// 分区注释详细匹配正则（用于提取分区信息）
+	// RANGE 分区：/*!XXXXX PARTITION BY RANGE (expr) (PARTITION ...) */
+	rePartitionCommentRange = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+RANGE\s*\(([^)]+)\)\s*\((.*?)\)\s*\*/`)
+	// LIST 分区：/*!XXXXX PARTITION BY LIST (expr) (PARTITION ...) */
+	rePartitionCommentList  = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+LIST\s*\(([^)]+)\)\s*\((.*?)\)\s*\*/`)
+	// HASH 分区：/*!XXXXX PARTITION BY HASH (expr) PARTITIONS N */
+	rePartitionCommentHash  = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+HASH\s*\(([^)]+)\)\s*PARTITIONS\s+(\d+)\s*\*/`)
+	// KEY 分区：/*!XXXXX PARTITION BY KEY (expr) PARTITIONS N */
+	rePartitionCommentKey   = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+KEY\s*\(([^)]+)\)\s*PARTITIONS\s+(\d+)\s*\*/`)
 )
 
 // 基本类型正则缓存

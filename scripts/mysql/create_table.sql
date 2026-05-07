@@ -2576,4 +2576,8 @@ create table `case_169_merge` (
   `isrcnumber` varchar(255) default null,
   `fsconfirm` tinyint default null,
   primary key (`id`,`issue_id`) using btree
-) engine=innodb default charset=utf8mb4 row_format=dynamic;
+) engine=innodb default charset=utf8mb4 row_format=dynamic
+/*!50100 PARTITION BY RANGE (issue_id)
+(PARTITION p0 VALUES LESS THAN (1) ENGINE = InnoDB) */
+;
+
