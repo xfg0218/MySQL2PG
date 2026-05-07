@@ -44,6 +44,7 @@ type PostgreSQLConfig struct {
 	TestOnly           bool   `mapstructure:"test_only"`
 	MaxConns           int    `mapstructure:"max_conns"`            // 最大连接数
 	PgConnectionParams string `mapstructure:"pg_connection_params"` // PostgreSQL连接参数
+	PasswordEncryption string `mapstructure:"password_encryption"`  // 密码加密方式：md5, scram-sha-256, auto
 }
 
 // ConversionConfig 转换配置
