@@ -2573,7 +2573,7 @@ drop table if exists case_169_merge;
 create table `case_169_merge` (
   `id` int not null auto_increment,
   `issue_id` int not null,
-  `isrcnumber` varchar default null,
+  `isrcnumber` varchar(255) default null,
   `fsconfirm` tinyint default null,
   primary key (`id`,`issue_id`) using btree
 ) engine=innodb default charset=utf8mb4 row_format=dynamic;
