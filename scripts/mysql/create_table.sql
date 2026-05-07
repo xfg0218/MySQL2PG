@@ -2569,3 +2569,24 @@ CREATE TABLE `case_168_merge` (
   PRIMARY KEY (`normalize_id`) USING BTREE
 ) ENGINE=InnoDB AUTO_INCREMENT=12506 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci ROW_FORMAT=DYNAMIC;
 
+DROP TABLE IF EXISTS case_169_merge;
+CREATE TABLE `case_169_merge` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `issue_id` int(11) NOT NULL,
+  `ISRCNumber` varchar(255) DEFAULT NULL,
+  `click` varchar(255) DEFAULT NULL,
+  `clicks` varchar(255) DEFAULT NULL,
+  `composer` varchar(255) DEFAULT NULL,
+  `fsconfirm` tinyint(1) DEFAULT NULL,
+  `isrepeat` tinyint(1) DEFAULT NULL,
+  `language` varchar(255) DEFAULT NULL,
+  `lyricist` varchar(255) DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL,
+  `namealias` varchar(255) DEFAULT NULL,
+  `performer` varchar(255) DEFAULT NULL,
+  `performeralias` varchar(255) DEFAULT NULL,
+  `rownum` int(11) DEFAULT NULL,
+  `status` tinyint(1) DEFAULT NULL,
+  `version` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`,`issue_id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
