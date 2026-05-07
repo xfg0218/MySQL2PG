@@ -2569,3 +2569,11 @@ CREATE TABLE `case_168_merge` (
   PRIMARY KEY (`normalize_id`) USING BTREE
 ) ENGINE=InnoDB AUTO_INCREMENT=12506 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci ROW_FORMAT=DYNAMIC;
 
+drop table if exists case_169_merge;
+create table `case_169_merge` (
+  `id` int not null auto_increment,
+  `issue_id` int not null,
+  `isrcnumber` varchar default null,
+  `fsconfirm` tinyint default null,
+  primary key (`id`,`issue_id`) using btree
+) engine=innodb default charset=utf8mb4 row_format=dynamic;
