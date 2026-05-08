@@ -2621,8 +2621,9 @@ CREATE TABLE `test_partition_172_range_unix_timestamp` (
 (PARTITION p202501 VALUES LESS THAN (UNIX_TIMESTAMP('2025-02-01')),
  PARTITION p202502 VALUES LESS THAN (UNIX_TIMESTAMP('2025-03-01'))) */;
 
--- 4. LIST 分区 - 整数列表
-CREATE TABLE `test_partition_04_list_int` (
+-- LIST 分区 - 整数列表
+drop table if exists test_partition_173_list_int;
+CREATE TABLE `test_partition_173_list_int` (
   `id` int NOT NULL,
   `status` int NOT NULL,
   `name` varchar(100) DEFAULT NULL,
