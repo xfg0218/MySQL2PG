@@ -2561,28 +2561,30 @@ CREATE TABLE `test_partition_170_range_int` (
  PARTITION p4 VALUES LESS THAN MAXVALUE) */;
 
 -- RANGE 分区 - TO_DAYS 日期函数
-drop table if exists test_partition_171_range_todays;
-CREATE TABLE `test_partition_171_range_todays` (
-  `id` int NOT NULL,
-  `create_time` datetime NOT NULL,
-  `content` text,
-  PRIMARY KEY (`id`,`create_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-/*!50100 PARTITION BY RANGE (TO_DAYS(create_time))
-(PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
- PARTITION p202502 VALUES LESS THAN (TO_DAYS('2025-03-01')),
- PARTITION p_future VALUES LESS THAN MAXVALUE) */;
+-- 注意：TO_DAYS() 仅在 MySQL 8.0+ 中支持作为分区函数，MySQL 5.7 不支持
+-- drop table if exists test_partition_171_range_todays;
+-- CREATE TABLE `test_partition_171_range_todays` (
+--   `id` int NOT NULL,
+--   `create_time` datetime NOT NULL,
+--   `content` text,
+--   PRIMARY KEY (`id`,`create_time`)
+-- ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+-- /*!50100 PARTITION BY RANGE (TO_DAYS(create_time))
+-- (PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
+--  PARTITION p202502 VALUES LESS THAN (TO_DAYS('2025-03-01')),
+--  PARTITION p_future VALUES LESS THAN MAXVALUE) */;
 
 -- RANGE 分区 - UNIX_TIMESTAMP 时间戳函数
-CREATE TABLE `test_partition_172_range_unix_timestamp` (
-  `id` int NOT NULL,
-  `create_time` datetime NOT NULL,
-  `data` json DEFAULT NULL,
-  PRIMARY KEY (`id`,`create_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-/*!50100 PARTITION BY RANGE (TO_DAYS(create_time))
-(PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
- PARTITION p202502 VALUES LESS THAN (TO_DAYS('2025-03-01'))) */;
+-- 注意：UNIX_TIMESTAMP() 仅在 MySQL 8.0+ 中支持作为分区函数，MySQL 5.7 不支持
+-- CREATE TABLE `test_partition_172_range_unix_timestamp` (
+--   `id` int NOT NULL,
+--   `create_time` datetime NOT NULL,
+--   `data` json DEFAULT NULL,
+--   PRIMARY KEY (`id`,`create_time`)
+-- ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+-- /*!50100 PARTITION BY RANGE (UNIX_TIMESTAMP(create_time))
+-- (PARTITION p202501 VALUES LESS THAN (UNIX_TIMESTAMP('2025-02-01')),
+--  PARTITION p202502 VALUES LESS THAN (UNIX_TIMESTAMP('2025-03-01'))) */;
 
 -- LIST 分区 - 整数列表
 drop table if exists test_partition_173_list_int;
