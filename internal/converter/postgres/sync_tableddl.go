@@ -344,74 +344,22 @@ func findMatchingParen(input string, openIdx int) int {
 // parsePartitionInfo 解析 MySQL 分区信息（支持 RANGE、LIST、HASH、KEY、SUBPARTITION）
 func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
 	// 0. 首先尝试匹配 RANGE + SUBPARTITION 子分区语法
-	matches := rePartitionCommentRangeSub.FindStringSubmatch(mysqlDDL)
-	if len(matches) >= 6 {
-		// 使用 findMatchingParen 来正确提取表达式（可能包含括号）
-		rangeByIdx := strings.Index(strings.ToUpper(mysqlDDL), "PARTITION BY RANGE")
-		if rangeByIdx == -1 {
-			return nil
-		}
+	subMatch := rePartitionCommentRangeSub.FindStringSubmatch(mysqlDDL)
+	if len(subMatch) >= 6 {
+		// 直接从正则表达式捕获组获取数据
+		expr := strings.TrimSpace(strings.ReplaceAll(strings.TrimSpace(subMatch[1]), "\n", " "))
+		subPartType := strings.ToUpper(strings.TrimSpace(subMatch[2]))
+		subPartExpr := strings.TrimSpace(subMatch[3])
+		subPartCount, _ := strconv.Atoi(strings.TrimSpace(subMatch[4]))
+		defSection := strings.TrimSpace(subMatch[5])
 		
-		// 找到 RANGE 后的左括号
-		openParen := strings.Index(mysqlDDL[rangeByIdx:], "(")
-		if openParen == -1 {
-			return nil
-		}
-		openParen += rangeByIdx
-		
-		closeParen := findMatchingParen(mysqlDDL, openParen)
-		if closeParen == -1 {
-			return nil
-		}
-		
-		expr := strings.TrimSpace(mysqlDDL[openParen+1 : closeParen])
-		
-		// 提取 SUBPARTITION 信息
-		subPartTypeMatch := rePartitionCommentRangeSub.FindStringSubmatch(mysqlDDL)
-		subPartType := ""
-		subPartExpr := ""
-		subPartCount := 0
-		defSection := ""
-		
-		if len(subPartTypeMatch) >= 6 {
-			subPartType = strings.ToUpper(strings.TrimSpace(subPartTypeMatch[2]))
-			subPartExpr = strings.TrimSpace(subPartTypeMatch[3])
-			subPartCount, _ = strconv.Atoi(strings.TrimSpace(subPartTypeMatch[4]))
-			defSection = subPartTypeMatch[5]
-		}
-
-		// 解析 RANGE 分区定义
-		rePartitionDef := regexp.MustCompile(`(?is)PARTITION\s+"?([a-zA-Z0-9_]+)"?\s+VALUES\s+LESS\s+THAN\s*\(\s*([\s\S]+?)\s*\)`)
-		defMatches := rePartitionDef.FindAllStringSubmatch(defSection, -1)
-		if len(defMatches) > 0 {
-			partitionDefs := make([]partitionRangeDefinition, 0, len(defMatches))
-			for _, defMatch := range defMatches {
-				if len(defMatch) < 3 {
-					continue
-				}
-				partitionDefs = append(partitionDefs, partitionRangeDefinition{
-					name:     strings.TrimSpace(defMatch[1]),
-					lessThan: strings.TrimSpace(defMatch[2]),
-				})
-			}
+		// 使用新的解析函数（支持 MAXVALUE）
+		partitionDefs := parseRangePartitionDefinitions(defSection)
+		if len(partitionDefs) > 0 {
 			return &PartitionInfo{
 				PartitionType:     "RANGE",
 				Expression:        expr,
 				RangeDefs:         partitionDefs,
-				HasSubPartition:   true,
-				SubPartitionType:  subPartType,
-				SubPartitionExpr:  subPartExpr,
-				SubPartitionCount: subPartCount,
-			}
-		}
-
-		// 尝试使用新的解析函数（支持 MAXVALUE）
-		subPartitionDefs := parseRangePartitionDefinitions(defSection)
-		if len(subPartitionDefs) > 0 {
-			return &PartitionInfo{
-				PartitionType:     "RANGE",
-				Expression:        expr,
-				RangeDefs:         subPartitionDefs,
 				HasSubPartition:   true,
 				SubPartitionType:  subPartType,
 				SubPartitionExpr:  subPartExpr,
@@ -429,44 +377,25 @@ func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
 	}
 
 	// 1. 尝试从 /*!XXXXX ... */ 注释中提取 RANGE 分区信息
-	// 使用 findMatchingParen 来正确提取表达式（可能包含括号）
 	rangeMatch := rePartitionCommentRange.FindStringSubmatch(mysqlDDL)
-	if len(rangeMatch) >= 2 {
-		// 重新提取表达式（使用括号匹配）
-		rangeByIdx := strings.Index(strings.ToUpper(mysqlDDL), "PARTITION BY RANGE")
-		if rangeByIdx != -1 {
-			openParen := strings.Index(mysqlDDL[rangeByIdx:], "(")
-			if openParen != -1 {
-				openParen += rangeByIdx
-				closeParen := findMatchingParen(mysqlDDL, openParen)
-				if closeParen != -1 {
-					expr := strings.TrimSpace(mysqlDDL[openParen+1 : closeParen])
-					
-					// 提取分区定义部分
-					defStart := closeParen + 1
-					defEnd := strings.LastIndex(mysqlDDL, ")")
-					if defEnd > defStart {
-						defSection := mysqlDDL[defStart:defEnd]
-
-						// 解析 RANGE 分区定义（支持多行和 MAXVALUE）
-						// 支持两种语法：
-						// 1. VALUES LESS THAN (expr) - 有括号
-						// 2. VALUES LESS THAN MAXVALUE - 无括号
-						partitionDefs := parseRangePartitionDefinitions(defSection)
-						if len(partitionDefs) > 0 {
-							return &PartitionInfo{
-								PartitionType: "RANGE",
-								Expression:    expr,
-								RangeDefs:     partitionDefs,
-							}
-						}
-					}
-					return &PartitionInfo{
-						PartitionType: "RANGE",
-						Expression:    expr,
-					}
-				}
+	if len(rangeMatch) >= 3 {
+		// 直接从正则表达式捕获组获取表达式和分区定义部分
+		// 表达式需要清理前后空白和换行
+		expr := strings.TrimSpace(strings.ReplaceAll(strings.TrimSpace(rangeMatch[1]), "\n", " "))
+		defSection := strings.TrimSpace(rangeMatch[2])
+		
+		// 解析 RANGE 分区定义（支持多行和 MAXVALUE）
+		partitionDefs := parseRangePartitionDefinitions(defSection)
+		if len(partitionDefs) > 0 {
+			return &PartitionInfo{
+				PartitionType: "RANGE",
+				Expression:    expr,
+				RangeDefs:     partitionDefs,
 			}
+		}
+		return &PartitionInfo{
+			PartitionType: "RANGE",
+			Expression:    expr,
 		}
 	}
 
@@ -520,12 +449,12 @@ func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
 	}
 
 	// 3. 尝试从 /*!XXXXX ... */ 注释中提取 HASH 分区信息
-	matches = rePartitionCommentHash.FindStringSubmatch(mysqlDDL)
-	if len(matches) >= 2 {
-		expr := strings.TrimSpace(matches[1])
+	hashMatches := rePartitionCommentHash.FindStringSubmatch(mysqlDDL)
+	if len(hashMatches) >= 2 {
+		expr := strings.TrimSpace(hashMatches[1])
 		partitionCount := 0
-		if len(matches) >= 3 {
-			partitionCount, _ = strconv.Atoi(strings.TrimSpace(matches[2]))
+		if len(hashMatches) >= 3 {
+			partitionCount, _ = strconv.Atoi(strings.TrimSpace(hashMatches[2]))
 		}
 		return &PartitionInfo{
 			PartitionType:  "HASH",
@@ -535,12 +464,12 @@ func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
 	}
 
 	// 4. 尝试从 /*!XXXXX ... */ 注释中提取 KEY 分区信息
-	matches = rePartitionCommentKey.FindStringSubmatch(mysqlDDL)
-	if len(matches) >= 2 {
-		expr := strings.TrimSpace(matches[1])
+	keyMatches := rePartitionCommentKey.FindStringSubmatch(mysqlDDL)
+	if len(keyMatches) >= 2 {
+		expr := strings.TrimSpace(keyMatches[1])
 		partitionCount := 0
-		if len(matches) >= 3 {
-			partitionCount, _ = strconv.Atoi(strings.TrimSpace(matches[2]))
+		if len(keyMatches) >= 3 {
+			partitionCount, _ = strconv.Atoi(strings.TrimSpace(keyMatches[2]))
 		}
 		return &PartitionInfo{
 			PartitionType:  "KEY",
@@ -561,7 +490,8 @@ func parseRangePartitionDefinitions(defSection string) []partitionRangeDefinitio
 	partitionDefs := []partitionRangeDefinition{}
 	
 	// 使用正则表达式查找所有 PARTITION 定义
-	rePartitionStart := regexp.MustCompile(`(?i)PARTITION\s+"?([a-zA-Z0-9_]+)"?\s+VALUES\s+LESS\s+THAN\s+`)
+	// 修改：\s* 允许零个或多个空白字符，支持 VALUES LESS THANMAXVALUE 的边界情况
+	rePartitionStart := regexp.MustCompile(`(?i)PARTITION\s+"?([a-zA-Z0-9_]+)"?\s+VALUES\s+LESS\s+THAN\s*`)
 	matches := rePartitionStart.FindAllStringSubmatchIndex(defSection, -1)
 	
 	if len(matches) == 0 {
@@ -570,7 +500,12 @@ func parseRangePartitionDefinitions(defSection string) []partitionRangeDefinitio
 	
 	for i, match := range matches {
 		name := defSection[match[2]:match[3]]
-		startIdx := match[1] // VALUES LESS THAN 后的位置
+		startIdx := match[1] // VALUES LESS THAN 后的位置（可能包含空白）
+		
+		// 跳过可能的空白字符
+		for startIdx < len(defSection) && (defSection[startIdx] == ' ' || defSection[startIdx] == '\n' || defSection[startIdx] == '\r' || defSection[startIdx] == '\t') {
+			startIdx++
+		}
 		
 		// 找到下一个 PARTITION 的位置或结尾
 		endIdx := len(defSection)
@@ -588,14 +523,14 @@ func parseRangePartitionDefinitions(defSection string) []partitionRangeDefinitio
 		// 处理括号或 MAXVALUE
 		lessThan := valueStr
 		if strings.HasPrefix(valueStr, "(") {
+			// 左括号位置就是 startIdx
+			openParenIdx := startIdx
+			
 			// 使用括号匹配找到闭合括号
-			closeIdx := findMatchingParen(defSection, startIdx)
+			closeIdx := findMatchingParen(defSection, openParenIdx)
 			if closeIdx != -1 {
 				// 提取括号内的内容
-				lessThan = strings.TrimSpace(defSection[startIdx+1 : closeIdx])
-			} else {
-				// 括号不匹配，使用整个值（可能是语法错误，但尽量处理）
-				lessThan = strings.TrimSpace(valueStr)
+				lessThan = strings.TrimSpace(defSection[openParenIdx+1 : closeIdx])
 			}
 		}
 		// 否则就是 MAXVALUE，直接使用
