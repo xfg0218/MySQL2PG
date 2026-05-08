@@ -2602,7 +2602,7 @@ CREATE TABLE `test_partition_171_range_todays` (
   `id` int NOT NULL,
   `create_time` datetime NOT NULL,
   `content` text,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`,`create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 /*!50100 PARTITION BY RANGE (TO_DAYS(create_time))
 (PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
@@ -2615,7 +2615,7 @@ CREATE TABLE `test_partition_172_range_unix_timestamp` (
   `id` int NOT NULL,
   `create_time` datetime NOT NULL,
   `data` json DEFAULT NULL,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`,`create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 /*!50100 PARTITION BY RANGE (UNIX_TIMESTAMP(create_time))
 (PARTITION p202501 VALUES LESS THAN (UNIX_TIMESTAMP('2025-02-01')),
@@ -2640,7 +2640,7 @@ CREATE TABLE `test_partition_174_hash` (
   `id` int NOT NULL,
   `issue_id` int NOT NULL,
   `data` text,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`,`issue_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 /*!50100 PARTITION BY HASH(issue_id)
 PARTITIONS 8 */;
@@ -2651,7 +2651,7 @@ CREATE TABLE `test_partition_175_key` (
   `id` int NOT NULL,
   `issue_id` int NOT NULL,
   `content` varchar(255) DEFAULT NULL,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`,`issue_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 /*!50100 PARTITION BY KEY(issue_id)
 PARTITIONS 4 */;
