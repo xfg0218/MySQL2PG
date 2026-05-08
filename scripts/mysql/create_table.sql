@@ -2308,42 +2308,6 @@ CREATE TABLE case_155_rest_categories (
   INDEX idx_parent_id (parent_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='菜品分类表';
 
--- 创建菜品表
-DROP TABLE IF EXISTS case_155_rest_dishes;
-CREATE TABLE case_155_rest_dishes (
-  dish_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '菜品 ID',
-  dish_name VARCHAR(100) NOT NULL COMMENT '菜品名称',
-  dish_code VARCHAR(50) COMMENT '菜品编码',
-  category_id INT NOT NULL COMMENT '分类 ID',
-  price DECIMAL(10,2) NOT NULL COMMENT '价格',
-  cost_price DECIMAL(10,2) COMMENT '成本价',
-  discount_price DECIMAL(10,2) COMMENT '折扣价',
-  images JSON COMMENT '图片',
-  ingredients TEXT COMMENT '配料',
-  spice_level TINYINT DEFAULT 0 COMMENT '口味：0-不辣，1-微辣，2-中辣，3-特辣',
-  is_recommend TINYINT DEFAULT 0 COMMENT '是否推荐',
-  is_available TINYINT DEFAULT 1 COMMENT '是否可售',
-  monthly_sales INT DEFAULT 0 COMMENT '月销量',
-  total_sales INT DEFAULT 0 COMMENT '总销量',
-  description TEXT COMMENT '描述',
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_dish_code (dish_code),
-  INDEX idx_category_id (category_id),
-  INDEX idx_is_available (is_available)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='菜品表';
-
--- 菜品表测试数据
-INSERT INTO case_155_rest_dishes (dish_id, dish_name, dish_code, category_id, price, cost_price, spice_level, is_recommend, is_available, monthly_sales, description) VALUES
-(1, '宫保鸡丁', 'DISH-001', 3, 38.00, 15.00, 2, 1, 1, 856, '经典川菜，鸡肉鲜嫩，花生香脆'),
-(2, '鱼香肉丝', 'DISH-002', 3, 32.00, 12.00, 1, 1, 1, 720, '酸甜微辣，开胃下饭'),
-(3, '水煮鱼', 'DISH-003', 4, 68.00, 28.00, 3, 1, 1, 650, '麻辣鲜香，鱼肉嫩滑'),
-(4, '清蒸鲈鱼', 'DISH-004', 4, 88.00, 35.00, 0, 1, 1, 420, '清淡鲜美，保留原汁原味'),
-(5, '麻婆豆腐', 'DISH-005', 5, 18.00, 6.00, 3, 1, 1, 980, '经典川菜，麻辣鲜香'),
-(6, '炒饭', 'DISH-006', 6, 15.00, 5.00, 0, 0, 1, 1200, '粒粒分明，香气扑鼻'),
-(7, '可乐', 'DISH-007', 7, 5.00, 2.50, 0, 0, 1, 2000, '冰镇可乐'),
-(8, '红豆双皮奶', 'DISH-008', 8, 12.00, 4.00, 0, 1, 1, 380, '经典粤式甜品');
-
 -- 创建订单表
 DROP TABLE IF EXISTS case_155_rest_orders;
 CREATE TABLE case_155_rest_orders (
