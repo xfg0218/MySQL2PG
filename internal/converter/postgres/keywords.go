@@ -13,9 +13,14 @@ var (
 
 	// 分区注释详细匹配正则（用于提取分区信息）
 	// RANGE 分区：/*!XXXXX PARTITION BY RANGE (expr) (PARTITION ...) */
-	rePartitionCommentRange = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+RANGE\s*\(([^)]+)\)\s*\((.*?)\)\s*\*/`)
+	// 使用 [\s\S]*? 支持多行匹配，包括 TO_DAYS()、UNIX_TIMESTAMP() 等函数表达式
+	rePartitionCommentRange = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+RANGE\s*\(([^)]+)\)\s*\(([\s\S]*?)\)\s*\*/`)
+	// RANGE + SUBPARTITION 子分区：/*!XXXXX PARTITION BY RANGE (expr) SUBPARTITION BY HASH (expr2) SUBPARTITIONS N (PARTITION ...) */
+	rePartitionCommentRangeSub = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+RANGE\s*\(([^)]+)\)\s*SUBPARTITION\s+BY\s+(HASH|KEY)\s*\(([^)]+)\)\s*SUBPARTITIONS\s+(\d+)\s*\(([\s\S]*?)\)\s*\*/`)
+	
 	// LIST 分区：/*!XXXXX PARTITION BY LIST (expr) (PARTITION ...) */
-	rePartitionCommentList  = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+LIST\s*\(([^)]+)\)\s*\((.*?)\)\s*\*/`)
+	// 支持多值列表：VALUES IN (1,2,3) 或 VALUES IN ('a','b')
+	rePartitionCommentList  = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+LIST\s*\(([^)]+)\)\s*\(([\s\S]*?)\)\s*\*/`)
 	// HASH 分区：/*!XXXXX PARTITION BY HASH (expr) PARTITIONS N */
 	rePartitionCommentHash  = regexp.MustCompile(`(?is)/\*![0-9]{5,}\s+PARTITION\s+BY\s+HASH\s*\(([^)]+)\)\s*PARTITIONS\s+(\d+)\s*\*/`)
 	// KEY 分区：/*!XXXXX PARTITION BY KEY (expr) PARTITIONS N */
