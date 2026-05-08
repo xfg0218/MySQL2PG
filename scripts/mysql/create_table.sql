@@ -2610,16 +2610,15 @@ CREATE TABLE `test_partition_171_range_todays` (
  PARTITION p_future VALUES LESS THAN MAXVALUE) */;
 
 -- RANGE 分区 - UNIX_TIMESTAMP 时间戳函数
-drop table if exists test_partition_172_range_unix_timestamp;
 CREATE TABLE `test_partition_172_range_unix_timestamp` (
   `id` int NOT NULL,
   `create_time` datetime NOT NULL,
   `data` json DEFAULT NULL,
   PRIMARY KEY (`id`,`create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-/*!50100 PARTITION BY RANGE (UNIX_TIMESTAMP(create_time))
-(PARTITION p202501 VALUES LESS THAN (UNIX_TIMESTAMP('2025-02-01')),
- PARTITION p202502 VALUES LESS THAN (UNIX_TIMESTAMP('2025-03-01'))) */;
+/*!50100 PARTITION BY RANGE (TO_DAYS(create_time))
+(PARTITION p202501 VALUES LESS THAN (TO_DAYS('2025-02-01')),
+ PARTITION p202502 VALUES LESS THAN (TO_DAYS('2025-03-01'))) */;
 
 -- LIST 分区 - 整数列表
 drop table if exists test_partition_173_list_int;
@@ -2634,46 +2633,9 @@ CREATE TABLE `test_partition_173_list_int` (
  PARTITION p1 VALUES IN (1),
  PARTITION p2 VALUES IN (2,3)) */;
 
--- HASH 分区
-drop table if exists test_partition_174_hash;
-CREATE TABLE `test_partition_174_hash` (
-  `id` int NOT NULL,
-  `issue_id` int NOT NULL,
-  `data` text,
-  PRIMARY KEY (`id`,`issue_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-/*!50100 PARTITION BY HASH(issue_id)
-PARTITIONS 8 */;
-
--- KEY 分区
-drop table if exists test_partition_175_key;
-CREATE TABLE `test_partition_175_key` (
-  `id` int NOT NULL,
-  `issue_id` int NOT NULL,
-  `content` varchar(255) DEFAULT NULL,
-  PRIMARY KEY (`id`,`issue_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-/*!50100 PARTITION BY KEY(issue_id)
-PARTITIONS 4 */;
-
--- RANGE + SUBPARTITION 子分区
-drop table if exists test_partition_176_subpartition;
-CREATE TABLE `test_partition_176_subpartition` (
-  `id` int NOT NULL,
-  `issue_id` int NOT NULL,
-  `performer` varchar(100) NOT NULL,
-  `name` varchar(255) DEFAULT NULL,
-  PRIMARY KEY (`id`,`issue_id`,`performer`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-/*!50100 PARTITION BY RANGE (issue_id)
-SUBPARTITION BY HASH(performer)
-SUBPARTITIONS 2
-(PARTITION p0 VALUES LESS THAN (1000),
- PARTITION p1 VALUES LESS THAN MAXVALUE) */;
-
 -- RANGE 分区 - 多分区（5 个以上分区）
-drop table if exists test_partition_177_range_multi;
-CREATE TABLE `test_partition_177_range_multi` (
+drop table if exists test_partition_174_range_multi;
+CREATE TABLE `test_partition_174_range_multi` (
   `id` int NOT NULL,
   `issue_id` int NOT NULL,
   `title` varchar(255) DEFAULT NULL,
