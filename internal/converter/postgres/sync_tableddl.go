@@ -488,44 +488,44 @@ func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
 // 2. VALUES LESS THAN MAXVALUE - 无括号
 func parseRangePartitionDefinitions(defSection string) []partitionRangeDefinition {
 	partitionDefs := []partitionRangeDefinition{}
-	
+
 	// 使用正则表达式查找所有 PARTITION 定义
 	// 修改：\s* 允许零个或多个空白字符，支持 VALUES LESS THANMAXVALUE 的边界情况
 	rePartitionStart := regexp.MustCompile(`(?i)PARTITION\s+"?([a-zA-Z0-9_]+)"?\s+VALUES\s+LESS\s+THAN\s*`)
 	matches := rePartitionStart.FindAllStringSubmatchIndex(defSection, -1)
-	
+
 	if len(matches) == 0 {
 		return nil
 	}
-	
+
 	for i, match := range matches {
 		name := defSection[match[2]:match[3]]
 		startIdx := match[1] // VALUES LESS THAN 后的位置（可能包含空白）
-		
+
 		// 跳过可能的空白字符
 		for startIdx < len(defSection) && (defSection[startIdx] == ' ' || defSection[startIdx] == '\n' || defSection[startIdx] == '\r' || defSection[startIdx] == '\t') {
 			startIdx++
 		}
-		
+
 		// 找到下一个 PARTITION 的位置或结尾
 		endIdx := len(defSection)
 		if i+1 < len(matches) {
 			endIdx = matches[i+1][0]
 		}
-		
+
 		// 提取 VALUES LESS THAN 后的内容
 		valueStr := strings.TrimSpace(defSection[startIdx:endIdx])
-		
+
 		// 移除尾随的逗号
 		valueStr = strings.TrimSuffix(valueStr, ",")
 		valueStr = strings.TrimSpace(valueStr)
-		
+
 		// 处理括号或 MAXVALUE
 		lessThan := valueStr
 		if strings.HasPrefix(valueStr, "(") {
 			// 左括号位置就是 startIdx
 			openParenIdx := startIdx
-			
+
 			// 使用括号匹配找到闭合括号
 			closeIdx := findMatchingParen(defSection, openParenIdx)
 			if closeIdx != -1 {
@@ -534,14 +534,42 @@ func parseRangePartitionDefinitions(defSection string) []partitionRangeDefinitio
 			}
 		}
 		// 否则就是 MAXVALUE，直接使用
-		
+
+		// 移除 ENGINE = xxx, DATA DIRECTORY = xxx, INDEX DIRECTORY = xxx, MAX_ROWS = xxx 等子句
+		// 这些是 MySQL 特有的分区存储子句，PostgreSQL 不支持
+		lessThan = stripPartitionStorageClause(lessThan)
+
 		partitionDefs = append(partitionDefs, partitionRangeDefinition{
 			name:     strings.TrimSpace(name),
 			lessThan: strings.TrimSpace(lessThan),
 		})
 	}
-	
+
 	return partitionDefs
+}
+
+// stripPartitionStorageClause 移除 MySQL 分区定义中的存储子句
+// 例如：ENGINE = InnoDB, DATA DIRECTORY = '/path', INDEX DIRECTORY = '/path', MAX_ROWS = 1000
+func stripPartitionStorageClause(input string) string {
+	// 定义需要移除的子句模式（不区分大小写）
+	storagePatterns := []string{
+		`(?i)\s+ENGINE\s*=\s*\w+`,
+		`(?i)\s+DATA\s+DIRECTORY\s*=\s*'[^']*'`,
+		`(?i)\s+INDEX\s+DIRECTORY\s*=\s*'[^']*'`,
+		`(?i)\s+MAX_ROWS\s*=\s*\d+`,
+		`(?i)\s+MIN_ROWS\s*=\s*\d+`,
+		`(?i)\s+TABLESPACE\s*=\s*\w+`,
+		`(?i)\s+STORAGE\s+DISK`,
+		`(?i)\s+STORAGE\s+MEMORY`,
+	}
+
+	result := input
+	for _, pattern := range storagePatterns {
+		re := regexp.MustCompile(pattern)
+		result = re.ReplaceAllString(result, "")
+	}
+
+	return strings.TrimSpace(result)
 }
 
 // parseRangePartitionInfoLegacy 旧版解析函数（保持向后兼容）
@@ -603,9 +631,11 @@ func parseRangePartitionInfoLegacy(mysqlDDL string) *PartitionInfo {
 		if len(match) < 3 {
 			continue
 		}
+		// 移除 ENGINE = xxx 等存储子句
+		lessThan := stripPartitionStorageClause(strings.TrimSpace(match[2]))
 		partitions = append(partitions, partitionRangeDefinition{
 			name:     strings.TrimSpace(match[1]),
-			lessThan: strings.TrimSpace(match[2]),
+			lessThan: lessThan,
 		})
 	}
 
