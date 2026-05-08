@@ -2634,8 +2634,9 @@ CREATE TABLE `test_partition_173_list_int` (
  PARTITION p1 VALUES IN (1),
  PARTITION p2 VALUES IN (2,3)) */;
 
--- 5. HASH 分区
-CREATE TABLE `test_partition_05_hash` (
+-- HASH 分区
+drop table if exists test_partition_174_hash;
+CREATE TABLE `test_partition_174_hash` (
   `id` int NOT NULL,
   `issue_id` int NOT NULL,
   `data` text,
@@ -2644,8 +2645,9 @@ CREATE TABLE `test_partition_05_hash` (
 /*!50100 PARTITION BY HASH(issue_id)
 PARTITIONS 8 */;
 
--- 6. KEY 分区
-CREATE TABLE `test_partition_06_key` (
+-- KEY 分区
+drop table if exists test_partition_175_key;
+CREATE TABLE `test_partition_175_key` (
   `id` int NOT NULL,
   `issue_id` int NOT NULL,
   `content` varchar(255) DEFAULT NULL,
@@ -2654,8 +2656,9 @@ CREATE TABLE `test_partition_06_key` (
 /*!50100 PARTITION BY KEY(issue_id)
 PARTITIONS 4 */;
 
--- 7. RANGE + SUBPARTITION 子分区
-CREATE TABLE `test_partition_07_subpartition` (
+-- RANGE + SUBPARTITION 子分区
+drop table if exists test_partition_176_subpartition;
+CREATE TABLE `test_partition_176_subpartition` (
   `id` int NOT NULL,
   `issue_id` int NOT NULL,
   `performer` varchar(100) NOT NULL,
@@ -2668,8 +2671,9 @@ SUBPARTITIONS 2
 (PARTITION p0 VALUES LESS THAN (1000),
  PARTITION p1 VALUES LESS THAN MAXVALUE) */;
 
--- 8. RANGE 分区 - 多分区（5 个以上分区）
-CREATE TABLE `test_partition_08_range_multi` (
+-- RANGE 分区 - 多分区（5 个以上分区）
+drop table if exists test_partition_177_range_multi;
+CREATE TABLE `test_partition_177_range_multi` (
   `id` int NOT NULL,
   `issue_id` int NOT NULL,
   `title` varchar(255) DEFAULT NULL,
@@ -2682,4 +2686,3 @@ CREATE TABLE `test_partition_08_range_multi` (
  PARTITION p2 VALUES LESS THAN (10000),
  PARTITION p3 VALUES LESS THAN (50000),
  PARTITION p4 VALUES LESS THAN MAXVALUE) */;
-
