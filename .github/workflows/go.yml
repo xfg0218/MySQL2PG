@@ -3,6 +3,8 @@ name: Go
 on:
   push:
     branches: [ "main" ]
+    tags-ignore:
+      - '*'  # 忽略标签推送，避免与 release.yml 重复触发
   pull_request:
     branches: [ "main" ]
 

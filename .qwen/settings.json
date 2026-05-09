@@ -383,7 +383,8 @@
       "Bash($content *)",
       "Bash(s)",
       "Bash(perl)",
-      "Bash(sleep *)"
+      "Bash(sleep *)",
+      "Bash(ssh *)"
     ]
   },
   "$version": 3
