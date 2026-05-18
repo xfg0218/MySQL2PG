@@ -10,6 +10,12 @@ CREATE USER 'test2'@'%' IDENTIFIED BY 'Abcd123!@#$';
 GRANT ALL PRIVILEGES ON *.* TO 'test1'@'%';
 GRANT ALL PRIVILEGES ON *.* TO 'test2'@'%';
 
+-- 允许查看用户、权限等系统表的权限的信息
+GRANT SELECT ON mysql.* TO 'test1'@'%';
+
+-- 刷新权限
+FLUSH PRIVILEGES;
+
 -- 赋予test1用户指定表的权限
 GRANT ALL PRIVILEGES ON case_01_integers TO 'test1'@'%';
 GRANT ALL PRIVILEGES ON case_02_boolean TO 'test1'@'%';
