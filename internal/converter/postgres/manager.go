@@ -1285,7 +1285,7 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 		}
 
 		// 执行创建视图的SQL语句
-		if err := m.postgresConn.ExecuteDDL(pgViewDDL); err != nil {
+		if err := m.postgresConn.ExecuteDDL(pgViewDDL, view.ViewDefinition); err != nil {
 			errMsg := fmt.Sprintf("创建表视图 %s 失败: %v", view.ViewName, err)
 			m.logError(errMsg)
 			<-semaphore
@@ -1399,7 +1399,7 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 			}
 		}
 
-		if err := m.postgresConn.ExecuteDDL(pgResult.DDL); err != nil {
+		if err := m.postgresConn.ExecuteDDL(pgResult.DDL, table.DDL); err != nil {
 			errMsg := fmt.Sprintf("执行表 %s DDL失败: %v", table.Name, err)
 			m.logError(errMsg)
 			<-semaphore
@@ -1408,7 +1408,7 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		}
 
 		for _, partitionDDL := range pgResult.PartitionDDLs {
-			if err := m.postgresConn.ExecuteDDL(partitionDDL); err != nil {
+			if err := m.postgresConn.ExecuteDDL(partitionDDL, table.DDL); err != nil {
 				errMsg := fmt.Sprintf("执行表 %s 分区DDL失败: %v", table.Name, err)
 				m.logError(errMsg)
 				<-semaphore
@@ -1571,7 +1571,7 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 			return err
 		}
 
-		if err := m.postgresConn.ExecuteDDL(pgDDL); err != nil {
+		if err := m.postgresConn.ExecuteDDL(pgDDL, function.DDL); err != nil {
 			errMsg := fmt.Sprintf("执行函数 %s DDL失败: %v", function.Name, err)
 			m.logError(errMsg)
 			<-semaphore
