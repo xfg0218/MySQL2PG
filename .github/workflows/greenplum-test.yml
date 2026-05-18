@@ -64,7 +64,7 @@ jobs:
     # MySQL 服务
     services:
       mysql:
-        image: mysql:${{ github.event.inputs.mysql_version || env.MYSQL_VERSION }}
+        image: mysql:${{ github.event.inputs.mysql_version || '8.0' }}
         env:
           MYSQL_ROOT_PASSWORD: rootpassword
           MYSQL_DATABASE: test_db
