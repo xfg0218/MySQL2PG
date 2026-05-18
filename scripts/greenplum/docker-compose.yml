@@ -1,0 +1,75 @@
+# Greenplum 2-Node Cluster for CI Testing
+# 1 Master + 1 Segment (optimized for GitHub Actions runner with ~7GB RAM)
+#
+# Usage:
+#   docker-compose up -d
+#   docker-compose down -v
+#
+# Reference: https://github.com/andrewjw/docker-greenplum
+
+version: '3.8'
+
+services:
+  # Greenplum Master Node
+  master:
+    image: andrewjw/docker-greenplum:latest
+    container_name: gp_master
+    hostname: master
+    ports:
+      - "5432:5432"   # PostgreSQL protocol port
+      - "2222:22"     # SSH port (optional, for debugging)
+    environment:
+      - GP_MASTER=1
+      - GP_SEGMENTS=1
+      - GP_MEMORY=2GB
+    volumes:
+      - master_data:/data/master
+      - ./gpinitsystem_config:/etc/gpinitsystem_config:ro
+    networks:
+      - greenplum_net
+    healthcheck:
+      test: ["CMD", "su", "-", "gpadmin", "-c", "psql -U gpadmin -d postgres -c 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    # Resource limits for CI environment
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # Greenplum Segment Node 1
+  segment1:
+    image: andrewjw/docker-greenplum:latest
+    container_name: gp_segment1
+    hostname: segment1
+    depends_on:
+      - master
+    environment:
+      - GP_MASTER=0
+      - GP_MEMORY=2GB
+    volumes:
+      - segment_data:/data/primary
+    networks:
+      - greenplum_net
+    # Resource limits for CI environment
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+networks:
+  greenplum_net:
+    driver: bridge
+    name: greenplum_ci_network
+
+volumes:
+  master_data:
+    name: greenplum_master_data
+  segment_data:
+    name: greenplum_segment_data
