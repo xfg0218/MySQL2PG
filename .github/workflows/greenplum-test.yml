@@ -3,7 +3,7 @@
 # MySQL → Greenplum 6 (2-node cluster) 迁移测试
 # =============================================================================
 
-name: Greenplum Integration Tests
+name: 🚀 Greenplum MPP 迁移测试 (MySQL → Greenplum 6)
 
 on:
   # 推送事件：main 分支 + 相关文件变更
@@ -55,7 +55,7 @@ jobs:
   # MySQL → Greenplum 6 迁移测试
   # =============================================================================
   integration-test-greenplum:
-    name: MySQL → Greenplum 6 (2-node cluster)
+    name: 🟢 Greenplum 2 节点集群迁移 (1 Master + 1 Segment)
     runs-on: ubuntu-latest
     
     # 增加超时时间（Greenplum 启动较慢）
