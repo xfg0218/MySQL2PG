@@ -269,11 +269,14 @@ func (c *Connection) BeginTransaction(ctx context.Context) (pgx.Tx, error) {
 }
 
 // ExecuteDDL 执行 DDL 语句
-func (c *Connection) ExecuteDDL(ddl string) error {
+func (c *Connection) ExecuteDDL(ddl string, originalMysqlDDL ...string) error {
 	ctx := context.Background()
 	execDDL := sanitizeDDLForExecution(ddl)
 	_, err := c.pool.Exec(ctx, execDDL)
 	if err != nil {
+		if len(originalMysqlDDL) > 0 && originalMysqlDDL[0] != "" {
+			return fmt.Errorf("执行 DDL 失败：%w\n  MySQL DDL: %s\n  PostgreSQL DDL: %s", err, originalMysqlDDL[0], execDDL)
+		}
 		return fmt.Errorf("执行 DDL 失败：%w, PostgreSQL SQL: %s", err, execDDL)
 	}
 	return err
