@@ -6,26 +6,6 @@
 name: Greenplum MPP 迁移测试 (MySQL → Greenplum 6)
 
 on:
-  # 推送事件：main 分支 + 相关文件变更
-  push:
-    branches: [main]
-    paths:
-      - 'internal/converter/mpp/**'
-      - 'internal/converter/postgres/sync_tableddl.go'
-      - 'internal/converter/postgres/manager.go'
-      - 'scripts/greenplum/**'
-      - '.github/workflows/greenplum-test.yml'
-  
-  # PR 事件：相关文件变更
-  pull_request:
-    branches: [main]
-    paths:
-      - 'internal/converter/mpp/**'
-      - 'internal/converter/postgres/sync_tableddl.go'
-      - 'internal/converter/postgres/manager.go'
-      - 'scripts/greenplum/**'
-      - '.github/workflows/greenplum-test.yml'
-  
   # 支持手动触发
   workflow_dispatch:
     inputs:
