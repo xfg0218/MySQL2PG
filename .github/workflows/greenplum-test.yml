@@ -131,10 +131,10 @@ jobs:
           # 设置环境变量
           export GP_SEGMENTS=1
           export GP_MEMORY=2GB
-          
+
           # 启动集群
-          docker-compose up -d
-          
+          docker compose up -d
+
           echo "Greenplum cluster starting..."
           docker ps -a | grep gp_
       
@@ -345,5 +345,5 @@ jobs:
         run: |
           echo "=== Cleaning up Greenplum cluster ==="
           cd scripts/greenplum
-          docker-compose down -v
+          docker compose down -v
           echo "Cleanup completed"
