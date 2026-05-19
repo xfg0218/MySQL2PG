@@ -3,7 +3,7 @@
 # MySQL → Greenplum 6 (2-node cluster) 迁移测试
 # =============================================================================
 
-name: 🚀 Greenplum MPP 迁移测试 (MySQL → Greenplum 6)
+name: Greenplum MPP 迁移测试 (MySQL → Greenplum 6)
 
 on:
   # 推送事件：main 分支 + 相关文件变更
@@ -32,7 +32,7 @@ on:
       mysql_version:
         description: 'MySQL 版本'
         required: true
-        default: '8.0'
+        default: '5.7'
         type: choice
         options:
           - '5.7'
