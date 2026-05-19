@@ -5,6 +5,9 @@
 
 name: 📦 MySQL → Greenplum 6 迁移测试 (5.7/8.0)
 
+on:
+  workflow_dispatch:
+
 env:
   GO_VERSION: '1.24'
   MYSQL_VERSION: '8.0'
