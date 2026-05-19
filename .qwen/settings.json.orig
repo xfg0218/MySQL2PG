@@ -384,8 +384,10 @@
       "Bash(s)",
       "Bash(perl)",
       "Bash(sleep *)",
-      "Bash(ssh *)"
+      "Bash(ssh *)",
+      "Bash(chmod *)",
+      "Bash(tree *)"
     ]
   },
-  "$version": 3
+  "$version": 4
 }

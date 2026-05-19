@@ -3,7 +3,7 @@
 # MySQL → Greenplum 6 (2-node cluster) 迁移测试
 # =============================================================================
 
-name: Greenplum MPP 迁移测试 (MySQL → Greenplum 6)
+name: 📦 MySQL → Greenplum 6 迁移测试 (支持 5.7/8.0)
 
 on:
   # 支持手动触发
@@ -35,7 +35,7 @@ jobs:
   # MySQL → Greenplum 6 迁移测试
   # =============================================================================
   integration-test-greenplum:
-    name: 🟢 Greenplum 2 节点集群迁移 (1 Master + 1 Segment)
+    name: MySQL ${{ github.event.inputs.mysql_version || '5.7' }} → Greenplum (1 Master + 1 Segment)
     runs-on: ubuntu-latest
     
     # 增加超时时间（Greenplum 启动较慢）
@@ -176,6 +176,12 @@ jobs:
           echo "=== Inserting test data ==="
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
       
+          echo "=== Creating unique index in MySQL ===" 
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_unique_key_table.sql
+
+          echo "=== Creating comments partition table in MySQL ==="
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
+
       # -------------------------------------------------------------------------
       # 10. 创建 MySQL2PG 配置（MPP 模式）
       # -------------------------------------------------------------------------
