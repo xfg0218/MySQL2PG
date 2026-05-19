@@ -3,25 +3,10 @@
 # MySQL → Greenplum 6 (2-node cluster) 迁移测试
 # =============================================================================
 
-name: Greenplum MPP 迁移测试 (MySQL → Greenplum 6)
+name: 📦 MySQL → Greenplum 6 迁移测试 (5.7/8.0)
 
 on:
-  # 支持手动触发
   workflow_dispatch:
-    inputs:
-      mysql_version:
-        description: 'MySQL 版本'
-        required: true
-        default: '5.7'
-        type: choice
-        options:
-          - '5.7'
-          - '8.0'
-      debug_mode:
-        description: '调试模式（保留容器）'
-        required: false
-        default: 'false'
-        type: boolean
 
 env:
   GO_VERSION: '1.24'
@@ -32,19 +17,23 @@ env:
 
 jobs:
   # =============================================================================
-  # MySQL → Greenplum 6 迁移测试
+  # MySQL → Greenplum 6 迁移测试 (矩阵：5.7 和 8.0)
   # =============================================================================
   integration-test-greenplum:
-    name: 🟢 Greenplum 2 节点集群迁移 (1 Master + 1 Segment)
+    name: MySQL ${{ matrix.mysql_version }} → Greenplum (1 Master + 1 Segment)
     runs-on: ubuntu-latest
-    
+    strategy:
+      matrix:
+        mysql_version: ['5.7', '8.0']
+      fail-fast: false
+
     # 增加超时时间（Greenplum 启动较慢）
     timeout-minutes: 30
-    
+
     # MySQL 服务
     services:
       mysql:
-        image: mysql:${{ github.event.inputs.mysql_version || '8.0' }}
+        image: mysql:${{ matrix.mysql_version }}
         env:
           MYSQL_ROOT_PASSWORD: rootpassword
           MYSQL_DATABASE: test_db
@@ -176,6 +165,12 @@ jobs:
           echo "=== Inserting test data ==="
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
       
+          echo "=== Creating unique index in MySQL ===" 
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_unique_key_table.sql
+
+          echo "=== Creating comments partition table in MySQL ==="
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
+
       # -------------------------------------------------------------------------
       # 10. 创建 MySQL2PG 配置（MPP 模式）
       # -------------------------------------------------------------------------
@@ -321,7 +316,7 @@ jobs:
       # 14. 清理 Greenplum 集群
       # -------------------------------------------------------------------------
       - name: Cleanup Greenplum cluster
-        if: always() && (github.event.inputs.debug_mode != 'true')
+        if: always()
         run: |
           echo "=== Cleaning up Greenplum cluster ==="
           cd scripts/greenplum
