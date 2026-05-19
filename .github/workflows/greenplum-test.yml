@@ -11,7 +11,7 @@ on:
 env:
   GO_VERSION: '1.24'
   MYSQL_VERSION: '8.0'
-  GREENPLUM_IMAGE: 'andrewjw/docker-greenplum:latest'
+  GREENPLUM_IMAGE: 'lhrbest/greenplum:7.0.0' 
   GP_MASTER_CONTAINER: 'gp_master'
   GPADMIN_USER: 'gpadmin'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
