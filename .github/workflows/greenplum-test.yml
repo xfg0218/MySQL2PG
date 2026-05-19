@@ -5,25 +5,6 @@
 
 name: 📦 MySQL → Greenplum 6 迁移测试 (5.7/8.0)
 
-on:
-  push:
-    branches: [xfg0218, main]
-    paths:
-      - 'internal/converter/mpp/**'
-      - 'internal/converter/postgres/sync_tableddl.go'
-      - 'internal/converter/postgres/manager.go'
-      - 'scripts/greenplum/**'
-      - '.github/workflows/greenplum-test.yml'
-  pull_request:
-    branches: [xfg0218, main]
-    paths:
-      - 'internal/converter/mpp/**'
-      - 'internal/converter/postgres/sync_tableddl.go'
-      - 'internal/converter/postgres/manager.go'
-      - 'scripts/greenplum/**'
-      - '.github/workflows/greenplum-test.yml'
-  workflow_dispatch:
-
 env:
   GO_VERSION: '1.24'
   MYSQL_VERSION: '8.0'
