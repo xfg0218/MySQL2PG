@@ -46,7 +46,7 @@ CREATE TABLE case_03_floats (
 
 -- 创建字符类型表
 DROP TABLE IF EXISTS case_04_mb3_suffix;
-CREATE TABLE case_04_mb3_suffix (
+CREATE TABLE case_04_mb3_suffix  (
   col_var_mb3 varchar(255) CHARACTER SET utf8mb4,    -- -> VARCHAR(255)
   col_char_mb3 char(20) CHARACTER SET utf8mb4,       -- -> CHAR(10)
   col_text_mb3 text CHARACTER SET utf8mb4,           -- -> TEXT
@@ -395,7 +395,7 @@ DROP TABLE IF EXISTS case_41_parent;
 CREATE TABLE case_41_parent (
   id int PRIMARY KEY,
   name varchar(50)
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;;
 
 CREATE TABLE case_41_foreign_key (
   id int PRIMARY KEY,
@@ -404,7 +404,7 @@ CREATE TABLE case_41_foreign_key (
   FOREIGN KEY (parent_id) REFERENCES case_41_parent(id)
     ON DELETE CASCADE
     ON UPDATE SET NULL
-) ENGINE=InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 创建全文索引表
 DROP TABLE IF EXISTS case_42_fulltext;
@@ -899,7 +899,7 @@ CREATE TABLE case_92_fulltext_ngram (
   id int PRIMARY KEY,
   content text,
   FULLTEXT KEY ft_ngram (content) WITH PARSER ngram COMMENT 'Ngram parser'
-) ENGINE=InnoDB COMMENT='Fulltext with ngram parser';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Fulltext with ngram parser';
 
 -- 创建Fulltext通用解析器表
 DROP TABLE IF EXISTS case_93_fulltext_parser;
@@ -982,7 +982,7 @@ CREATE TABLE case_101_archive_engine (
   id INT AUTO_INCREMENT PRIMARY KEY,
   log_data TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=ARCHIVE COMMENT='Archive storage engine for log data';
+) DEFAULT CHARSET=utf8mb4 COMMENT='Archive storage engine for log data';
 
 -- 创建 CSV 存储引擎表
 DROP TABLE IF EXISTS case_102_csv_engine;
@@ -1032,20 +1032,20 @@ CREATE TABLE case_106_replace_test (
 -- REPLACE INTO case_106_replace_test (id, name, value) VALUES (1, 'updated', 100);
 
 -- 创建多表 DELETE 测试表
-DROP TABLE IF EXISTS case_107_multi_delete_parent;
 DROP TABLE IF EXISTS case_107_multi_delete_child;
+DROP TABLE IF EXISTS case_107_multi_delete_parent;
 
 CREATE TABLE case_107_multi_delete_parent (
   id INT PRIMARY KEY,
   name VARCHAR(50)
-) ENGINE=InnoDB COMMENT='Parent table for multi-table delete';
+) ENGINE=InnoDB CHARSET=utf8mb4  COMMENT='Parent table for multi-table delete';
 
 CREATE TABLE case_107_multi_delete_child (
   id INT PRIMARY KEY,
   parent_id INT,
   value INT,
   FOREIGN KEY (parent_id) REFERENCES case_107_multi_delete_parent(id) ON DELETE CASCADE
-) ENGINE=InnoDB COMMENT='Child table for multi-table delete';
+) ENGINE=InnoDB CHARSET=utf8mb4 COMMENT='Child table for multi-table delete';
 
 -- 示例：多表 DELETE
 -- DELETE p, c FROM case_107_multi_delete_parent p
