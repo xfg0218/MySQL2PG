@@ -48,7 +48,7 @@ CREATE TABLE case_03_floats (
 DROP TABLE IF EXISTS case_04_mb3_suffix;
 CREATE TABLE case_04_mb3_suffix (
   col_var_mb3 varchar(255) CHARACTER SET utf8mb4,    -- -> VARCHAR(255)
-  col_char_mb3 char(10) CHARACTER SET utf8mb4,       -- -> CHAR(10)
+  col_char_mb3 char(20) CHARACTER SET utf8mb4,       -- -> CHAR(10)
   col_text_mb3 text CHARACTER SET utf8mb4,           -- -> TEXT
   col_mixed_mb3 varchar(100) CHARACTER SET utf8mb4  -- -> VARCHAR(100)
 ) ENGINE=InnoDB;
