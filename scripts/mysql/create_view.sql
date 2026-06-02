@@ -573,6 +573,7 @@ FROM
     case_08_json;
 
 -- 视图29：使用MySQL 8.0的字符串聚合函数
+/**
 CREATE OR REPLACE VIEW view_case33_mysql8_string_agg AS
 SELECT 
     b.status,
@@ -585,6 +586,7 @@ JOIN
     case_02_boolean b ON i.col_tiny = b.status
 GROUP BY 
     b.status;
+**/
 
 -- 视图30：使用MySQL 8.0的数学高级函数
 CREATE OR REPLACE VIEW view_case34_mysql8_math_advance AS
@@ -705,6 +707,7 @@ WHERE
     AND avg_medium > 0;
 
 -- 视图35：使用MySQL 8.0的JSON修改函数
+/**
 CREATE OR REPLACE VIEW view_case39_mysql8_json_modify AS
 SELECT 
     data,
@@ -715,6 +718,7 @@ SELECT
     JSON_MERGE_PATCH(data, '{"status": "active", "priority": 1}') AS json_merged
 FROM 
     case_08_json;
+**/
 
 -- 视图36：使用MySQL 8.0的复杂连接和子查询
 CREATE OR REPLACE VIEW view_case40_mysql8_complex_join AS
