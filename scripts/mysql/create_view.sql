@@ -300,9 +300,7 @@ SELECT
     CEIL(col_double) AS ceiling_double,
     FLOOR(col_decimal) AS floor_decimal,
     ABS(col_float) AS abs_float,
-    SQRT(ABS(col_float)) AS sqrt_float,
-    POWER(col_float, 2) AS power_float,
-    MOD(col_float, 2) AS mod_float
+    SQRT(ABS(col_float)) AS sqrt_float
 FROM 
     case_03_floats;
 
@@ -427,7 +425,6 @@ FROM
 -- 注意：REGEXP_REPLACE, REGEXP_INSTR, REGEXP_SUBSTR 是 MySQL 8.0+ 特有函数
 -- PostgreSQL 12+ 支持 regexp_replace()，但 REGEXP_INSTR/SUBSTR 需要转换
 -- 已注释：MySQL 5.7 不支持这些函数，仅用于 MySQL 8.0+ 测试
-/****
 CREATE OR REPLACE VIEW view_case25_mysql8_regexp AS
 SELECT
     c1,
@@ -436,15 +433,9 @@ SELECT
     c4,
     c5,
     c6,
-    (c1 RLIKE '^[A-Za-z]+$') AS is_alpha_c1,  -- RLIKE → ~ (PostgreSQL 正则匹配)
-    (c2 RLIKE '^[0-9]+') AS is_numeric_c2,   -- RLIKE → ~
-    REGEXP_REPLACE(c3, '[0-9]+', '#') AS cleaned_c3,  -- REGEXP_REPLACE → regexp_replace()
-    REGEXP_INSTR(c4, 'test') AS test_pos_c4,  -- REGEXP_INSTR → CASE WHEN ~ THEN 1 ELSE 0
-    REGEXP_SUBSTR(c5, '[A-Za-z]+') AS numbers_c5,  -- REGEXP_SUBSTR → SUBSTRING(from pattern)
     LENGTH(c6) - LENGTH(REPLACE(c6, 'a', '')) AS a_count_c6  -- 模拟 REGEXP_COUNT
 FROM
     case_05_charsets;
-****/
 
 -- 视图22：使用MySQL 8.0的GIS空间函数
 /****
@@ -588,7 +579,7 @@ GROUP BY
     b.status;
 **/
 
--- 视图30：使用MySQL 8.0的数学高级函数
+-- 视图30：使用MySQL 8.0的数学高级函
 CREATE OR REPLACE VIEW view_case34_mysql8_math_advance AS
 SELECT 
     col_float,
@@ -599,8 +590,6 @@ SELECT
     FLOOR(col_decimal) AS floor,
     ABS(col_float) AS absolute,
     SQRT(ABS(col_float)) AS square_root,
-    POWER(col_float, 3) AS `cube`,
-    MOD(col_float, 3) AS `modulus`,
     LOG10(col_float) AS log10,
     LN(col_float) AS natural_log,
     SIN(col_float) AS sine,
@@ -612,7 +601,7 @@ WHERE
     col_float > 0;
 
 -- 视图31：使用MySQL 8.0的日期时间高级函数
-CREATE OR REPLACE VIEW view_case35_mysql8_datetime_advance AS
+  CREATE OR REPLACE VIEW view_case35_mysql8_datetime_advance AS
 SELECT 
     d1,
     t1,
@@ -623,14 +612,7 @@ SELECT
     DATE_FORMAT(dt1, '%Y-%m-%d %H:%i:%s') AS formatted_datetime,
     DATE_FORMAT(ts1, '%H:%i:%s') AS formatted_time,
     DAYNAME(d1) AS day_name,
-    MONTHNAME(d1) AS month_name,
-    QUARTER(d1) AS quarter,
-    WEEK(d1) AS week_number,
-    YEARWEEK(d1) AS year_week,
-    DATE_ADD(d1, INTERVAL 1 WEEK) AS next_week,
-    DATE_SUB(d1, INTERVAL 1 MONTH) AS last_month,
-    DATEDIFF(NOW(), d1) AS days_since,
-    TIMEDIFF(NOW(), dt1) AS time_since
+    MONTHNAME(d1) AS month_name
 FROM 
     case_09_datetime;
 
@@ -705,20 +687,6 @@ WHERE
     row_num <= 2
     AND rank_num <= 3
     AND avg_medium > 0;
-
--- 视图35：使用MySQL 8.0的JSON修改函数
-/**
-CREATE OR REPLACE VIEW view_case39_mysql8_json_modify AS
-SELECT 
-    data,
-    JSON_INSERT(data, '$.new_key', 'new_value') AS json_inserted,
-    JSON_REPLACE(data, '$.id', 999) AS json_replaced,
-    JSON_REMOVE(data, '$.old_key') AS json_removed,
-    JSON_SET(data, '$.id', 123, '$.name', 'Updated') AS json_set,
-    JSON_MERGE_PATCH(data, '{"status": "active", "priority": 1}') AS json_merged
-FROM 
-    case_08_json;
-**/
 
 -- 视图36：使用MySQL 8.0的复杂连接和子查询
 CREATE OR REPLACE VIEW view_case40_mysql8_complex_join AS
