@@ -352,7 +352,7 @@ func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
 		subPartExpr := strings.TrimSpace(subMatch[3])
 		subPartCount, _ := strconv.Atoi(strings.TrimSpace(subMatch[4]))
 		defSection := strings.TrimSpace(subMatch[5])
-		
+
 		// 使用新的解析函数（支持 MAXVALUE）
 		partitionDefs := parseRangePartitionDefinitions(defSection)
 		if len(partitionDefs) > 0 {
@@ -383,7 +383,7 @@ func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
 		// 表达式需要清理前后空白和换行
 		expr := strings.TrimSpace(strings.ReplaceAll(strings.TrimSpace(rangeMatch[1]), "\n", " "))
 		defSection := strings.TrimSpace(rangeMatch[2])
-		
+
 		// 解析 RANGE 分区定义（支持多行和 MAXVALUE）
 		partitionDefs := parseRangePartitionDefinitions(defSection)
 		if len(partitionDefs) > 0 {
@@ -411,13 +411,13 @@ func parsePartitionInfo(mysqlDDL string) *PartitionInfo {
 				closeParen := findMatchingParen(mysqlDDL, openParen)
 				if closeParen != -1 {
 					expr := strings.TrimSpace(mysqlDDL[openParen+1 : closeParen])
-					
+
 					// 提取分区定义部分
 					defStart := closeParen + 1
 					defEnd := strings.LastIndex(mysqlDDL, ")")
 					if defEnd > defStart {
 						defSection := mysqlDDL[defStart:defEnd]
-						
+
 						// 解析 LIST 分区定义（支持多值列表）
 						rePartitionDef := regexp.MustCompile(`(?is)PARTITION\s+"?([a-zA-Z0-9_]+)"?\s+VALUES\s+IN\s*\(([\s\S]+?)\)`)
 						defMatches := rePartitionDef.FindAllStringSubmatch(defSection, -1)
