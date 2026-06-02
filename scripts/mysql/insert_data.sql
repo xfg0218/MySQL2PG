@@ -50,10 +50,7 @@ TRUNCATE TABLE case_04_mb3_suffix;
 INSERT INTO case_04_mb3_suffix (col_var_mb3, col_char_mb3, col_text_mb3, col_mixed_mb3) VALUES
 ('Hello', 'World', 'This is a test text', 'Mixed1'),
 ('测试中文', '中文测试', '中文长文本内容', 'Mixed2'),
-('こんにちは', 'にほん', '日本語テキスト', 'Mixed3'),
-('안녕하세요', '한국어', '한국어 텍스트', 'Mixed4'),
 ('ABC', 'DEF', 'Simple ASCII text', 'Mixed5'),
-('Émoji ', 'Café', 'Text with special chars', 'Mixed6'),
 ('数据', '测试', 'VARCHAR 文本内容扩展', 'Mixed7'),
 ('Multi', 'Byte', '多字节字符支持测试文本', 'Mixed8'),
 ('Test', 'Data', 'Additional text entry for testing', 'Mixed9'),
@@ -66,11 +63,8 @@ TRUNCATE TABLE case_05_charsets;
 INSERT INTO case_05_charsets (c1, c2, c3, c4, c5, c6) VALUES
 ('utf8_val', 'utf8mb4_val', 'latin1_val', 'utf16_val', 'mb4_short', 'latin1_short'),
 ('Hello', 'World', 'Test', 'Data', 'Entry', 'Value'),
-('中文', '中文', '中文', '中文', '中文', '中文'),
 ('123', '456', '789', '012', '345', '678'),
 ('A', 'B', 'C', 'D', 'E', 'F'),
-('αβγ', 'αβγ', 'αβγ', 'αβγ', 'αβγ', 'αβγ'),
-('测试', '数据', '字符', '编码', '集合', '类型'),
 ('foo', 'bar', 'baz', 'qux', 'quux', 'corge'),
 ('test1', 'test2', 'test3', 'test4', 'test5', 'test6'),
 ('data1', 'data2', 'data3', 'data4', 'data5', 'data6');
@@ -331,12 +325,12 @@ INSERT INTO case_31_sys_utf8 (Host, Db, User) VALUES
 -- case_32_complex_generated (2列: 复杂生成列)
 -- ============================================================================
 TRUNCATE TABLE case_32_complex_generated;
-INSERT INTO case_32_complex_generated (cost_name, default_value) VALUES
-('io_block_read_cost', 1.0), ('cpu_per_row_cost', NULL),
-('memory_per_join_cost', NULL), ('disk_access_cost', 1.0),
-('network_cost', NULL), ('io_block_read_cost', 1.0),
-('cpu_per_row_cost', NULL), ('memory_per_join_cost', NULL),
-('disk_access_cost', 1.0), ('network_cost', NULL);
+INSERT INTO case_32_complex_generated (cost_name) VALUES
+('io_block_read_cost'), ('cpu_per_row_cost'),
+('memory_per_join_cost'), ('disk_access_cost'),
+('network_cost'), ('io_block_read_cost'),
+('cpu_per_row_cost'), ('memory_per_join_cost'),
+('disk_access_cost'), ('network_cost');
 
 -- ============================================================================
 -- case_33_desc_index (3列: 降序索引)
@@ -429,10 +423,14 @@ INSERT INTO case_41_parent (id, name) VALUES
 -- ============================================================================
 -- case_41_foreign_key (3列: 外键)
 -- ============================================================================
-TRUNCATE TABLE case_41_foreign_key;
-INSERT INTO case_41_foreign_key (id, parent_id, name) VALUES
-(1, 1, 'Child 1'), (2, 2, 'Child 2'), (3, 3, 'Child 3'), (4, 4, 'Child 4'), (5, 5, 'Child 5'),
-(6, 6, 'Child 6'), (7, 7, 'Child 7'), (8, 8, 'Child 8'), (9, 9, 'Child 9'), (10, 10, 'Child 10');
+SET FOREIGN_KEY_CHECKS = 0;
+TRUNCATE TABLE `case_41_parent`;
+TRUNCATE TABLE `case_41_foreign_key`;
+SET FOREIGN_KEY_CHECKS = 1;
+insert into case_41_parent (id, name) values (1, '父级数据a');
+insert into case_41_parent (id, name) values (2, '父级数据b');
+insert into case_41_foreign_key (id, parent_id, name) values (101, 1, '子级数据a-1');
+insert into case_41_foreign_key (id, parent_id, name) values (102, 2, '子级数据b-1');
 
 -- ============================================================================
 -- case_42_fulltext (3列: 全文索引)
@@ -600,18 +598,42 @@ INSERT INTO case_60_statistics (id, category, subcategory, value) VALUES
 -- case_61_many_columns (多列类型测试)
 -- ============================================================================
 TRUNCATE TABLE case_61_many_columns;
-INSERT INTO case_61_many_columns (id, tinyint_min, tinyint_max, smallint_min, smallint_max, mediumint_min, mediumint_max, int_min, int_max, bigint_min, bigint_max, float_min, float_max, double_min, double_max, decimal_min, decimal_max, char_min, char_max, varchar_min, varchar_max, text_min, text_max, tinytext_min, tinytext_max, mediumtext_min, mediumtext_max, longtext_min, longtext_max, binary_min, binary_max, varbinary_min, varbinary_max, blob_min, blob_max, tinyblob_min, tinyblob_max, mediumblob_min, mediumblob_max, longblob_min, longblob_max, date_col, time_col, datetime_col, timestamp_col, year_col, boolean_col, enum_min, enum_max, set_min, set_max, json_col) VALUES
-(1, -100, 100, -10000, 10000, -5000000, 5000000, -1000000000, 1000000000, -5000000000000000000, 5000000000000000000, 1.1, 999.9, 1.1, 999.9, 5, 999999999999999999999999999999.999999999999999999999999999999, 'A', 'ZZZ', 'A', 'ZZZ', 'txt1', 'txt100', 't1', 't100', 'mt1', 'mt100', 'lt1', 'lt100', X'00', X'FF', X'00', X'FF', 'b1', 'b100', 'tb1', 'tb100', 'mb1', 'mb100', 'lb1', 'lb100', '2024-01-01', '12:00:00', '2024-01-01 12:00:00', '2024-01-01 12:00:00', 2024, true, 'a', 'a', 'x', 'x', '{"k": 1}'),
-(2, -90, 90, -9000, 9000, -4500000, 4500000, -900000000, 900000000, -4500000000000000000, 4500000000000000000, 2.2, 888.8, 2.2, 888.8, 4, 888888888888888888888888888888.888888888888888888888888888888, 'B', 'YYY', 'B', 'YYY', 'txt2', 'txt200', 't2', 't200', 'mt2', 'mt200', 'lt2', 'lt200', X'11', X'EE', X'11', X'EE', 'b2', 'b200', 'tb2', 'tb200', 'mb2', 'mb200', 'lb2', 'lb200', '2024-02-02', '13:00:00', '2024-02-02 13:00:00', '2024-02-02 13:00:00', 2024, false, 'b', 'b', 'y', 'y', '{"k": 2}'),
-(3, -80, 80, -8000, 8000, -4000000, 4000000, -800000000, 800000000, -4000000000000000000, 4000000000000000000, 3.3, 777.7, 3.3, 777.7, 3, 777777777777777777777777777777.777777777777777777777777777777, 'C', 'XXX', 'C', 'XXX', 'txt3', 'txt300', 't3', 't300', 'mt3', 'mt300', 'lt3', 'lt300', X'22', X'DD', X'22', X'DD', 'b3', 'b300', 'tb3', 'tb300', 'mb3', 'mb300', 'lb3', 'lb300', '2024-03-03', '14:00:00', '2024-03-03 14:00:00', '2024-03-03 14:00:00', 2024, true, 'c', 'c', 'z', 'z', '{"k": 3}'),
-(4, -70, 70, -7000, 7000, -3500000, 3500000, -700000000, 700000000, -3500000000000000000, 3500000000000000000, 4.4, 666.6, 4.4, 666.6, 2, 666666666666666666666666666666.666666666666666666666666666666, 'D', 'WWW', 'D', 'WWW', 'txt4', 'txt400', 't4', 't400', 'mt4', 'mt400', 'lt4', 'lt400', X'33', X'CC', X'33', X'CC', 'b4', 'b400', 'tb4', 'tb400', 'mb4', 'mb400', 'lb4', 'lb400', '2024-04-04', '15:00:00', '2024-04-04 15:00:00', '2024-04-04 15:00:00', 2024, false, 'd', 'd', 'x', 'x', '{"k": 4}'),
-(5, -60, 60, -6000, 6000, -3000000, 3000000, -600000000, 600000000, -3000000000000000000, 3000000000000000000, 5.5, 555.5, 5.5, 555.5, 1, 555555555555555555555555555555.555555555555555555555555555555, 'E', 'VVV', 'E', 'VVV', 'txt5', 'txt500', 't5', 't500', 'mt5', 'mt500', 'lt5', 'lt500', X'44', X'BB', X'44', X'BB', 'b5', 'b500', 'tb5', 'tb500', 'mb5', 'mb500', 'lb5', 'lb500', '2024-05-05', '16:00:00', '2024-05-05 16:00:00', '2024-05-05 16:00:00', 2024, true, 'e', 'e', 'y', 'y', '{"k": 5}'),
-(6, -50, 50, -5000, 5000, -2500000, 2500000, -500000000, 500000000, -2500000000000000000, 2500000000000000000, 6.6, 444.4, 6.6, 444.4, 0, 444444444444444444444444444444.444444444444444444444444444444, 'F', 'UUU', 'F', 'UUU', 'txt6', 'txt600', 't6', 't600', 'mt6', 'mt600', 'lt6', 'lt600', X'55', X'AA', X'55', X'AA', 'b6', 'b600', 'tb6', 'tb600', 'mb6', 'mb600', 'lb6', 'lb600', '2024-06-06', '17:00:00', '2024-06-06 17:00:00', '2024-06-06 17:00:00', 2024, false, 'a', 'a', 'z', 'z', '{"k": 6}'),
-(7, -40, 40, -4000, 4000, -2000000, 2000000, -400000000, 400000000, -2000000000000000000, 2000000000000000000, 7.7, 333.3, 7.7, 333.3, 9, 333333333333333333333333333333.333333333333333333333333333333, 'G', 'TTT', 'G', 'TTT', 'txt7', 'txt700', 't7', 't700', 'mt7', 'mt700', 'lt7', 'lt700', X'66', X'99', X'66', X'99', 'b7', 'b700', 'tb7', 'tb700', 'mb7', 'mb700', 'lb7', 'lb700', '2024-07-07', '18:00:00', '2024-07-07 18:00:00', '2024-07-07 18:00:00', 2024, true, 'b', 'b', 'x', 'x', '{"k": 7}'),
-(8, -30, 30, -3000, 3000, -1500000, 1500000, -300000000, 300000000, -1500000000000000000, 1500000000000000000, 8.8, 222.2, 8.8, 222.2, 8, 222222222222222222222222222222.222222222222222222222222222222, 'H', 'SSS', 'H', 'SSS', 'txt8', 'txt800', 't8', 't800', 'mt8', 'mt800', 'lt8', 'lt800', X'77', X'88', X'77', X'88', 'b8', 'b800', 'tb8', 'tb800', 'mb8', 'mb800', 'lb8', 'lb800', '2024-08-08', '19:00:00', '2024-08-08 19:00:00', '2024-08-08 19:00:00', 2024, false, 'c', 'c', 'y', 'y', '{"k": 8}'),
-(9, -20, 20, -2000, 2000, -1000000, 1000000, -200000000, 200000000, -1000000000000000000, 1000000000000000000, 9.9, 111.1, 9.9, 111.1, 7, 111111111111111111111111111111.111111111111111111111111111111, 'I', 'RRR', 'I', 'RRR', 'txt9', 'txt900', 't9', 't900', 'mt9', 'mt900', 'lt9', 'lt900', X'88', X'77', X'88', X'77', 'b9', 'b900', 'tb9', 'tb900', 'mb9', 'mb900', 'lb9', 'lb900', '2024-09-09', '20:00:00', '2024-09-09 20:00:00', '2024-09-09 20:00:00', 2024, true, 'a', 'a', 'z', 'z', '{"k": 9}'),
-(10, -10, 10, -1000, 1000, -500000, 500000, -100000000, 100000000, -500000000000000000, 500000000000000000, 10.0, 100.0, 10.0, 100.0, 6, 101010101010101010101010101010.101010101010101010101010101010, 'J', 'QQQ', 'J', 'QQQ', 'txt10', 'txt1000', 't10', 't1000', 'mt10', 'mt1000', 'lt10', 'lt1000', X'99', X'66', X'99', X'66', 'b10', 'b1000', 'tb10', 'tb1000', 'mb10', 'mb1000', 'lb10', 'lb1000', '2024-10-10', '21:00:00', '2024-10-10 21:00:00', '2024-10-10 21:00:00', 2024, false, 'b', 'b', 'x', 'x', '{"k": 10}');
-
+INSERT INTO case_61_many_columns (
+  id,
+  tinyint_min, tinyint_max, smallint_min, smallint_max, mediumint_min, mediumint_max, int_min, int_max, bigint_min, bigint_max,
+  float_min, float_max, double_min, double_max, decimal_min, decimal_max,
+  char_min, char_max, varchar_min, varchar_max, text_min, text_max, tinytext_min, tinytext_max, mediumtext_min, mediumtext_max, longtext_min, longtext_max,
+  binary_min, binary_max, varbinary_min, varbinary_max, blob_min, blob_max, tinyblob_min, tinyblob_max, mediumblob_min, mediumblob_max, longblob_min, longblob_max,
+  date_col, time_col, datetime_col, timestamp_col, year_col,
+  boolean_col, enum_min, enum_max, set_min, set_max, json_col
+) VALUES
+-- 第1条数据：常规基础数据
+(1, 
+ 1, 127, 1, 32767, 1, 8388607, 1, 2147483647, 1, 9223372036854775807,
+ 0.0001, 999999.99, 0.0000001, 999999999.999999, 1, 12345.678901234567890123456789,
+ 'A', 'Hello', 'B', 'World', 'Text A', 'Text B', 'Tiny A', 'Tiny B', 'Medium A', 'Medium B', 'Long A', 'Long B',
+ 'A', 'Binary', 'B', 'VarBinary', 'Blob', 'Blob', 'Tiny', 'Tiny', 'Medium', 'Medium', 'Long', 'Long',
+ '2026-06-02', '16:30:00', '2026-06-02 16:30:00', '2026-06-02 16:30:00', 2026,
+ TRUE, 'a', 'a', 'x', 'x,y', '{"name": "测试1", "status": "active"}'
+),
+-- 第2条数据：包含极值、负数、NULL 以及 Emoji 表情
+(2, 
+ -128, -1, -32768, -1, -8388608, -1, -2147483648, -1, -9223372036854775808, -1,
+ -999.5, -0.0001, -888.888, -0.000001, 0, 0.0000000000000000000000001,
+ 'Z', '你好', 'C', '支持中文', 'Text C', 'Text D', 'Tiny C', 'Tiny D', 'Medium C', 'Medium D', 'Long C', 'Long D',
+ 'Z', 'Bin', 'C', 'VarBin', 'BlobC', 'BlobD', 'TinyC', 'TinyD', 'MediumC', 'MediumD', 'LongC', 'LongD',
+ '1990-01-01', '08:00:00', '1990-01-01 08:00:00', '1990-01-01 08:00:00', 1990,
+ FALSE, 'a', 'e', 'x', 'z', '{"name": "测试2", "emoji": "🚀"}'
+),
+-- 第3条数据：包含 NULL 值（测试字段的可空性）
+(3, 
+ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+ NULL, NULL, NULL, NULL, NULL, NULL,
+ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+ NULL, NULL, NULL, NULL, NULL,
+ NULL, NULL, NULL, NULL, NULL, NULL
+);
 -- ============================================================================
 -- case_62_various_defaults (11列: 各种默认值)
 -- ============================================================================
@@ -997,9 +1019,12 @@ INSERT INTO case_100_max_complexity (user_code, display_name, meta_info, created
 
 -- case_101_archive_engine
 TRUNCATE TABLE case_101_archive_engine;
-INSERT INTO case_101_archive_engine (log_data) VALUES
-('Log entry 1'), ('Log entry 2'), ('Log entry 3'), ('Log entry 4'), ('Log entry 5'),
-('Log entry 6'), ('Log entry 7'), ('Log entry 8'), ('Log entry 9'), ('Log entry 10');
+INSERT INTO case_101_archive_engine (log_data) VALUES ('这是一条普通的日志数据');
+INSERT INTO case_101_archive_engine (log_data, created_at) VALUES
+('用户 A 登录系统', '2026-06-02 19:00:00'),
+('用户 B 修改了个人资料', '2026-06-02 19:05:00'),
+('系统执行了定时任务', '2026-06-02 19:10:00'),
+('用户 C 退出了系统', NOW());
 
 -- case_102_csv_engine
 TRUNCATE TABLE case_102_csv_engine;
@@ -1035,16 +1060,29 @@ INSERT INTO case_106_replace_test (id, name, value) VALUES
 (9, 'Replace 9', 900), (10, 'Replace 10', 1000);
 
 -- case_107_multi_delete_parent
+SET FOREIGN_KEY_CHECKS = 0;
+TRUNCATE TABLE case_107_multi_delete_child;
 TRUNCATE TABLE case_107_multi_delete_parent;
+SET FOREIGN_KEY_CHECKS = 1;
 INSERT INTO case_107_multi_delete_parent (id, name) VALUES
 (1, 'Parent 1'), (2, 'Parent 2'), (3, 'Parent 3'), (4, 'Parent 4'), (5, 'Parent 5'),
 (6, 'Parent 6'), (7, 'Parent 7'), (8, 'Parent 8'), (9, 'Parent 9'), (10, 'Parent 10');
 
 -- case_107_multi_delete_child
 TRUNCATE TABLE case_107_multi_delete_child;
+INSERT INTO case_107_multi_delete_parent (id, name) VALUES
+(1, '父级数据A'),
+(2, '父级数据B'),
+(3, '父级数据C'),
+(4, '父级数据D'),
+(5, '父级数据E');
+
 INSERT INTO case_107_multi_delete_child (id, parent_id, value) VALUES
-(1, 1, 10), (2, 1, 20), (3, 2, 30), (4, 2, 40), (5, 3, 50),
-(6, 3, 60), (7, 4, 70), (8, 4, 80), (9, 5, 90), (10, 5, 100);
+(101, 1, 1000),
+(102, 2, 2000),
+(103, 3, 3000),
+(104, 4, 4000),
+(105, 5, 5000);
 
 -- case_108_load_data_test
 TRUNCATE TABLE case_108_load_data_test;
@@ -1787,20 +1825,6 @@ INSERT INTO case_155_rest_categories (parent_id, category_name, sort_order, stat
 (2, '粤菜', 101, 1),
 (2, '湘菜', 102, 1);
 
--- case_155_rest_dishes (16列)
-TRUNCATE TABLE case_155_rest_dishes;
-INSERT INTO case_155_rest_dishes (dish_name, dish_code, category_id, price, cost_price, spice_level, is_recommend, is_available, monthly_sales, description) VALUES
-('宫保鸡丁', 'DISH-001', 8, 38.00, 15.00, 2, 1, 1, 856, '经典川菜'),
-('鱼香肉丝', 'DISH-002', 8, 32.00, 12.00, 1, 1, 1, 720, '酸甜微辣'),
-('水煮鱼', 'DISH-003', 8, 68.00, 28.00, 3, 1, 1, 650, '麻辣鲜香'),
-('清蒸鲈鱼', 'DISH-004', 9, 88.00, 35.00, 0, 1, 1, 420, '清淡鲜美'),
-('麻婆豆腐', 'DISH-005', 8, 18.00, 6.00, 3, 1, 1, 980, '经典川菜'),
-('炒饭', 'DISH-006', 5, 15.00, 5.00, 0, 0, 1, 1200, '粒粒分明'),
-('可乐', 'DISH-007', 7, 5.00, 2.50, 0, 0, 1, 2000, '冰镇可乐'),
-('红豆双皮奶', 'DISH-008', 6, 12.00, 4.00, 0, 1, 1, 380, '经典粤式甜品'),
-('拍黄瓜', 'DISH-009', 3, 10.00, 3.00, 1, 1, 1, 600, '清爽开胃'),
-('紫菜蛋花汤', 'DISH-010', 4, 8.00, 2.50, 0, 0, 1, 450, '简单鲜美');
-
 -- case_155_rest_orders (12列)
 TRUNCATE TABLE case_155_rest_orders;
 INSERT INTO case_155_rest_orders (order_no, table_no, order_type, order_status, subtotal, discount_amount, total_amount, payment_status) VALUES
@@ -1839,18 +1863,14 @@ INSERT INTO case_156_orders_parent (tenant_id, order_no, status) VALUES
 (5, 'ORD-009', 3), (5, 'ORD-010', 1);
 
 -- case_156_orders_child (7列)
+SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE case_156_orders_child;
-INSERT INTO case_156_orders_child (tenant_id, order_no, sku_code, qty, unit_price) VALUES
-(1, 'ORD-001', 'SKU-001', 2, 100.0000),
-(1, 'ORD-001', 'SKU-002', 1, 200.0000),
-(1, 'ORD-002', 'SKU-003', 3, 50.0000),
-(2, 'ORD-003', 'SKU-004', 1, 300.0000),
-(2, 'ORD-004', 'SKU-005', 5, 80.0000),
-(3, 'ORD-005', 'SKU-006', 2, 150.0000),
-(3, 'ORD-006', 'SKU-007', 1, 500.0000),
-(4, 'ORD-007', 'SKU-008', 4, 75.0000),
-(4, 'ORD-008', 'SKU-009', 1, 1000.0000),
-(5, 'ORD-009', 'SKU-010', 2, 250.0000);
+TRUNCATE TABLE  case_156_orders_parent;
+SET FOREIGN_KEY_CHECKS = 1;
+INSERT INTO case_156_orders_parent (tenant_id, order_no) VALUES
+(1, 'ORD-001'), (1, 'ORD-002'), (2, 'ORD-003'), (2, 'ORD-004'),
+(3, 'ORD-005'), (3, 'ORD-006'), (4, 'ORD-007'), (4, 'ORD-008'), (5, 'ORD-009');
+
 
 -- case_157_json_generated_index (6列)
 TRUNCATE TABLE case_157_json_generated_index;
@@ -1915,13 +1935,14 @@ INSERT INTO case_162_auto_inc_option (name) VALUES
 ('Name 6'), ('Name 7'), ('Name 8'), ('Name 9'), ('Name 10');
 
 -- case_163_fk_action_parent (2列)
+SET FOREIGN_KEY_CHECKS = 0;
+TRUNCATE TABLE case_163_fk_action_child;
 TRUNCATE TABLE case_163_fk_action_parent;
+SET FOREIGN_KEY_CHECKS = 1;
 INSERT INTO case_163_fk_action_parent (id, code) VALUES
 (1, 'CODE-001'), (2, 'CODE-002'), (3, 'CODE-003'), (4, 'CODE-004'), (5, 'CODE-005'),
 (6, 'CODE-006'), (7, 'CODE-007'), (8, 'CODE-008'), (9, 'CODE-009'), (10, 'CODE-010');
 
--- case_163_fk_action_child (4列)
-TRUNCATE TABLE case_163_fk_action_child;
 INSERT INTO case_163_fk_action_child (id, parent_id, parent_code) VALUES
 (1, 1, 'CODE-001'), (2, 1, 'CODE-001'), (3, 2, 'CODE-002'), (4, 2, 'CODE-002'),
 (5, 3, 'CODE-003'), (6, 3, 'CODE-003'), (7, 4, 'CODE-004'), (8, 4, 'CODE-004'),

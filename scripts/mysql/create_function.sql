@@ -3,106 +3,106 @@
 -- 函数总数：110
 --
 -- 函数特点列表：
--- func_001_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_002_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_003_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_004_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_005_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_006_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_007_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_008_complex_analysis: 涉及 10 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_009_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_010_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_011_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_012_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_013_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_014_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_015_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_016_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_017_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_018_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_019_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_020_complex_analysis: 涉及 10 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_021_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_022_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_023_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_024_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_025_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_026_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_027_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_028_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_029_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_030_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_031_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_032_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_033_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_034_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_035_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_036_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_037_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_038_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_039_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_040_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_041_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_042_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_043_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_044_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_045_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_046_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_047_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_048_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_049_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_050_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_051_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_052_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_053_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_054_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_055_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_056_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_057_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_058_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_059_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_060_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_061_complex_analysis: 涉及 10 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_062_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_063_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_064_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_065_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_066_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_067_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_068_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_069_complex_analysis: 涉及 10 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_070_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_071_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_072_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_073_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_074_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_075_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_076_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_077_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_078_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_079_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_080_complex_analysis: 涉及 6 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_081_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_082_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_083_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_084_complex_analysis: 涉及 10 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_085_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_086_complex_analysis: 涉及 10 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_087_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_088_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_089_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_090_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_091_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_092_complex_analysis: 涉及 10 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_093_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_094_complex_analysis: 涉及 4 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_095_complex_analysis: 涉及 10 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_096_complex_analysis: 涉及 3 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_097_complex_analysis: 涉及 8 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_098_complex_analysis: 涉及 5 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_099_complex_analysis: 涉及 7 个表, 特性: 游标+循环+CASE语句+条件判断
--- func_100_complex_analysis: 涉及 9 个表, 特性: 游标+循环+CASE语句+条件判断
+-- func_001_complex_analysis: 涉及 分区表+枚举类型, 特性: 右连接+左连接混合查询
+-- func_002_complex_analysis: 涉及 零填充+排序规则, 特性: 多表全连接分析
+-- func_003_complex_analysis: 涉及 位类型+外键约束, 特性: DESC索引+枚举字符集
+-- func_004_complex_analysis: 涉及 JSON数组+UTF8MB4, 特性: 几何类型+视图模拟
+-- func_005_complex_analysis: 涉及 行格式+驼峰命名, 特性: 分区线性哈希
+-- func_006_complex_analysis: 涉及 默认值变体+隐式索引, 特性: 分区范围列
+-- func_007_complex_analysis: 涉及 分区键+函数索引, 特性: 父子表关联
+-- func_008_complex_analysis: 涉及 复制表+全文检索, 特性: 宽表+JSON字段
+-- func_009_complex_analysis: 涉及 无符号整数+时区, 特性: 生成列+唯一约束
+-- func_010_complex_analysis: 涉及 索引类型+空间索引, 特性: 子分区处理
+-- func_011_complex_analysis: 涉及 字符集+排序规则, 特性: 多表级联查询
+-- func_012_complex_analysis: 涉及 虚拟列+生成列, 特性: 条件聚合计算
+-- func_013_complex_analysis: 涉及 分区列表+外键, 特性: 字符集转换
+-- func_014_complex_analysis: 涉及 二进制类型+几何类型, 特性: 精度计算
+-- func_015_complex_analysis: 涉及 年份转换+分区, 特性: 数据迁移验证
+-- func_016_complex_analysis: 涉及 JSON索引+视图, 特性: 数据同步检查
+-- func_017_complex_analysis: 涉及 分区哈希+几何类型, 特性: 空间查询转换
+-- func_018_complex_analysis: 涉及 全文解析器+枚举, 特性: 全文检索迁移
+-- func_019_complex_analysis: 涉及 字符集+排序规则, 特性: 字符串比较
+-- func_020_complex_analysis: 涉及 宽表+JSON, 特性: 大数据量处理
+-- func_021_complex_analysis: 涉及 自增主键+默认值, 特性: 主键策略转换
+-- func_022_complex_analysis: 涉及 布尔类型+位类型, 特性: 类型映射处理
+-- func_023_complex_analysis: 涉及 分区+外键, 特性: 约束迁移验证
+-- func_024_complex_analysis: 涉及 字符集+排序规则, 特性: 编码兼容性
+-- func_025_complex_analysis: 涉及 时间戳+时区, 特性: 时区转换处理
+-- func_026_complex_analysis: 涉及 JSON字段+生成列, 特性: JSON函数转换
+-- func_027_complex_analysis: 涉及 几何类型+SRID, 特性: 空间数据迁移
+-- func_028_complex_analysis: 涉及 分区类型+索引, 特性: 分区策略转换
+-- func_029_complex_analysis: 涉及 全文索引+解析器, 特性: 全文检索适配
+-- func_030_complex_analysis: 涉及 枚举+集合类型, 特性: 枚举值映射
+-- func_031_complex_analysis: 涉及 无符号整数+位运算, 特性: 整数类型转换
+-- func_032_complex_analysis: 涉及 字符集+排序规则, 特性: 排序规则适配
+-- func_033_complex_analysis: 涉及 DESC索引+主键, 特性: 索引排序转换
+-- func_034_complex_analysis: 涉及 高精度数值+复制表, 特性: 精度保留转换
+-- func_035_complex_analysis: 涉及 默认值+自增, 特性: 默认值策略迁移
+-- func_036_complex_analysis: 涉及 父子表+外键, 特性: 级联删除处理
+-- func_037_complex_analysis: 涉及 JSON索引+数组, 特性: JSON路径表达式
+-- func_038_complex_analysis: 涉及 分区+子分区, 特性: 多级分区转换
+-- func_039_complex_analysis: 涉及 虚拟列+存储列, 特性: 生成列策略
+-- func_040_complex_analysis: 涉及 字符集+排序规则, 特性: 多语言支持
+-- func_041_complex_analysis: 涉及 几何类型+子类型, 特性: 几何函数适配
+-- func_042_complex_analysis: 涉及 MyISAM+InnoDB, 特性: 存储引擎兼容
+-- func_043_complex_analysis: 涉及 索引类型+B树, 特性: 索引结构转换
+-- func_044_complex_analysis: 涉及 统计信息+索引, 特性: 查询优化统计
+-- func_045_complex_analysis: 涉及 列权限+视图, 特性: 权限迁移验证
+-- func_046_complex_analysis: 涉及 字符集+排序规则, 特性: 排序兼容性
+-- func_047_complex_analysis: 涉及 零填充+无符号, 特性: 数值类型适配
+-- func_048_complex_analysis: 涉及 分区+线性哈希, 特性: 哈希分区转换
+-- func_049_complex_analysis: 涉及 全文索引+JSON, 特性: 多类型索引迁移
+-- func_050_complex_analysis: 涉及 虚拟列+默认值, 特性: MySQL8特性适配
+-- func_051_complex_analysis: 涉及 函数索引+JSON, 特性: 函数索引迁移
+-- func_052_complex_analysis: 涉及 行格式+压缩, 特性: 存储格式转换
+-- func_053_complex_analysis: 涉及 延迟约束+外键, 特性: 约束验证策略
+-- func_054_complex_analysis: 涉及 序列默认+自增, 特性: 序列生成适配
+-- func_055_complex_analysis: 涉及 更新时间戳+触发器, 特性: 时间戳自动更新
+-- func_056_complex_analysis: 涉及 不可见列+表达式, 特性: MySQL8新特性
+-- func_057_complex_analysis: 涉及 几何类型+SRID, 特性: 空间参考系统转换
+-- func_058_complex_analysis: 涉及 子分区+哈希, 特性: 复合分区策略
+-- func_059_complex_analysis: 涉及 高精度数值+decimal, 特性: 精度计算
+-- func_060_complex_analysis: 涉及 JSON生成列+索引, 特性: JSON索引转换
+-- func_061_complex_analysis: 涉及 宽表+多列索引, 特性: 宽表迁移适配
+-- func_062_complex_analysis: 涉及 分区键+表达式, 特性: 分区表达式转换
+-- func_063_complex_analysis: 涉及 虚拟列+索引, 特性: 虚拟列索引迁移
+-- func_064_complex_analysis: 涉及 几何子类型+几何, 特性: 几何类型映射
+-- func_065_complex_analysis: 涉及 视图模拟+表, 特性: 视图迁移策略
+-- func_066_complex_analysis: 涉及 UTF8MB4+排序规则900, 特性: Unicode支持
+-- func_067_complex_analysis: 涉及 全文解析器+插件, 特性: 全文检索扩展
+-- func_068_complex_analysis: 涉及 枚举字符集+排序, 特性: 枚举排序规则
+-- func_069_complex_analysis: 涉及 分区+函数索引, 特性: 分区索引优化
+-- func_070_complex_analysis: 涉及 复制表+LIKE, 特性: 表复制策略
+-- func_071_complex_analysis: 涉及 文本主键+长文本, 特性: 文本索引适配
+-- func_072_complex_analysis: 涉及 高精度数值+scale, 特性: 数值精度转换
+-- func_073_complex_analysis: 涉及 无符号整数+范围, 特性: 整数范围处理
+-- func_074_complex_analysis: 涉及 年份类型+转换, 特性: YEAR类型适配
+-- func_075_complex_analysis: 涉及 零填充变体+显示, 特性: 零填充处理
+-- func_076_complex_analysis: 涉及 字符集+MB3后缀, 特性: 字符集兼容性
+-- func_077_complex_analysis: 涉及 虚拟生成列+计算, 特性: 生成列表达式
+-- func_078_complex_analysis: 涉及 外键约束+级联, 特性: 外键级联处理
+-- func_079_complex_analysis: 涉及 字符集排序+比较, 特性: 排序规则转换
+-- func_080_complex_analysis: 涉及 更新时间戳+默认, 特性: ON UPDATE处理
+-- func_081_complex_analysis: 涉及 序列默认+nextval, 特性: 序列自动生成
+-- func_082_complex_analysis: 涉及 几何SRID+空间, 特性: SRID转换适配
+-- func_083_complex_analysis: 涉及 分区范围列+表达式, 特性: 范围分区转换
+-- func_084_complex_analysis: 涉及 宽表+多字段, 特性: 宽表字段处理
+-- func_085_complex_analysis: 涉及 分区键+函数, 特性: 函数分区适配
+-- func_086_complex_analysis: 涉及 线性哈希分区+分布, 特性: 哈希分布策略
+-- func_087_complex_analysis: 涉及 JSON数组索引+查询, 特性: JSON数组查询
+-- func_088_complex_analysis: 涉及 UTF8MB4_0900+排序, 特性: Unicode排序
+-- func_089_complex_analysis: 涉及 几何类型+转换, 特性: 几何函数迁移
+-- func_090_complex_analysis: 涉及 全文解析器+分词, 特性: 分词策略适配
+-- func_091_complex_analysis: 涉及 统计信息+分析, 特性: 统计信息收集
+-- func_092_complex_analysis: 涉及 索引类型+算法, 特性: 索引算法转换
+-- func_093_complex_analysis: 涉及 MyISAM引擎+转换, 特性: 引擎迁移
+-- func_094_complex_analysis: 涉及 列权限+授权, 特性: 权限转换策略
+-- func_095_complex_analysis: 涉及 驼峰命名+下划线, 特性: 命名规范转换
+-- func_096_complex_analysis: 涉及 默认值+表达式, 特性: 默认值表达式
+-- func_097_complex_analysis: 涉及 无符号类型+转换, 特性: 符号处理
+-- func_098_complex_analysis: 涉及 布尔类型+tinyint, 特性: 布尔映射
+-- func_099_complex_analysis: 涉及 JSON字段+函数, 特性: JSON函数转换
+-- func_100_complex_analysis: 涉及 位类型+运算, 特性: 位运算适配
 -- func_101_case_156_order_amount: 涉及 2 个表, 特性: 复合主外键聚合+空值处理
 -- func_102_case_157_extract_bizid: 涉及 JSON 字段, 特性: json_extract+json_unquote
 -- func_103_case_158_period_key: 涉及 时间类型, 特性: datetime(6)+date_format

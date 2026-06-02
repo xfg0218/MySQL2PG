@@ -1,10 +1,10 @@
-name: Go
+name: MySQL → PostgreSQL workflow
 
 on:
   push:
-    branches: [ "main" ]
-    tags-ignore:
-      - '*'  # 忽略标签推送，避免与 release.yml 重复触发
+    # branches: [ "main" ]
+    # tags-ignore:
+    #  - '*'  # 忽略标签推送，避免与 release.yml 重复触发
   pull_request:
     branches: [ "main" ]
 
@@ -134,10 +134,12 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
 
       - name: Create test config
         run: |
@@ -271,10 +273,13 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
+
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'
@@ -402,10 +407,13 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
+
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'
@@ -533,10 +541,12 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'
@@ -664,10 +674,12 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'
@@ -795,10 +807,12 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'
@@ -926,10 +940,12 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'
@@ -1057,10 +1073,12 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'
@@ -1188,10 +1206,12 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'
@@ -1319,10 +1339,12 @@ jobs:
           MYSQL_PWD: rootpassword
         run: |
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_table.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/insert_data.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_index.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_view.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_function.sql
           mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_user.sql
+          mysql -h 127.0.0.1 -u root test_db < scripts/mysql/create_comments_partition_table.sql
       - name: Create test config
         run: |
           cat > config.yml << 'EOF'

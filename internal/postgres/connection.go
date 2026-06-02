@@ -20,12 +20,12 @@ import (
 
 // PostgreSQLVersionInfo PostgreSQL 版本信息
 type PostgreSQLVersionInfo struct {
-	Major               int  // 主版本号
-	Minor               int  // 次版本号
+	Major               int    // 主版本号
+	Minor               int    // 次版本号
 	Full                string // 完整版本字符串
-	SupportsJsonbPath   bool // PG 14+ 支持 JSONB 路径查询
-	SupportsAdvancedAgg bool // PG 13+ 支持高级聚合
-	SupportsSqlJson     bool // PG 16+ 支持 SQL/JSON 标准
+	SupportsJsonbPath   bool   // PG 14+ 支持 JSONB 路径查询
+	SupportsAdvancedAgg bool   // PG 13+ 支持高级聚合
+	SupportsSqlJson     bool   // PG 16+ 支持 SQL/JSON 标准
 }
 
 // IsVersionGreaterOrEqual 检查当前版本是否大于等于指定版本
@@ -218,7 +218,7 @@ func NewConnection(config *config.PostgreSQLConfig) (*Connection, error) {
 			connStr += " password_encryption=md5"
 		case "scram-sha-256":
 			connStr += " password_encryption=scram-sha-256"
-		// "auto" 或不设置时使用 PostgreSQL 默认行为
+			// "auto" 或不设置时使用 PostgreSQL 默认行为
 		}
 	}
 
@@ -739,6 +739,7 @@ func convertBatchColumnValue(columnName string, value interface{}, columnTypes m
 }
 
 // BatchInsertDataWithTransactionAndGetLastValue 在事务中批量插入数据并获取最后一个主键值
+// 返回值：(总行数, 单主键最后值, 复合主键最后值列表, 错误)
 func resolveCopyColumnsAndPrimaryKey(columns []string, primaryKey string, lowercaseColumns bool) ([]string, string) {
 	copyColumns := make([]string, len(columns))
 	for i, col := range columns {
@@ -765,6 +766,20 @@ func resolveCopyColumnsAndPrimaryKey(columns []string, primaryKey string, lowerc
 }
 
 func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKey string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, error) {
+	totalRows, lastValue, compositeLastValues, err := c.BatchInsertDataWithCompositeKeys(tx, tableName, columns, columnTypes, batchSize, []string{primaryKey}, lowercaseColumns, rows)
+	if err != nil {
+		return 0, nil, err
+	}
+	// 返回复合主键的第一个值（向后兼容）
+	if len(compositeLastValues) > 0 {
+		return totalRows, compositeLastValues[0], nil
+	}
+	return totalRows, lastValue, nil
+}
+
+// BatchInsertDataWithCompositeKeys 批量插入数据并支持复合主键
+// 返回值：(总行数, 单主键最后值, 复合主键最后值列表, 错误)
+func (c *Connection) BatchInsertDataWithCompositeKeys(tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKeys []string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, []interface{}, error) {
 	ctx := context.Background()
 
 	// 准备批量插入
@@ -777,17 +792,45 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 		effectiveBatchSize = 10000 // 确保至少有一个合理的默认值
 	}
 
-	copyColumns, resolvedPrimaryKey := resolveCopyColumnsAndPrimaryKey(columns, primaryKey, lowercaseColumns)
+	// 处理主键列名（支持单个或多个主键）
+	copyColumns := make([]string, len(columns))
+	resolvedPrimaryKeys := make([]string, 0, len(primaryKeys))
 
-	// 跟踪最后一个主键值
-	var lastValue interface{}
-	var primaryKeyIndex int = -1
+	for i, col := range columns {
+		if lowercaseColumns {
+			copyColumns[i] = strings.ToLower(col)
+		} else {
+			copyColumns[i] = col
+		}
+	}
 
-	// 找到主键列的索引
-	if resolvedPrimaryKey != "" {
+	// 解析所有主键列名
+	for _, primaryKey := range primaryKeys {
+		if primaryKey == "" {
+			continue
+		}
+		for i, col := range columns {
+			if strings.EqualFold(col, primaryKey) {
+				resolvedPrimaryKeys = append(resolvedPrimaryKeys, copyColumns[i])
+				break
+			}
+		}
+		// fallback: 如果没找到，使用转换后的主键名
+		if len(resolvedPrimaryKeys) < len(primaryKeys) {
+			resolvedPK := primaryKey
+			if lowercaseColumns {
+				resolvedPK = strings.ToLower(primaryKey)
+			}
+			resolvedPrimaryKeys = append(resolvedPrimaryKeys, resolvedPK)
+		}
+	}
+
+	// 找到所有主键列的索引
+	primaryKeyIndexes := make([]int, 0, len(resolvedPrimaryKeys))
+	for _, resolvedPK := range resolvedPrimaryKeys {
 		for i, col := range copyColumns {
-			if col == resolvedPrimaryKey {
-				primaryKeyIndex = i
+			if col == resolvedPK {
+				primaryKeyIndexes = append(primaryKeyIndexes, i)
 				break
 			}
 		}
@@ -801,16 +844,27 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 	// copyRows 存储行数据指针，每个元素从 sync.Pool 复用
 	copyRows := make([][]interface{}, 0, effectiveBatchSize)
 
+	// 跟踪最后一个主键值（支持复合主键）
+	var lastValue interface{}
+	var compositeLastValues []interface{}
+
 	// 处理数据行
 	for rows.Next() {
 		// 扫描行数据 — 使用类型化指针，避免每次 Scan 分配堆对象
 		if err := rows.Scan(scanPtrs...); err != nil {
-			return 0, nil, fmt.Errorf("扫描行数据失败：%w", err)
+			return 0, nil, nil, fmt.Errorf("扫描行数据失败：%w", err)
 		}
 
-		// 跟踪最后一个主键值
-		if primaryKeyIndex != -1 {
-			lastValue = getTypedValue(&typedDests[primaryKeyIndex])
+		// 跟踪最后一个主键值（支持复合主键）
+		if len(primaryKeyIndexes) > 0 {
+			compositeLastValues = make([]interface{}, len(primaryKeyIndexes))
+			for i, idx := range primaryKeyIndexes {
+				compositeLastValues[i] = getTypedValue(&typedDests[idx])
+			}
+			// 向后兼容：单主键场景
+			if len(primaryKeyIndexes) == 1 {
+				lastValue = compositeLastValues[0]
+			}
 		}
 
 		// 从 pool 获取 rowValues 切片，避免每行 make 新切片
@@ -829,7 +883,7 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 			// 执行 CopyFrom，使用转换后的小写列名
 			_, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, copyColumns, pgx.CopyFromRows(copyRows))
 			if err != nil {
-				return 0, nil, fmt.Errorf("CopyFrom 执行失败：%w", err)
+				return 0, nil, nil, fmt.Errorf("CopyFrom 执行失败：%w", err)
 			}
 
 			// 将 rowValues 切片返回 pool 复用
@@ -848,7 +902,7 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 		// 执行 CopyFrom，使用转换后的小写列名
 		_, err := tx.CopyFrom(ctx, pgx.Identifier{tableName}, copyColumns, pgx.CopyFromRows(copyRows))
 		if err != nil {
-			return 0, nil, fmt.Errorf("CopyFrom 执行失败：%w", err)
+			return 0, nil, nil, fmt.Errorf("CopyFrom 执行失败：%w", err)
 		}
 		// 将 rowValues 切片返回 pool 复用
 		for _, rv := range copyRows {
@@ -857,19 +911,20 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 	}
 
 	if err := rows.Err(); err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 
 	// 只有在没有找到主键值的情况下，才执行 MAX 查询（作为后备方案）
-	if resolvedPrimaryKey != "" && lastValue == nil {
-		query := fmt.Sprintf("SELECT MAX(\"%s\") FROM \"%s\"", resolvedPrimaryKey, tableName)
+	if len(resolvedPrimaryKeys) > 0 && lastValue == nil {
+		// 对于复合主键，只查询第一个主键列
+		query := fmt.Sprintf("SELECT MAX(\"%s\") FROM \"%s\"", resolvedPrimaryKeys[0], tableName)
 		err := tx.QueryRow(ctx, query).Scan(&lastValue)
 		if err != nil && err != pgx.ErrNoRows {
-			return 0, nil, fmt.Errorf("获取最后一个主键值失败：%w", err)
+			return 0, nil, nil, fmt.Errorf("获取最后一个主键值失败：%w", err)
 		}
 	}
 
-	return totalRows, lastValue, nil
+	return totalRows, lastValue, compositeLastValues, nil
 }
 
 // parseMySQLPoint 解析 MySQL 的 WKB 格式 Point 数据
