@@ -634,3 +634,135 @@ func Test_replaceJSONLengthView(t *testing.T) {
 		t.Errorf("replaceJSONLengthView() = %q, want to contain JSONB_ARRAY_LENGTH", result)
 	}
 }
+
+// TestConvertViewDDL_GroupConcatWithNestedCast 测试 GROUP_CONCAT 嵌套 CAST 的转换
+func TestConvertViewDDL_GroupConcatWithNestedCast(t *testing.T) {
+	// 模拟错误日志中的视图定义
+	viewSQL := `select "b"."status" AS "status",group_concat(distinct "i"."col_tiny" order by "i"."col_tiny" ASC separator ', ') AS "tiny_values",group_concat("i"."col_small" separator '|') AS "small_values",group_concat(cast("i"."col_medium" as char charset utf8) separator ';') AS "medium_values" from ("case_01_integers" "i" join "case_02_boolean" "b" on(("i"."col_tiny" = "b"."status"))) group by "b"."status"`
+
+	ddl, err := ConvertViewDDL("view_case33_mysql8_string_agg", viewSQL)
+	if err != nil {
+		t.Fatalf("ConvertViewDDL 返回错误：%v", err)
+	}
+
+	t.Logf("转换结果：%s", ddl)
+
+	// 验证 string_agg 函数存在
+	lowerDDL := strings.ToLower(ddl)
+	if !strings.Contains(lowerDDL, "string_agg(") {
+		t.Errorf("GROUP_CONCAT 未转换为 string_agg：%s", ddl)
+	}
+
+	// 验证 DISTINCT 保留
+	if !strings.Contains(lowerDDL, "distinct") {
+		t.Errorf("DISTINCT 丢失：%s", ddl)
+	}
+
+	// 验证 ORDER BY 在 string_agg 内部
+	if !strings.Contains(lowerDDL, "order by") {
+		t.Errorf("ORDER BY 丢失：%s", ddl)
+	}
+
+	// 验证分隔符正确
+	if !strings.Contains(ddl, "', '") || !strings.Contains(ddl, "'|'") || !strings.Contains(ddl, "';'") {
+		t.Errorf("分隔符转换错误：%s", ddl)
+	}
+
+	// 验证 CAST 嵌套正确(不应出现语法错误如 "cast(..., ' AS text)")
+	if strings.Contains(ddl, ", ' AS text)") {
+		t.Errorf("CAST 语法错误：%s", ddl)
+	}
+
+	// 验证不包含 GROUP_CONCAT
+	if strings.Contains(lowerDDL, "group_concat(") {
+		t.Errorf("仍包含 GROUP_CONCAT：%s", ddl)
+	}
+}
+
+// TestConvertViewDDL_GroupConcatSimple 测试简单 GROUP_CONCAT 转换
+func TestConvertViewDDL_GroupConcatSimple(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		expectedLower string
+	}{
+		{
+			name:         "basic",
+			input:        "SELECT GROUP_CONCAT(col) FROM t",
+			expectedLower: "string_agg(cast(col as text), ',')",
+		},
+		{
+			name:         "with_separator",
+			input:        "SELECT GROUP_CONCAT(col SEPARATOR ', ') FROM t",
+			expectedLower: "string_agg(cast(col as text), ', ')",
+		},
+		{
+			name:         "with_distinct",
+			input:        "SELECT GROUP_CONCAT(DISTINCT col) FROM t",
+			expectedLower: "string_agg(distinct cast(col as text), ',')",
+		},
+		{
+			name:         "with_order_by",
+			input:        "SELECT GROUP_CONCAT(col ORDER BY col ASC) FROM t",
+			expectedLower: "string_agg(cast(col as text), ',') order by",
+		},
+		{
+			name:         "nested_cast",
+			input:        "SELECT GROUP_CONCAT(CAST(col AS CHAR) SEPARATOR ';') FROM t",
+			expectedLower: "string_agg(cast(cast(col as text) as text), ';')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ddl, err := ConvertViewDDL("test_view", tt.input)
+			if err != nil {
+				t.Fatalf("ConvertViewDDL 返回错误：%v", err)
+			}
+
+			lowerDDL := strings.ToLower(ddl)
+			if !strings.Contains(lowerDDL, tt.expectedLower) {
+				t.Errorf("转换结果不包含期望字符串\n输入: %s\n输出: %s\n期望包含: %s", tt.input, ddl, tt.expectedLower)
+			}
+		})
+	}
+}
+
+// TestConvertViewDDL_RoundMod 测试 ROUND 和 MOD 函数转换
+func TestConvertViewDDL_RoundMod(t *testing.T) {
+	viewSQL := `SELECT
+    ROUND(price, 2) AS rounded_price,
+    MOD(quantity, 10) AS quantity_mod,
+    ROUND(score, 0) AS rounded_score
+FROM case_10_numbers`
+
+	ddl, err := ConvertViewDDL("view_round_mod_test", viewSQL)
+	if err != nil {
+		t.Fatalf("ConvertViewDDL 返回错误：%v", err)
+	}
+
+	t.Logf("转换结果：%s", ddl)
+
+	lowerDDL := strings.ToLower(ddl)
+
+	// 检查 ROUND 函数转换：ROUND(column, n) -> ROUND(column::NUMERIC, n)
+	if !strings.Contains(lowerDDL, "round(price::numeric, 2)") {
+		t.Errorf("ROUND(price, 2) 未正确转换为 ROUND(price::NUMERIC, 2)：%s", ddl)
+	}
+	if !strings.Contains(lowerDDL, "round(score::numeric, 0)") {
+		t.Errorf("ROUND(score, 0) 未正确转换为 ROUND(score::NUMERIC, 0)：%s", ddl)
+	}
+
+	// 检查 MOD 函数转换：MOD(column, n) -> MOD(column::NUMERIC, n)
+	if !strings.Contains(lowerDDL, "mod(quantity::numeric, 10)") {
+		t.Errorf("MOD(quantity, 10) 未正确转换为 MOD(quantity::NUMERIC, 10)：%s", ddl)
+	}
+
+	// 检查不再包含原始的 MySQL 函数调用（未转换的）
+	if strings.Contains(lowerDDL, "round(price,") && !strings.Contains(lowerDDL, "round(price::numeric,") {
+		t.Errorf("ROUND(price, 2) 仍为 MySQL 格式，未添加 ::NUMERIC：%s", ddl)
+	}
+	if strings.Contains(lowerDDL, "mod(quantity,") && !strings.Contains(lowerDDL, "mod(quantity::numeric,") {
+		t.Errorf("MOD(quantity, 10) 仍为 MySQL 格式，未添加 ::NUMERIC：%s", ddl)
+	}
+}

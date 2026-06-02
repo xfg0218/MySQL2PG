@@ -16,8 +16,6 @@ var (
 	reDBTableInFromJoin = regexp.MustCompile(`(?i)\b(from|join)\s+"[^"]+"\.("[^"]+")`)
 	// 匹配 IFNULL 函数
 	reIfnull = regexp.MustCompile(`(?i)ifnull\s*\(`)
-	// 匹配 GROUP_CONCAT 函数
-	reGroupConcat = regexp.MustCompile(`(?i)group_concat\s*\(\s*(?:distinct\s+)?([^)]*)\)`)
 	// 匹配 ORDER BY 子句
 	reOrder = regexp.MustCompile(`(?i)\s+order\s+by\s+[^,]*`)
 	// 匹配 DISTINCT 关键字
@@ -29,6 +27,8 @@ var (
 	reCast    = regexp.MustCompile(`(?i)\bcast\s*\(\s*(.+?)\s+as\s+([a-z_][a-z0-9_]*(?:\s*\(\s*[^)]+\s*\))?)\s*\)`)
 	// 匹配 CAST(x USING charset) 语法（MySQL 特有，PostgreSQL 不支持）
 	reCastUsing = regexp.MustCompile(`(?i)\bcast\s*\(\s*([^)]+)\s+using\s+[a-z0-9_]+\s*\)(?:\s+as\s+'[^']*')?`)
+	// 匹配 CONVERT(x USING charset) 语法（MySQL 特有，PostgreSQL 不支持）
+	reConvertUsing = regexp.MustCompile(`(?i)\bconvert\s*\(\s*([^)]+)\s+using\s+[a-z0-9_]+\s*\)`)
 	// 匹配 LIMIT a,b 语法
 	reLimitOffset = regexp.MustCompile(`(?i)\blimit\s+(\d+)\s*,\s*(\d+)`)
 	// 匹配 JSON_OBJECT 函数
@@ -180,10 +180,14 @@ var (
 	reRegexpReplace = regexp.MustCompile(`(?i)\bregexp_replace\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\)`)
 	// 匹配 CAST(x AS SIGNED) 函数
 	reCastSigned = regexp.MustCompile(`(?i)\bcast\s*\(\s*([^)]+)\s+as\s+signed\)`)
-	// 匹配 CAST(x AS CHAR) 函数
-	reCastChar = regexp.MustCompile(`(?i)\bcast\s*\(\s*([^)]+)\s+as\s+char(?:\(\d+\))?\)`)
+	// 匹配 CAST(x AS CHAR) 函数（含可选的 CHARSET xxx 后缀）
+	reCastChar = regexp.MustCompile(`(?i)\bcast\s*\(\s*([^)]+)\s+as\s+char(?:\(\d+\))?(?:\s+charset\s+[a-z0-9_]+)?\s*\)`)
 	// 匹配 FORCE INDEX 提示
 	reForceIndex = regexp.MustCompile(`(?i)\bforce\s+index\s*\([^)]*\)`)
+	// 匹配 ROUND 函数
+	reROUND = regexp.MustCompile(`(?i)\bround\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)`)
+	// 匹配 MOD 函数
+	reMOD = regexp.MustCompile(`(?i)\bmod\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)`)
 )
 
 // ConvertViewDDL 将MySQL的VIEW_DEFINITION转换为PostgreSQL的CREATE VIEW语句,从information_schema.VIEWS中读取的VIEW_DEFINITION字段内容
@@ -321,56 +325,8 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	}
 
 	// GROUP_CONCAT -> string_agg 的增强转换，支持 DISTINCT、ORDER BY 和 SEPARATOR
-	processed = reGroupConcat.ReplaceAllStringFunc(processed, func(s string) string {
-		m := reGroupConcat.FindStringSubmatch(s)
-		if len(m) < 2 {
-			return s
-		}
-		inner := m[1]
-
-		// 检查是否有 DISTINCT
-		hasDistinct := strings.Contains(strings.ToUpper(inner), "DISTINCT")
-		innerNoDistinct := reDistinct.ReplaceAllString(inner, "")
-
-		// 提取 ORDER BY 子句（如果有）
-		var orderBy string
-		orderByMatch := reOrder.FindStringSubmatch(innerNoDistinct)
-		if len(orderByMatch) > 0 {
-			orderBy = strings.TrimSpace(strings.TrimPrefix(orderByMatch[0], " "))
-			innerNoDistinct = reOrder.ReplaceAllString(innerNoDistinct, "")
-		}
-
-		// 解析 SEPARATOR
-		sepM := reSep.FindStringSubmatch(innerNoDistinct)
-		sep := ","
-		if len(sepM) >= 2 {
-			sep = sepM[1]
-			innerNoDistinct = reSep.ReplaceAllString(innerNoDistinct, "")
-		}
-
-		expr := strings.TrimSpace(innerNoDistinct)
-
-		// 构建 PostgreSQL string_agg 表达式（ORDER BY 需位于聚合函数内部）
-		var sb strings.Builder
-		sb.WriteString("string_agg(")
-		if hasDistinct {
-			sb.WriteString("DISTINCT ")
-		}
-		sb.WriteString("CAST(")
-		sb.WriteString(expr)
-		sb.WriteString(" AS text)")
-		sb.WriteString(", '")
-		sb.WriteString(strings.ReplaceAll(sep, `'`, `''`))
-		sb.WriteString("')")
-		if orderBy != "" {
-			// PostgreSQL 语法：string_agg(expr, sep ORDER BY ...)
-			pgOrderBy := convertMySQLOrderByToPG(orderBy)
-			sb.WriteString(" ORDER BY ")
-			sb.WriteString(stripOrderByKeyword(pgOrderBy))
-		}
-
-		return sb.String()
-	})
+	// 使用括号匹配计数提取完整内容，支持嵌套函数调用如 CAST(...)
+	processed = convertGroupConcatToStringAgg(processed, viewName)
 	if processed == "" {
 		return "", fmt.Errorf("failed to convert GROUP_CONCAT to string_agg in view definition for view '%s'", viewName)
 	}
@@ -391,6 +347,18 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		}
 		expr := strings.TrimSpace(match[1])
 		// 直接返回表达式，移除 CAST ... USING 语法
+		return expr
+	})
+
+	// 处理 CONVERT(x USING charset) 语法（MySQL 特有，PostgreSQL 不支持）
+	// MySQL: CONVERT(x USING utf8mb4) - 字符集转换
+	// PostgreSQL: 直接使用 x（PostgreSQL 默认使用 UTF-8）
+	processed = reConvertUsing.ReplaceAllStringFunc(processed, func(m string) string {
+		match := reConvertUsing.FindStringSubmatch(m)
+		if len(match) < 2 {
+			return m
+		}
+		expr := strings.TrimSpace(match[1])
 		return expr
 	})
 
@@ -656,6 +624,31 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	processed = reTIMEDIFF.ReplaceAllString(processed, "($1 - $2)")
 	if processed == "" {
 		return "", fmt.Errorf("failed to convert basic time functions in view definition for view '%s'", viewName)
+	}
+
+	// 数值函数转换 - ROUND 和 MOD
+	// MySQL: ROUND(column, n) -> PostgreSQL: ROUND(column::NUMERIC, n)
+	processed = reROUND.ReplaceAllStringFunc(processed, func(m string) string {
+		match := reROUND.FindStringSubmatch(m)
+		if len(match) < 3 {
+			return m
+		}
+		column := strings.TrimSpace(match[1])
+		precision := strings.TrimSpace(match[2])
+		return fmt.Sprintf("ROUND(%s::NUMERIC, %s)", column, precision)
+	})
+	// MySQL: MOD(column, n) -> PostgreSQL: MOD(column::NUMERIC, n)
+	processed = reMOD.ReplaceAllStringFunc(processed, func(m string) string {
+		match := reMOD.FindStringSubmatch(m)
+		if len(match) < 3 {
+			return m
+		}
+		column := strings.TrimSpace(match[1])
+		divisor := strings.TrimSpace(match[2])
+		return fmt.Sprintf("MOD(%s::NUMERIC, %s)", column, divisor)
+	})
+	if processed == "" {
+		return "", fmt.Errorf("failed to convert ROUND/MOD functions in view definition for view '%s'", viewName)
 	}
 
 	// 时间函数转换 - DATE_ADD/DATE_SUB
@@ -1509,9 +1502,8 @@ func replaceJSONInsertView(s string) string {
 		path := strings.TrimSpace(submatch[2])
 		val := strings.TrimSpace(submatch[3])
 		// PostgreSQL 路径格式：'{key}' 或 '{key,nested}'（数组格式）
-		// 值需要用 to_jsonb() 包裹
 		pgPath := fmt.Sprintf("'{%s}'", strings.TrimPrefix(path, "$."))
-		return fmt.Sprintf("JSONB_SET(%s::jsonb, %s, to_jsonb(%s), true)", doc, pgPath, val)
+		return fmt.Sprintf("JSONB_SET(%s::jsonb, %s, %s, true)", doc, pgPath, wrapToJSONb(val))
 	})
 }
 
@@ -1530,9 +1522,8 @@ func replaceJSONReplaceView(s string) string {
 		path := strings.TrimSpace(submatch[2])
 		val := strings.TrimSpace(submatch[3])
 		// PostgreSQL 路径格式：'{key}' 或 '{key,nested}'（数组格式）
-		// 值需要用 to_jsonb() 包裹
 		pgPath := fmt.Sprintf("'{%s}'", strings.TrimPrefix(path, "$."))
-		return fmt.Sprintf("JSONB_SET(%s::jsonb, %s, to_jsonb(%s), false)", doc, pgPath, val)
+		return fmt.Sprintf("JSONB_SET(%s::jsonb, %s, %s, false)", doc, pgPath, wrapToJSONb(val))
 	})
 }
 
@@ -1578,7 +1569,7 @@ func replaceJSONSetView(s string) string {
 			// 移除 $. 前缀并转换为 PostgreSQL 数组格式
 			path = strings.TrimPrefix(path, "$.")
 			pgPath := fmt.Sprintf("'{%s}'", path)
-			result = fmt.Sprintf("JSONB_SET(%s, %s, to_jsonb(%s))", result, pgPath, val)
+			result = fmt.Sprintf("JSONB_SET(%s, %s, %s)", result, pgPath, wrapToJSONb(val))
 		}
 
 		return result
@@ -1668,6 +1659,16 @@ func replaceJSONArrayInsert(s string) string {
 
 		return fmt.Sprintf("JSONB_INSERT(%s::jsonb, '%s', %s::jsonb)", doc, pgPath, val)
 	})
+}
+
+// wrapToJSONb 将值包装为 to_jsonb() 调用。
+// 如果值是字符串字面量（以 ' 开头），添加 ::text 类型转换以避免 polymorphic 类型推断错误。
+func wrapToJSONb(val string) string {
+	trimmed := strings.TrimSpace(val)
+	if strings.HasPrefix(trimmed, "'") {
+		return fmt.Sprintf("to_jsonb(%s::text)", trimmed)
+	}
+	return fmt.Sprintf("to_jsonb(%s)", trimmed)
 }
 
 // mysqlJsonPathToPostgresPath 将 MySQL JSON 路径转换为 PostgreSQL 路径
@@ -1864,4 +1865,133 @@ func replaceConcatExpressions(s string) string {
 		idx = pos + len(replacement)
 	}
 	return out
+}
+
+// extractGroupConcatContent 提取 GROUP_CONCAT(...) 内部完整内容
+// 使用括号匹配计数,支持嵌套函数调用如 CAST(...), CONCAT(...) 等
+// 返回: 完整匹配(含 GROUP_CONCAT), 内部内容, 起始位置, 结束位置
+func extractGroupConcatContent(s string, startIdx int) (string, string, int, int) {
+	upper := strings.ToUpper(s)
+	gcIdx := strings.Index(upper[startIdx:], "GROUP_CONCAT(")
+	if gcIdx == -1 {
+		return "", "", -1, -1
+	}
+	gcIdx += startIdx
+
+	// 找到左括号位置
+	openParen := strings.Index(s[gcIdx:], "(")
+	if openParen == -1 {
+		return "", "", -1, -1
+	}
+	openParen += gcIdx
+
+	// 括号匹配计数
+	depth := 1
+	i := openParen + 1
+loop:
+	for i < len(s) && depth > 0 {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				break loop
+			}
+		}
+		i++
+	}
+
+	if depth != 0 {
+		// 未找到匹配的右括号
+		return "", "", -1, -1
+	}
+
+	fullMatch := s[gcIdx : i+1]
+	inner := s[openParen+1 : i]
+	return fullMatch, inner, gcIdx, i
+}
+
+// convertGroupConcatToStringAgg 将 GROUP_CONCAT 转换为 string_agg
+// 支持嵌套函数调用、DISTINCT、ORDER BY、SEPARATOR
+func convertGroupConcatToStringAgg(s string, viewName string) string {
+	result := s
+	searchStart := 0
+
+	for {
+		_, inner, startIdx, endIdx := extractGroupConcatContent(result, searchStart)
+		if startIdx == -1 {
+			break
+		}
+
+		// 直接解析 inner 内容,提取 DISTINCT, ORDER BY, SEPARATOR 和表达式
+		working := inner
+
+		// 检查是否有 DISTINCT
+		hasDistinct := false
+		upperWorking := strings.ToUpper(working)
+		if distIdx := strings.Index(upperWorking, "DISTINCT"); distIdx != -1 {
+			hasDistinct = true
+			// 移除 DISTINCT 关键字及其后的空格
+			working = strings.TrimSpace(working[distIdx+len("DISTINCT"):])
+		}
+
+		// 提取 ORDER BY 子句(在 SEPARATOR 之前)
+		var orderBy string
+		if obIdx := strings.Index(strings.ToUpper(working), "ORDER BY"); obIdx != -1 {
+			// 查找 ORDER BY 的结束位置(到 SEPARATOR 或字符串末尾)
+			afterOB := working[obIdx:]
+			sepIdx := strings.Index(strings.ToUpper(afterOB), "SEPARATOR")
+			if sepIdx != -1 {
+				orderBy = strings.TrimSpace(afterOB[:sepIdx])
+				working = working[:obIdx] + working[obIdx+sepIdx:]
+			} else {
+				orderBy = strings.TrimSpace(afterOB)
+				working = working[:obIdx]
+			}
+		}
+
+		// 提取 SEPARATOR
+		sep := ","
+		if sepIdx := strings.Index(strings.ToUpper(working), "SEPARATOR"); sepIdx != -1 {
+			afterSep := strings.TrimSpace(working[sepIdx+len("SEPARATOR"):])
+			// 提取引号内的分隔符
+			if len(afterSep) >= 2 && (afterSep[0] == '\'' || afterSep[0] == '"') {
+				quote := afterSep[0]
+				endQuote := strings.IndexByte(afterSep[1:], quote)
+				if endQuote != -1 {
+					sep = afterSep[1 : endQuote+1]
+					working = strings.TrimSpace(working[:sepIdx])
+				}
+			}
+		}
+
+		expr := strings.TrimSpace(working)
+
+		// 构建 PostgreSQL string_agg 表达式
+		var sb strings.Builder
+		sb.WriteString("string_agg(")
+		if hasDistinct {
+			sb.WriteString("DISTINCT ")
+		}
+		sb.WriteString("CAST(")
+		sb.WriteString(expr)
+		sb.WriteString(" AS text)")
+		sb.WriteString(", '")
+		sb.WriteString(strings.ReplaceAll(sep, `'`, `''`))
+		sb.WriteString("')")
+		if orderBy != "" {
+			// PostgreSQL 语法:string_agg(expr, sep ORDER BY ...)
+			pgOrderBy := convertMySQLOrderByToPG(orderBy)
+			sb.WriteString(" ORDER BY ")
+			sb.WriteString(stripOrderByKeyword(pgOrderBy))
+		}
+
+		replacement := sb.String()
+		// 替换:去掉原始的 GROUP_CONCAT(...)  entire match
+		result = result[:startIdx] + replacement + result[endIdx+1:]
+		searchStart = startIdx + len(replacement)
+	}
+
+	return result
 }
