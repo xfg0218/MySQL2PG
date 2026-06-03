@@ -423,6 +423,7 @@ INSERT INTO case_41_parent (id, name) VALUES
 -- ============================================================================
 -- case_41_foreign_key (3列: 外键)
 -- ============================================================================
+/**
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE `case_41_parent`;
 TRUNCATE TABLE `case_41_foreign_key`;
@@ -431,6 +432,7 @@ insert into case_41_parent (id, name) values (1, '父级数据a');
 insert into case_41_parent (id, name) values (2, '父级数据b');
 insert into case_41_foreign_key (id, parent_id, name) values (101, 1, '子级数据a-1');
 insert into case_41_foreign_key (id, parent_id, name) values (102, 2, '子级数据b-1');
+**/
 
 -- ============================================================================
 -- case_42_fulltext (3列: 全文索引)
@@ -1060,6 +1062,7 @@ INSERT INTO case_106_replace_test (id, name, value) VALUES
 (9, 'Replace 9', 900), (10, 'Replace 10', 1000);
 
 -- case_107_multi_delete_parent
+/**
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE case_107_multi_delete_child;
 TRUNCATE TABLE case_107_multi_delete_parent;
@@ -1067,6 +1070,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 INSERT INTO case_107_multi_delete_parent (id, name) VALUES
 (1, 'Parent 1'), (2, 'Parent 2'), (3, 'Parent 3'), (4, 'Parent 4'), (5, 'Parent 5'),
 (6, 'Parent 6'), (7, 'Parent 7'), (8, 'Parent 8'), (9, 'Parent 9'), (10, 'Parent 10');
+**/
 
 -- case_107_multi_delete_child
 TRUNCATE TABLE case_107_multi_delete_child;
@@ -1863,6 +1867,7 @@ INSERT INTO case_156_orders_parent (tenant_id, order_no, status) VALUES
 (5, 'ORD-009', 3), (5, 'ORD-010', 1);
 
 -- case_156_orders_child (7列)
+/**
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE case_156_orders_child;
 TRUNCATE TABLE  case_156_orders_parent;
@@ -1870,7 +1875,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 INSERT INTO case_156_orders_parent (tenant_id, order_no) VALUES
 (1, 'ORD-001'), (1, 'ORD-002'), (2, 'ORD-003'), (2, 'ORD-004'),
 (3, 'ORD-005'), (3, 'ORD-006'), (4, 'ORD-007'), (4, 'ORD-008'), (5, 'ORD-009');
-
+**/
 
 -- case_157_json_generated_index (6列)
 TRUNCATE TABLE case_157_json_generated_index;
@@ -1935,6 +1940,7 @@ INSERT INTO case_162_auto_inc_option (name) VALUES
 ('Name 6'), ('Name 7'), ('Name 8'), ('Name 9'), ('Name 10');
 
 -- case_163_fk_action_parent (2列)
+/**
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE case_163_fk_action_child;
 TRUNCATE TABLE case_163_fk_action_parent;
@@ -1947,6 +1953,7 @@ INSERT INTO case_163_fk_action_child (id, parent_id, parent_code) VALUES
 (1, 1, 'CODE-001'), (2, 1, 'CODE-001'), (3, 2, 'CODE-002'), (4, 2, 'CODE-002'),
 (5, 3, 'CODE-003'), (6, 3, 'CODE-003'), (7, 4, 'CODE-004'), (8, 4, 'CODE-004'),
 (9, 5, 'CODE-005'), (10, 5, 'CODE-005');
+**/
 
 -- case_164_org_tree (4列)
 TRUNCATE TABLE case_164_org_tree;
