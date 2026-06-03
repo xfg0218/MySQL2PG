@@ -386,7 +386,9 @@
       "Bash(sleep *)",
       "Bash(ssh *)",
       "Bash(chmod *)",
-      "Bash(tree *)"
+      "Bash(tree *)",
+      "Bash(find *)",
+      "Agent(Explore)"
     ]
   },
   "$version": 4
