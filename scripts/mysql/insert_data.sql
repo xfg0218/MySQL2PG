@@ -415,6 +415,7 @@ INSERT INTO `CASE_40_DEFAULT` (`id`, `name`, `age`, `email`) VALUES
 -- ============================================================================
 -- case_41_parent (2列: 父表)
 -- ============================================================================
+TRUNCATE TABLE case_41_foreign_key;
 TRUNCATE TABLE case_41_parent;
 INSERT INTO case_41_parent (id, name) VALUES
 (1, 'Parent 1'), (2, 'Parent 2'), (3, 'Parent 3'), (4, 'Parent 4'), (5, 'Parent 5'),
