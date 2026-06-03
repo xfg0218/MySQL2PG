@@ -387,7 +387,9 @@
       "Bash(ssh *)",
       "Bash(chmod *)",
       "Bash(tree *)",
-      "Bash(find *)"
+      "Bash(find *)",
+      "Agent(Explore)",
+      "Skill(wechat-mp)"
     ]
   },
   "$version": 4
