@@ -94,7 +94,9 @@ Start
 ### 🚀 High-Performance Design
 
 - **Concurrent Conversion Engine**: Supports configurable concurrent threads based on hardware, boosting speed by 5-10x compared to single-threaded conversion.
-- **Batch Processing Optimization**: Supports batch insertion, up to 10,000 rows per batch, significantly improving data migration speed.
+- **Batch Processing Optimization**: Supports batch insertion, up to 50,000 rows per batch, significantly improving data migration speed.
+- **Multi-level Row Slice Pool**: 4-tier size-class memory pool (8/32/128/256 columns) reduces memory allocation by 70-90% for small tables, minimizing GC pressure.
+- **Lock-free Progress Aggregation**: Channel-based progress reporting eliminates mutex contention, achieving 51x faster progress updates (9155ns → 178ns) with 96% less memory.
 - **Connection Pool Management**: Supports custom connection pool settings for MySQL and PostgreSQL, with max connections up to 100+.
 - **Real-time Progress Monitoring**: Displays conversion progress in real-time, updating once per second, keeping users informed of the status.
 
