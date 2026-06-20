@@ -2,8 +2,79 @@ package postgres
 
 import (
 	"database/sql"
+	"runtime"
 	"testing"
 )
+
+// 基准测试：多级 rowSlicePool vs 单级池
+// 测量目标：首次分配 rowSlice 时的内存占用（未复用场景）
+// 这模拟了大量不同列表在并发场景下的内存压力
+// 使用 runtime.KeepAlive 防止编译器优化掉未使用的分配
+
+// 模拟当前单级池的实现（用于对比）
+func benchmarkMakeSingle(numCols int) []interface{} {
+	s := make([]interface{}, 128)
+	return s[:numCols]
+}
+
+// 模拟多级池的实现（零长度、预分配容量）
+func benchmarkMakeMulti(numCols int) []interface{} {
+	var s *[]interface{}
+	if numCols <= 8 {
+		s = &[]interface{}{}
+		*s = make([]interface{}, 0, 8)
+	} else if numCols <= 32 {
+		s = &[]interface{}{}
+		*s = make([]interface{}, 0, 32)
+	} else if numCols <= 128 {
+		s = &[]interface{}{}
+		*s = make([]interface{}, 0, 128)
+	} else {
+		s = &[]interface{}{}
+		*s = make([]interface{}, 0, 256)
+	}
+	return (*s)[:numCols]
+}
+
+func BenchmarkRowSlicePool_SingleLevel(b *testing.B) {
+	columns := []int{3, 5, 8, 20, 50, 100}
+	for _, numCols := range columns {
+		b.Run(
+			string(rune('0'+numCols/10))+string(rune('0'+numCols%10))+"cols",
+			func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					s := benchmarkMakeSingle(numCols)
+					// 模拟使用切片，防止编译器优化
+					for j := 0; j < numCols; j++ {
+						s[j] = i
+					}
+					runtime.KeepAlive(s)
+				}
+			},
+		)
+	}
+}
+
+func BenchmarkRowSlicePool_MultiLevel(b *testing.B) {
+	columns := []int{3, 5, 8, 20, 50, 100}
+	for _, numCols := range columns {
+		b.Run(
+			string(rune('0'+numCols/10))+string(rune('0'+numCols%10))+"cols",
+			func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					s := benchmarkMakeMulti(numCols)
+					// 模拟使用切片，防止编译器优化
+					for j := 0; j < numCols; j++ {
+						s[j] = i
+					}
+					runtime.KeepAlive(s)
+				}
+			},
+		)
+	}
+}
 
 func TestMakeTypedDestUsesNullableTypes(t *testing.T) {
 	cases := []struct {

@@ -1744,6 +1744,7 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 
 // syncTableData 同步表数据
 func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{}) error {
+	progressChan := make(chan progressUpdate, m.config.Conversion.Limits.Concurrency)
 	return SyncTableData(
 		m.mysqlConn,
 		m.postgresConn,
@@ -1757,6 +1758,7 @@ func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{
 		&m.inconsistentTables,
 		tables,
 		semaphore,
+		progressChan,
 	)
 }
 

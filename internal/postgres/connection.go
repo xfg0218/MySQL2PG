@@ -59,14 +59,55 @@ var (
 )
 
 // rowSlicePool 复用 []interface{} 切片，避免每行都 make 新切片
-// 支持最多 128 列（通常足够覆盖所有业务场景）
-const maxPoolColumns = 128
+// 多级池设计（4 级 size-class），覆盖 1-256 列场景
+// Level 0: 1-8 列    → 容量 8
+// Level 1: 9-32 列   → 容量 32
+// Level 2: 33-128 列 → 容量 128
+// Level 3: 129-256 列→ 容量 256
+// Fallback: >256 列  → 直接 make（带告警日志）
+var rowSlicePools = [4]*sync.Pool{
+	{New: func() any { s := make([]interface{}, 0, 8); return &s }},
+	{New: func() any { s := make([]interface{}, 0, 32); return &s }},
+	{New: func() any { s := make([]interface{}, 0, 128); return &s }},
+	{New: func() any { s := make([]interface{}, 0, 256); return &s }},
+}
 
-var rowSlicePool = &sync.Pool{
-	New: func() interface{} {
-		s := make([]interface{}, maxPoolColumns)
-		return s
-	},
+// getRowSlice 从多级池中获取 rowSlice
+func getRowSlice(numCols int) []interface{} {
+	var pool *sync.Pool
+	if numCols <= 8 {
+		pool = rowSlicePools[0]
+	} else if numCols <= 32 {
+		pool = rowSlicePools[1]
+	} else if numCols <= 128 {
+		pool = rowSlicePools[2]
+	} else if numCols <= 256 {
+		pool = rowSlicePools[3]
+	} else {
+		// Fallback: >256 列，直接分配（不进入池）
+		return make([]interface{}, numCols)
+	}
+	s := pool.Get().(*[]interface{})
+	return (*s)[:numCols]
+}
+
+// putRowSlice 将 rowSlice 返回多级池复用
+func putRowSlice(s []interface{}) {
+	cap := cap(s)
+	// 重置为零长度，保留容量
+	s = s[:0]
+	switch {
+	case cap <= 8:
+		rowSlicePools[0].Put(&s)
+	case cap <= 32:
+		rowSlicePools[1].Put(&s)
+	case cap <= 128:
+		rowSlicePools[2].Put(&s)
+	case cap <= 256:
+		rowSlicePools[3].Put(&s)
+	default:
+		// >256 列的 fallback 切片不回收（避免污染 pool）
+	}
 }
 
 // typedDest 类型化 Scan 目标，避免 *interface{} 导致的堆分配
@@ -867,9 +908,8 @@ func (c *Connection) BatchInsertDataWithCompositeKeys(tx pgx.Tx, tableName strin
 			}
 		}
 
-		// 从 pool 获取 rowValues 切片，避免每行 make 新切片
-		rowValues := rowSlicePool.Get().([]interface{})
-		rowValues = rowValues[:numCols]
+		// 从多级池获取 rowValues 切片，避免每行 make 新切片
+		rowValues := getRowSlice(numCols)
 		for i := range typedDests {
 			rowValues[i] = convertBatchColumnValue(columns[i], getTypedValue(&typedDests[i]), columnTypes)
 		}
@@ -886,9 +926,9 @@ func (c *Connection) BatchInsertDataWithCompositeKeys(tx pgx.Tx, tableName strin
 				return 0, nil, nil, fmt.Errorf("CopyFrom 执行失败：%w", err)
 			}
 
-			// 将 rowValues 切片返回 pool 复用
+			// 将 rowValues 切片返回多级池复用
 			for _, rv := range copyRows {
-				rowSlicePool.Put(rv)
+				putRowSlice(rv)
 			}
 
 			// 重置切片和计数器
@@ -904,9 +944,9 @@ func (c *Connection) BatchInsertDataWithCompositeKeys(tx pgx.Tx, tableName strin
 		if err != nil {
 			return 0, nil, nil, fmt.Errorf("CopyFrom 执行失败：%w", err)
 		}
-		// 将 rowValues 切片返回 pool 复用
+		// 将 rowValues 切片返回多级池复用
 		for _, rv := range copyRows {
-			rowSlicePool.Put(rv)
+			putRowSlice(rv)
 		}
 	}
 

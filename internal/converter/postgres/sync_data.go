@@ -30,8 +30,29 @@ const (
 	ansiCarriageReturn     = "\r"
 )
 
+// progressUpdate 无锁进度更新类型
+type progressUpdate struct {
+	tableName     string
+	processedRows int64
+	totalRows     int64
+	elapsed       time.Duration
+}
+
 // SyncTableData 同步表数据（主协调函数）
-func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), updateProgress func(), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}) error {
+func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), updateProgress func(), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}, progressChan chan progressUpdate) error {
+	// 启动专用进度消费者 goroutine
+	progressDone := make(chan struct{})
+	go func() {
+		var lastUpdate time.Time
+		for update := range progressChan {
+			if time.Since(lastUpdate) >= progressUpdateInterval {
+				displayProgressNoLock(update)
+				lastUpdate = time.Now()
+			}
+		}
+		close(progressDone)
+	}()
+
 	var wg sync.WaitGroup
 	// 创建错误通道来捕获goroutine中的错误
 	errorChan := make(chan error, len(tables))
@@ -48,7 +69,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 			}()
 
 			// 执行单表同步
-			err := syncSingleTable(mysqlConn, postgresConn, config, table, log, logError, mutex, completedTasks, totalTasks, inconsistentTables)
+			err := syncSingleTable(mysqlConn, postgresConn, config, table, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, progressChan)
 			if err != nil {
 				select {
 				case errorChan <- err:
@@ -60,6 +81,10 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 
 	// 等待所有goroutine完成
 	wg.Wait()
+
+	// 关闭进度通道并等待消费者完成
+	close(progressChan)
+	<-progressDone
 
 	// 关闭错误通道，收集所有错误
 	close(errorChan)
@@ -86,7 +111,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 }
 
 // syncSingleTable 同步单个表的数据
-func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency) error {
+func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, progressChan chan progressUpdate) error {
 	// 获取表列信息
 	columns, columnTypes, err := mysqlConn.GetTableColumnsWithTypes(table.Name)
 	if err != nil {
@@ -116,7 +141,7 @@ func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connect
 	}
 
 	// 分页插入数据
-	processedRows, err := paginateAndInsert(mysqlConn, postgresConn, config, table, columns, columnTypes, totalRows, log, logError, mutex)
+	processedRows, err := paginateAndInsert(mysqlConn, postgresConn, config, table, columns, columnTypes, totalRows, log, logError, mutex, progressChan)
 	if err != nil {
 		return err
 	}
@@ -213,7 +238,7 @@ type progressState struct {
 }
 
 // paginateAndInsert 分页查询并插入数据
-func paginateAndInsert(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, columns []string, columnTypes map[string]string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex) (int64, error) {
+func paginateAndInsert(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, columns []string, columnTypes map[string]string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, progressChan chan progressUpdate) (int64, error) {
 	// 获取批量大小配置
 	batchSize := int64(config.Conversion.Limits.MaxRowsPerBatch)
 	if batchSize <= 0 {
@@ -260,9 +285,6 @@ func paginateAndInsert(mysqlConn *mysql.Connection, postgresConn *postgres.Conne
 		syncStartTime: time.Now(),
 		totalRows:     totalRows,
 	}
-
-	// 时间驱动的进度刷新
-	var lastProgressUpdate time.Time
 
 	for {
 		var rows *sql.Rows
@@ -322,13 +344,82 @@ func paginateAndInsert(mysqlConn *mysql.Connection, postgresConn *postgres.Conne
 			break
 		}
 
-		// 显示同步进度
+		// 显示同步进度（无锁 channel 方式）
 		if config.Run.ShowConsoleLogs {
-			displayProgress(table.Name, processedRows, state.totalRows, state, &lastProgressUpdate, mutex)
+			select {
+			case progressChan <- progressUpdate{table.Name, processedRows, state.totalRows, time.Since(state.syncStartTime)}:
+			default:
+				// 通道满时丢弃，不阻塞工作 goroutine
+			}
 		}
 	}
 
 	return processedRows, nil
+}
+
+// displayProgressNoLock 无锁进度显示（由专用 goroutine 调用）
+func displayProgressNoLock(update progressUpdate) {
+	progress := float64(update.processedRows) / float64(update.totalRows) * 100
+	if progress > 100 {
+		progress = 100
+	}
+
+	// 计算速度和 ETA
+	elapsed := update.elapsed.Seconds()
+	var speed float64
+	var etaStr string
+	if elapsed > 0 {
+		speed = float64(update.processedRows) / elapsed
+	}
+	remainingRows := update.totalRows - update.processedRows
+	if speed > 0 && remainingRows > 0 {
+		etaSeconds := float64(remainingRows) / speed
+		if etaSeconds < 60 {
+			etaStr = fmt.Sprintf("%.0fs", etaSeconds)
+		} else if etaSeconds < 3600 {
+			etaStr = fmt.Sprintf("%dm%ds", int(etaSeconds)/60, int(etaSeconds)%60)
+		} else {
+			etaStr = fmt.Sprintf("%dh%dm", int(etaSeconds)/3600, (int(etaSeconds)%3600)/60)
+		}
+	}
+
+	// 生成进度条
+	barLength := progressBarWidth
+	filledLength := int(progress / 100 * float64(barLength))
+	spaceCount := barLength - filledLength
+	if spaceCount < 0 {
+		spaceCount = 0
+	}
+	bar := strings.Repeat("█", filledLength) + strings.Repeat("░", spaceCount)
+
+	// 格式化数字带千位分隔符
+	formatRows := func(n int64) string {
+		s := fmt.Sprintf("%d", n)
+		for i := len(s) - 3; i > 0; i -= 3 {
+			s = s[:i] + "," + s[i:]
+		}
+		return s
+	}
+
+	speedStr := ""
+	if speed > 0 {
+		if speed >= 1000 {
+			speedStr = fmt.Sprintf("%.1fK rows/s", speed/1000)
+		} else {
+			speedStr = fmt.Sprintf("%.0f rows/s", speed)
+		}
+	}
+
+	fmt.Printf("%s%s📊 %.1f%% | %s | %s | %s/%s rows | %s | ETA: %s",
+		ansiClearLine,
+		ansiCarriageReturn,
+		progress,
+		update.tableName,
+		bar,
+		formatRows(update.processedRows),
+		formatRows(update.totalRows),
+		speedStr,
+		etaStr)
 }
 
 // displayProgress 显示同步进度
