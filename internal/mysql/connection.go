@@ -414,7 +414,7 @@ func TestConnection(config *config.MySQLConfig) error {
 // GetCharsetAndCollation 获取数据库的字符集和排序规则
 func (c *Connection) GetCharsetAndCollation() (string, string, error) {
 	var charset, collation string
-	
+
 	// 获取数据库字符集
 	query := `
 		SELECT default_character_set_name, default_collation_name
@@ -429,22 +429,22 @@ func (c *Connection) GetCharsetAndCollation() (string, string, error) {
 			return "", "", fmt.Errorf("获取字符集失败：%w", err)
 		}
 	}
-	
+
 	return charset, collation, nil
 }
 
 // getCharsetFromVariables 从系统变量获取字符集
 func (c *Connection) getCharsetFromVariables() (string, string, error) {
 	var charset, collation string
-	
+
 	if err := c.db.QueryRow("SHOW VARIABLES LIKE 'character_set_database'").Scan(&charset, &charset); err != nil {
 		return "", "", err
 	}
-	
+
 	if err := c.db.QueryRow("SHOW VARIABLES LIKE 'collation_database'").Scan(&collation, &collation); err != nil {
 		return "", "", err
 	}
-	
+
 	return charset, collation, nil
 }
 
@@ -457,4 +457,3 @@ func (c *Connection) GetTableDDL(ctx context.Context, tableName string) (string,
 func (c *Connection) GetTableIndexes(tableName string) ([]IndexInfo, error) {
 	return c.getTableIndexes(tableName)
 }
-
