@@ -362,6 +362,149 @@ PARTITIONS 4 */`
 	}
 }
 
+func TestCleanTypeDefinition_EnumWithCharset(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "enum with CHARACTER SET utf8mb4",
+			input:    "enum('active','inactive','pending') CHARACTER SET utf8mb4",
+			expected: "VARCHAR(255)",
+		},
+		{
+			name:     "enum with COLLATE utf8mb4_unicode_ci",
+			input:    "enum('a','b','c') COLLATE utf8mb4_unicode_ci",
+			expected: "VARCHAR(255)",
+		},
+		{
+			name:     "enum with CHARACTER SET and COLLATE",
+			input:    "enum('x','y') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
+			expected: "VARCHAR(255)",
+		},
+		{
+			name:     "enum with charset=utf8mb4",
+			input:    "enum('a','b') charset=utf8mb4",
+			expected: "VARCHAR(255)",
+		},
+		{
+			name:     "enum with CHARSET=utf8mb4 uppercase",
+			input:    "enum('a','b') CHARSET=utf8mb4",
+			expected: "VARCHAR(255)",
+		},
+		{
+			name:     "set with CHARACTER SET utf8mb4",
+			input:    "set('a','b','c') CHARACTER SET utf8mb4",
+			expected: "VARCHAR(255)",
+		},
+		{
+			name:     "enum without charset",
+			input:    "enum('a','b','c')",
+			expected: "VARCHAR(255)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := cleanTypeDefinition(tt.input)
+			if result != tt.expected {
+				t.Errorf("cleanTypeDefinition(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestConvertTableDDL_EnumWithUtf8mb4(t *testing.T) {
+	mysqlDDL := `CREATE TABLE test_enum (
+  id int NOT NULL AUTO_INCREMENT,
+  status enum('active','inactive','pending') CHARACTER SET utf8mb4 NOT NULL,
+  role enum('admin','user') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  tags set('tag1','tag2') charset=utf8mb4 DEFAULT NULL,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+
+	result, err := ConvertTableDDL(mysqlDDL, false)
+	if err != nil {
+		t.Fatalf("ConvertTableDDL failed: %v", err)
+	}
+
+	if strings.Contains(result.DDL, "mb4") {
+		t.Errorf("DDL should not contain 'mb4' charset remnant, got: %s", result.DDL)
+	}
+	if strings.Contains(strings.ToLower(result.DDL), "enum(") {
+		t.Errorf("DDL should not contain 'enum(' type, got: %s", result.DDL)
+	}
+	if strings.Contains(strings.ToLower(result.DDL), "set(") {
+		t.Errorf("DDL should not contain 'set(' type, got: %s", result.DDL)
+	}
+	if !strings.Contains(result.DDL, "VARCHAR(255)") {
+		t.Errorf("DDL should contain 'VARCHAR(255)', got: %s", result.DDL)
+	}
+}
+
+func TestConvertTableDDL_TableLevelCharset(t *testing.T) {
+	tests := []struct {
+		name string
+		ddl  string
+	}{
+		{
+			name: "DEFAULT CHARSET=latin1",
+			ddl: `CREATE TABLE tbl (
+  id int NOT NULL,
+  name varchar(100) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=latin1`,
+		},
+		{
+			name: "DEFAULT CHARSET=gbk COLLATE=gbk_chinese_ci",
+			ddl: `CREATE TABLE tbl (
+  id int NOT NULL,
+  name varchar(100) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=gbk COLLATE=gbk_chinese_ci`,
+		},
+		{
+			name: "DEFAULT CHARSET=gb18030",
+			ddl: `CREATE TABLE tbl (
+  id int NOT NULL,
+  name varchar(100) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=gb18030 COLLATE=gb18030_chinese_ci`,
+		},
+		{
+			name: "DEFAULT CHARSET=big5",
+			ddl: `CREATE TABLE tbl (
+  id int NOT NULL,
+  name varchar(100) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=big5 COLLATE=big5_chinese_ci`,
+		},
+		{
+			name: "DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci",
+			ddl: `CREATE TABLE tbl (
+  id int NOT NULL,
+  name varchar(100) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ConvertTableDDL(tt.ddl, false)
+			if err != nil {
+				t.Fatalf("ConvertTableDDL failed: %v", err)
+			}
+			upperDDL := strings.ToUpper(result.DDL)
+			if strings.Contains(upperDDL, "CHARSET=") || strings.Contains(upperDDL, "CHARSET ") {
+				t.Errorf("DDL should not contain CHARSET clause, got: %s", result.DDL)
+			}
+			if strings.Contains(upperDDL, "COLLATE=") || strings.Contains(upperDDL, "COLLATE ") {
+				t.Errorf("DDL should not contain COLLATE clause, got: %s", result.DDL)
+			}
+			if strings.Contains(upperDDL, "CHARACTER SET") {
+				t.Errorf("DDL should not contain CHARACTER SET clause, got: %s", result.DDL)
+			}
+		})
+	}
+}
+
 func TestConvertTableDDL_Subpartition(t *testing.T) {
 	mysqlDDL := `CREATE TABLE test_sub (
   id int NOT NULL,

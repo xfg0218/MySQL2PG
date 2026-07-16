@@ -866,12 +866,26 @@ func cleanTableLevelSettings(columnsDefinition string) string {
 		{" default charset=utf8mb4", ""}, {" DEFAULT CHARSET=utf8mb4", ""},
 		{" default charset=utf8", ""}, {" DEFAULT CHARSET=utf8", ""},
 		{" default charset=utf8mb3", ""}, {" DEFAULT CHARSET=utf8mb3", ""},
+		{" default charset=latin1", ""}, {" DEFAULT CHARSET=latin1", ""},
+		{" default charset=gbk", ""}, {" DEFAULT CHARSET=gbk", ""},
+		{" default charset=gb18030", ""}, {" DEFAULT CHARSET=gb18030", ""},
+		{" default charset=big5", ""}, {" DEFAULT CHARSET=big5", ""},
+		{" default charset=binary", ""}, {" DEFAULT CHARSET=binary", ""},
+		{" default charset=ascii", ""}, {" DEFAULT CHARSET=ascii", ""},
+		{" default charset=utf16", ""}, {" DEFAULT CHARSET=utf16", ""},
+		{" default charset=utf32", ""}, {" DEFAULT CHARSET=utf32", ""},
 		{" collate=utf8mb4_bin", ""}, {" COLLATE=utf8mb4_bin", ""},
 		{" collate=utf8mb3_bin", ""}, {" COLLATE=utf8mb3_bin", ""},
 		{" collate=utf8mb3_general_ci", ""}, {" COLLATE=utf8mb3_general_ci", ""},
 		{" collate=utf8mb4_unicode_ci", ""}, {" COLLATE=utf8mb4_unicode_ci", ""},
 		{" collate=utf8mb4_general_ci", ""}, {" COLLATE=utf8mb4_general_ci", ""},
 		{" collate=utf8mb4_0900_ai_ci", ""}, {" COLLATE=utf8mb4_0900_ai_ci", ""},
+		{" collate=utf8mb4_0900_as_cs", ""}, {" COLLATE=utf8mb4_0900_as_cs", ""},
+		{" collate=latin1_swedish_ci", ""}, {" COLLATE=latin1_swedish_ci", ""},
+		{" collate=latin1_general_ci", ""}, {" COLLATE=latin1_general_ci", ""},
+		{" collate=gbk_chinese_ci", ""}, {" COLLATE=gbk_chinese_ci", ""},
+		{" collate=gb18030_chinese_ci", ""}, {" COLLATE=gb18030_chinese_ci", ""},
+		{" collate=big5_chinese_ci", ""}, {" COLLATE=big5_chinese_ci", ""},
 		{" row_format=compact", ""}, {" ROW_FORMAT=COMPACT", ""},
 		{" row_format=dynamic", ""}, {" ROW_FORMAT=DYNAMIC", ""},
 	}
@@ -950,17 +964,32 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 	replacements := []string{
 		" COLLATE utf8mb4_unicode_ci", "", " COLLATE utf8_unicode_ci", "",
 		" COLLATE utf8_general_ci", "", " COLLATE utf8mb4_bin", "",
+		" COLLATE utf8mb4_general_ci", "",
 		" COLLATE utf8_bin", "", " COLLATE utf8mb3_bin", "",
 		" COLLATE utf8mb3_general_ci", "", " COLLATE utf32_bin", "",
 		" COLLATE latin1_bin", "", " COLLATE latin1_swedish_ci", "",
-		" COLLATE utf8mb4_0900_ai_ci", "",
+		" COLLATE latin1_general_ci", "",
+		" COLLATE utf8mb4_0900_ai_ci", "", " COLLATE utf8mb4_0900_as_cs", "",
+		" COLLATE gbk_chinese_ci", "", " COLLATE gb18030_chinese_ci", "",
+		" COLLATE big5_chinese_ci", "",
 		" character set utf8", "", " CHARACTER SET utf8", "",
+		" character set utf8mb4", "", " CHARACTER SET utf8mb4", "",
 		" character set utf8mb3", "", " CHARACTER SET utf8mb3", "",
 		" character set latin1", "", " CHARACTER SET latin1", "",
 		" character set utf16", "", " CHARACTER SET utf16", "",
+		" character set gbk", "", " CHARACTER SET gbk", "",
+		" character set gb18030", "", " CHARACTER SET gb18030", "",
+		" character set big5", "", " CHARACTER SET big5", "",
+		" character set binary", "", " CHARACTER SET binary", "",
+		" character set ascii", "", " CHARACTER SET ascii", "",
+		" character set utf32", "", " CHARACTER SET utf32", "",
+		" charset=utf8mb4", "", " CHARSET=utf8mb4", "",
 		" charset=latin1", "", " CHARSET=latin1", "",
 		" charset=utf16", "", " CHARSET=utf16", "",
 		" charset=utf8mb3", "", " CHARSET=utf8mb3", "",
+		" charset=gbk", "", " CHARSET=gbk", "",
+		" charset=gb18030", "", " CHARSET=gb18030", "",
+		" charset=big5", "", " CHARSET=big5", "",
 	}
 	for i := 0; i < len(replacements); i += 2 {
 		line = strings.ReplaceAll(line, replacements[i], replacements[i+1])
@@ -1197,6 +1226,11 @@ func cleanTypeDefinition(typeDefinition string) string {
 	lowerTypeDef = reSerial.ReplaceAllString(lowerTypeDef, "SERIAL")
 	lowerTypeDef = reBytea.ReplaceAllString(lowerTypeDef, "BYTEA")
 	lowerTypeDef = reJsonWithLength.ReplaceAllString(lowerTypeDef, "JSON")
+
+	// 类型映射后再次清理字符集残留（enum/set→VARCHAR 转换后可能暴露出 mb4 后缀）
+	lowerTypeDef = reMySQLCharsetClause.ReplaceAllString(lowerTypeDef, "")
+	lowerTypeDef = reMySQLCollateClause.ReplaceAllString(lowerTypeDef, "")
+	lowerTypeDef = reMb4Suffix.ReplaceAllString(lowerTypeDef, "$1")
 
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default null", "")
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00 00:00:00'", "")
