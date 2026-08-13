@@ -356,6 +356,13 @@ Supports conversion of 40+ MySQL field types to PostgreSQL compatible types, wit
 | geometrycollection           | GEOMETRYCOLLECTION | geometrycollection kept as GEOMETRYCOLLECTION           |
 | bigint AUTO\_INCREMENT       | BIGSERIAL          | Auto-increment bigint to BIGSERIAL                      |
 | int AUTO\_INCREMENT          | SERIAL             | Auto-increment int to SERIAL                            |
+| tinyint unsigned             | SMALLINT           | unsigned range 0~255 fits SMALLINT                      |
+| smallint unsigned            | INTEGER            | unsigned range 0~65535 exceeds SMALLINT, promoted       |
+| mediumint unsigned           | INTEGER            | unsigned range 0~16777215 fits INTEGER                  |
+| int unsigned                 | BIGINT             | unsigned range 0~4294967295 exceeds INTEGER, promoted   |
+| bigint unsigned              | NUMERIC(20,0)      | unsigned range exceeds BIGINT, lossless promotion       |
+| bit(n) (n ≤ 63)              | BIGINT             | BIT is essentially an unsigned integer (0 ~ 2^n-1)      |
+| bit(64)                      | NUMERIC(20,0)      | BIT(64) max value exceeds BIGINT                        |
 
 ### 2. Data Conversion
 

@@ -137,6 +137,12 @@ func makeTypedDest(colType string) typedDest {
 	}
 	if colType != "" {
 		lower := strings.ToLower(colType)
+		// BIGINT UNSIGNED 最大值 18446744073709551615 超出 int64 范围，
+		// 必须用 NullString 透传（NullInt64 在 Scan 阶段会因 strconv 越界而失败），
+		// 目标列为 NUMERIC(20,0)，文本协议可正确接收十进制字符串
+		if strings.Contains(lower, "bigint") && strings.Contains(lower, "unsigned") {
+			return typedDest{value: new(sql.NullString)}
+		}
 		if strings.Contains(lower, "tinyint") || strings.Contains(lower, "smallint") ||
 			strings.Contains(lower, "mediumint") || strings.Contains(lower, "int") ||
 			strings.Contains(lower, "bigint") || strings.Contains(lower, "year") ||
@@ -738,6 +744,56 @@ func isGeometryLikeType(columnType string) bool {
 	return strings.Contains(t, "point") || strings.Contains(t, "geometry")
 }
 
+// isBitType 判断是否为 MySQL BIT 位字段类型
+func isBitType(columnType string) bool {
+	return strings.Contains(strings.ToLower(columnType), "bit")
+}
+
+// parseMySQLBitValue 将 MySQL BIT 列的大端序二进制值解析为十进制数字符串
+// BIT(n) 本质是无符号整数（0 ~ 2^n-1，n<=64），超过 int64 范围的值
+// 以字符串形式透传给 NUMERIC(20,0) 目标列
+func parseMySQLBitValue(data []byte) (string, bool) {
+	if len(data) == 0 || len(data) > 8 {
+		return "", false
+	}
+	var v uint64
+	for _, b := range data {
+		v = v<<8 | uint64(b)
+	}
+	return strconv.FormatUint(v, 10), true
+}
+
+// isTimeOnlyType 判断是否为 MySQL TIME 类型（排除 DATETIME/TIMESTAMP）
+func isTimeOnlyType(columnType string) bool {
+	t := strings.ToLower(columnType)
+	return strings.Contains(t, "time") && !strings.Contains(t, "datetime") && !strings.Contains(t, "timestamp")
+}
+
+// isValidPGTime 判断 MySQL TIME 值是否在 PostgreSQL TIME 范围（00:00:00 ~ 24:00:00）内
+// MySQL TIME 范围为 -838:59:59 ~ 838:59:59，负值和超过 24 小时的值在 PostgreSQL 中无法表示
+func isValidPGTime(val string) bool {
+	if val == "" || val[0] == '-' {
+		return false
+	}
+	idx := strings.IndexByte(val, ':')
+	if idx <= 0 {
+		// 非标准格式交由 PostgreSQL 判断
+		return true
+	}
+	hours, err := strconv.Atoi(val[:idx])
+	if err != nil {
+		return true
+	}
+	if hours > 24 {
+		return false
+	}
+	// PostgreSQL TIME 最大值为 24:00:00，24 小时仅允许全零分秒
+	if hours == 24 && strings.TrimRight(val[idx+1:], "0:.") != "" {
+		return false
+	}
+	return true
+}
+
 func convertBatchColumnValue(columnName string, value interface{}, columnTypes map[string]string) interface{} {
 	switch val := value.(type) {
 	case []byte:
@@ -750,6 +806,13 @@ func convertBatchColumnValue(columnName string, value interface{}, columnTypes m
 		if isBinaryLikeType(columnType) {
 			return val
 		}
+		// BIT 位字段：大端序二进制值转十进制数（目标列为 BIGINT/NUMERIC(20,0)）
+		if isBitType(columnType) {
+			if s, ok := parseMySQLBitValue(val); ok {
+				return s
+			}
+			return nil
+		}
 		// 零日期检测：使用 bytes.Equal 避免 string() 分配
 		if bytes.Equal(val, zeroDateTimeBytes1) || bytes.Equal(val, zeroDateTimeBytes2) {
 			return nil
@@ -760,6 +823,11 @@ func convertBatchColumnValue(columnName string, value interface{}, columnTypes m
 	case string:
 		// 零日期检测
 		if val == "0000-00-00 00:00:00" || val == "0000-00-00" {
+			return nil
+		}
+		// TIME 超范围检测：MySQL TIME 可为负值或超过 24 小时，超出 PostgreSQL
+		// TIME 范围的值转 NULL（与零日期处理策略一致）
+		if isTimeOnlyType(getColumnTypeByName(columnName, columnTypes)) && !isValidPGTime(val) {
 			return nil
 		}
 		return val

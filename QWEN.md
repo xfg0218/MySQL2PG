@@ -408,6 +408,14 @@ Report is a single self-contained HTML file with inline CSS and Google Fonts —
 | `geometry`, `point`, `linestring`, etc. | Same | Spatial types preserved |
 | `bigint AUTO_INCREMENT` | `BIGSERIAL` | |
 | `int AUTO_INCREMENT` | `SERIAL` | |
+| `tinyint UNSIGNED` | `SMALLINT` | 0~255 可由 SMALLINT 容纳，无需提升 |
+| `smallint UNSIGNED` | `INTEGER` | 0~65535 超出 SMALLINT 上限，提升 |
+| `mediumint UNSIGNED` | `INTEGER` | 0~16777215 可由 INTEGER 容纳，无需提升 |
+| `int UNSIGNED` | `BIGINT` | 0~4294967295 超出 INTEGER 上限，提升 |
+| `bigint UNSIGNED` | `NUMERIC(20,0)` | 0~18446744073709551615 超出 BIGINT 上限，提升 |
+| `ZEROFILL` 修饰 | 按 UNSIGNED 处理 | MySQL 中 ZEROFILL 隐含 UNSIGNED 语义 |
+| `bit(n)` (n ≤ 63) | `BIGINT` | BIT 本质是无符号整数（0 ~ 2^n-1） |
+| `bit(64)` | `NUMERIC(20,0)` | BIT(64) 最大值超出 BIGINT 上限 |
 
 ## Performance Optimizations (Applied)
 

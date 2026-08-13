@@ -33,6 +33,16 @@ var (
 	reJsonLength     = regexp.MustCompile(`(?i)\bjson\((\d+)\)\b`)
 	reJsonWithLength = regexp.MustCompile(`(?i)json\(\d+\)`)
 
+	// 无符号类型提升相关正则：MySQL 无符号整数需提升为能容纳完整无符号范围的 PG 类型
+	// bigint unsigned -> NUMERIC(20,0)，int unsigned -> BIGINT，smallint unsigned -> INTEGER
+	// MySQL 中 ZEROFILL 隐含 UNSIGNED 语义，因此同样按无符号处理
+	reBigintUnsigned   = regexp.MustCompile(`(?i)\bbigint(\(\d+\))?\s+(?:unsigned(?:\s+zerofill)?|zerofill)\b`)
+	reSmallintUnsigned = regexp.MustCompile(`(?i)\bsmallint(\(\d+\))?\s+(?:unsigned(?:\s+zerofill)?|zerofill)\b`)
+	reIntUnsigned      = regexp.MustCompile(`(?i)\b(?:int|integer)(\(\d+\))?\s+(?:unsigned(?:\s+zerofill)?|zerofill)\b`)
+	// BIT(64) 最大值 18446744073709551615 超出 BIGINT 上限，需映射为 NUMERIC(20,0)
+	// （MySQL BIT 宽度上限为 64，BIT(n<=63) 走标准 bit -> BIGINT 映射）
+	reBit64 = regexp.MustCompile(`(?i)\bbit\(64\)`)
+
 	// 类型清理相关正则
 	reVarcharMissingParen  = regexp.MustCompile(`(?i)varchar\(\d+`)
 	reExtraParens          = regexp.MustCompile(`([a-zA-Z]+)\((\s*\d+\s*)\)\s*\)`)
@@ -122,6 +132,8 @@ var typeMappingOrder = []string{
 	"char", "varchar", "text", "longtext", "mediumtext", "tinytext",
 	// 二进制类型
 	"blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary",
+	// 位字段类型（按无符号整数语义转换）
+	"bit",
 	// 日期时间类型
 	"datetime", "timestamp", "date", "time", "year",
 	// JSON类型
@@ -178,6 +190,10 @@ var typeMap = map[string]string{
 	"tinyblob":   "BYTEA",
 	"binary":     "BYTEA",
 	"varbinary":  "BYTEA",
+	// 位字段类型（本质是无符号整数：BIT(n) 取值 0 ~ 2^n-1）
+	// BIT(n<=63) 可由 BIGINT 容纳；BIT(64) 最大值 18446744073709551615 超出 BIGINT，
+	// 由 cleanTypeDefinition 中的 reBit64 先行转为 NUMERIC(20,0)
+	"bit": "BIGINT",
 	// 日期时间类型
 	"datetime":  "TIMESTAMP",
 	"timestamp": "TIMESTAMP",
@@ -954,9 +970,24 @@ func convertDataType(mysqlType string) (postgresType string, isAutoIncrement boo
 	return postgresType, isAutoIncrement, nil
 }
 
+// promoteUnsignedTypes 将 MySQL 无符号整数类型提升为能容纳完整无符号范围的等价类型，
+// 替换结果仍走标准类型映射链（bigint -> BIGINT、numeric(20,0) -> NUMERIC(20,0) 等）
+// bigint unsigned（0~18446744073709551615）超出 BIGINT 上限，提升为 numeric(20,0)
+// int unsigned（0~4294967295）超出 INTEGER 上限，提升为 bigint
+// smallint unsigned（0~65535）超出 SMALLINT 上限，提升为 int（映射为 INTEGER）
+// tinyint unsigned（0~255）可由 SMALLINT 容纳、mediumint unsigned（0~16777215）可由 INTEGER 容纳，无需提升
+func promoteUnsignedTypes(s string) string {
+	s = reBigintUnsigned.ReplaceAllString(s, "numeric(20,0)")
+	s = reSmallintUnsigned.ReplaceAllString(s, "int")
+	s = reIntUnsigned.ReplaceAllString(s, "bigint")
+	return s
+}
+
 // processColumnDefinition 处理列定义，提取列名、类型定义和注释
 func processColumnDefinition(line string, lowercaseColumns bool) (columnName string, typeDefinition string, columnComment string, isConstraint bool, isIncompleteType bool, err error) {
 	line = strings.ReplaceAll(line, " ON UPDATE CURRENT_TIMESTAMP", "")
+	// 先提升无符号整数类型，再剥离残留的 unsigned/zerofill 修饰
+	line = promoteUnsignedTypes(line)
 	line = strings.ReplaceAll(line, " unsigned", "")
 	line = strings.ReplaceAll(line, " UNSIGNED", "")
 
@@ -1136,8 +1167,13 @@ func cleanTypeDefinition(typeDefinition string) string {
 	})
 
 	lowerTypeDef = reMb4Suffix.ReplaceAllString(lowerTypeDef, "$1")
+	// 先提升无符号整数类型，再剥离残留的 unsigned/zerofill 修饰（兜底：确保任意调用路径都正确）
+	lowerTypeDef = promoteUnsignedTypes(lowerTypeDef)
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " unsigned", "")
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " zerofill", "")
+	// BIT(64) 超出 BIGINT 上限，先于标准 bit -> BIGINT 映射处理；
+	// BIT(n<=63) 走标准映射后残留的 (n) 由 reIntegerWithPrecision 清理
+	lowerTypeDef = reBit64.ReplaceAllString(lowerTypeDef, "NUMERIC(20,0)")
 
 	// 应用类型映射
 	for _, mysqlType := range typeMappingOrder {
@@ -1395,7 +1431,12 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 		if strings.Contains(typeDefinition, "AUTO_INCREMENT") {
 			typeDefinition = strings.ReplaceAll(typeDefinition, "AUTO_INCREMENT", "")
 			lowerTypeDef := strings.ToLower(typeDefinition)
-			if strings.Contains(lowerTypeDef, "bigint") {
+			if strings.Contains(lowerTypeDef, "numeric(20,0)") {
+				// bigint unsigned 已提升为 NUMERIC(20,0)，自增列使用 BIGSERIAL
+				// （已知限制：序列本身为 BIGINT 范围）
+				typeDefinition = strings.ReplaceAll(typeDefinition, "NUMERIC(20,0)", "BIGSERIAL")
+				typeDefinition = strings.ReplaceAll(typeDefinition, "numeric(20,0)", "BIGSERIAL")
+			} else if strings.Contains(lowerTypeDef, "bigint") {
 				replacements := []string{
 					"bigint(20)", "BIGSERIAL", "BIGINT(20)", "BIGSERIAL",
 					"bigint(11)", "BIGSERIAL", "BIGINT(11)", "BIGSERIAL",

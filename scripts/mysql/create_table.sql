@@ -123,12 +123,15 @@ CREATE TABLE case_11_autoincrement (
 ) ENGINE=InnoDB;
 
 -- 创建无符号类型表
+-- 无符号整数提升为能容纳完整无符号范围的 PG 类型：
+-- int unsigned(0~4294967295) -> BIGINT，bigint unsigned(0~18446744073709551615) -> NUMERIC(20,0)
+-- ZEROFILL 隐含 UNSIGNED 语义，同样按无符号处理
 DROP TABLE IF EXISTS case_12_unsigned;
 CREATE TABLE case_12_unsigned (
-  c1 int unsigned,                -- -> INTEGER
-  c2 bigint unsigned,             -- -> BIGINT
-  c3 int zerofill,                -- -> INTEGER
-  c4 int unsigned zerofill        -- -> INTEGER
+  c1 int unsigned,                -- -> BIGINT
+  c2 bigint unsigned,             -- -> NUMERIC(20,0)
+  c3 int zerofill,                -- -> BIGINT (zerofill 隐含 unsigned)
+  c4 int unsigned zerofill        -- -> BIGINT
 ) ENGINE=InnoDB;
 
 -- 创建枚举和集合类型表

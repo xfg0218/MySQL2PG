@@ -317,6 +317,13 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 | geometrycollection | GEOMETRYCOLLECTION | geometrycollection保持为GEOMETRYCOLLECTION |
 | bigint AUTO_INCREMENT | BIGSERIAL | 自增bigint转换为BIGSERIAL |
 | int AUTO_INCREMENT | SERIAL | 自增int转换为SERIAL |
+| tinyint unsigned | SMALLINT | 无符号范围0~255可由SMALLINT容纳 |
+| smallint unsigned | INTEGER | 无符号范围0~65535超出SMALLINT上限，提升为INTEGER |
+| mediumint unsigned | INTEGER | 无符号范围0~16777215可由INTEGER容纳 |
+| int unsigned | BIGINT | 无符号范围0~4294967295超出INTEGER上限，提升为BIGINT |
+| bigint unsigned | NUMERIC(20,0) | 无符号范围0~18446744073709551615超出BIGINT上限，提升为NUMERIC(20,0) |
+| bit(n) (n≤63) | BIGINT | BIT本质是无符号整数（0 ~ 2^n-1） |
+| bit(64) | NUMERIC(20,0) | BIT(64)最大值超出BIGINT上限 |
 
 ### 2. 数据转换
 - 支持百万级数据量转换，数据完整性保持率100%

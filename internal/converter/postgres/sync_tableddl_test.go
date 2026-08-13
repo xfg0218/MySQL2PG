@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -532,5 +533,154 @@ SUBPARTITIONS 2
 	// 检查分区 DDL 数量（只有主分区，没有子分区）
 	if len(result.PartitionDDLs) != 2 {
 		t.Errorf("expected 2 partition DDLs (ignoring subpartitions), got %d", len(result.PartitionDDLs))
+	}
+}
+
+// TestPromoteUnsignedTypes 验证无符号整数类型提升规则
+func TestPromoteUnsignedTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"bigint unsigned", "bigint unsigned", "numeric(20,0)"},
+		{"bigint(20) unsigned", "bigint(20) unsigned", "numeric(20,0)"},
+		{"大写 BIGINT UNSIGNED", "BIGINT(20) UNSIGNED", "numeric(20,0)"},
+		{"混合大小写 Unsigned", "bigint(20) Unsigned", "numeric(20,0)"},
+		{"bigint unsigned zerofill", "bigint(20) unsigned zerofill", "numeric(20,0)"},
+		{"bigint zerofill 隐含 unsigned", "bigint zerofill", "numeric(20,0)"},
+		{"int unsigned", "int unsigned", "bigint"},
+		{"int(11) unsigned", "int(11) unsigned", "bigint"},
+		{"integer unsigned", "integer unsigned", "bigint"},
+		{"int unsigned zerofill", "int(10) unsigned zerofill", "bigint"},
+		{"int zerofill 隐含 unsigned", "int zerofill", "bigint"},
+		{"smallint unsigned", "smallint unsigned", "int"},
+		{"smallint(6) unsigned", "smallint(6) unsigned", "int"},
+		{"mediumint unsigned 无需提升", "mediumint unsigned", "mediumint unsigned"},
+		{"tinyint unsigned 无需提升", "tinyint unsigned", "tinyint unsigned"},
+		{"有符号 bigint 保持不变", "bigint(20)", "bigint(20)"},
+		{"有符号 int 保持不变", "int(11)", "int(11)"},
+		{"decimal unsigned 不提升", "decimal(10,2) unsigned", "decimal(10,2) unsigned"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := promoteUnsignedTypes(tt.in); got != tt.want {
+				t.Errorf("promoteUnsignedTypes(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestConvertTableDDL_UnsignedIntegerTypes 验证无符号整数的端到端 DDL 转换：
+// 目标类型必须能容纳完整的无符号范围
+func TestConvertTableDDL_UnsignedIntegerTypes(t *testing.T) {
+	// 注意：表名不能包含 unsigned 字样，否则残留检查会误报
+	mysqlDDL := `CREATE TABLE test_uns_int (
+  c1 tinyint unsigned NOT NULL,
+  c2 smallint unsigned NOT NULL,
+  c3 mediumint unsigned NOT NULL,
+  c4 int unsigned NOT NULL,
+  c5 bigint unsigned NOT NULL,
+  c6 int(11) unsigned DEFAULT NULL,
+  c7 bigint(20) unsigned DEFAULT NULL,
+  c8 int unsigned zerofill NOT NULL,
+  c9 int zerofill NOT NULL,
+  c10 decimal(10,2) unsigned DEFAULT NULL,
+  c11 INT UNSIGNED NOT NULL,
+  c12 int NOT NULL,
+  c13 bigint NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+
+	result, err := ConvertTableDDL(mysqlDDL, false)
+	if err != nil {
+		t.Fatalf("ConvertTableDDL failed: %v", err)
+	}
+
+	checks := []struct {
+		col      string
+		wantType string
+		reason   string
+	}{
+		{"c1", "SMALLINT", "tinyint unsigned(0~255) 可由 SMALLINT 容纳"},
+		{"c2", "INTEGER", "smallint unsigned(0~65535) 超出 SMALLINT，需 INTEGER"},
+		{"c3", "INTEGER", "mediumint unsigned(0~16777215) 可由 INTEGER 容纳"},
+		{"c4", "BIGINT", "int unsigned(0~4294967295) 超出 INTEGER，需 BIGINT"},
+		{"c5", "NUMERIC(20,0)", "bigint unsigned(0~18446744073709551615) 超出 BIGINT，需 NUMERIC(20,0)"},
+		{"c6", "BIGINT", "int(11) unsigned 带显示宽度"},
+		{"c7", "NUMERIC(20,0)", "bigint(20) unsigned 带显示宽度"},
+		{"c8", "BIGINT", "int unsigned zerofill"},
+		{"c9", "BIGINT", "zerofill 隐含 unsigned 语义"},
+		{"c10", "DECIMAL(10,2)", "decimal unsigned 仅限制非负，无需提升"},
+		{"c11", "BIGINT", "大写 INT UNSIGNED"},
+		{"c12", "INTEGER", "有符号 int 回归验证"},
+		{"c13", "BIGINT", "有符号 bigint 回归验证"},
+	}
+	for _, c := range checks {
+		want := fmt.Sprintf(`"%s" %s`, c.col, c.wantType)
+		if !strings.Contains(result.DDL, want) {
+			t.Errorf("%s: DDL 应包含 %q，实际 DDL: %s", c.reason, want, result.DDL)
+		}
+	}
+
+	upper := strings.ToUpper(result.DDL)
+	if strings.Contains(upper, "UNSIGNED") || strings.Contains(upper, "ZEROFILL") {
+		t.Errorf("DDL 不应残留 UNSIGNED/ZEROFILL 修饰: %s", result.DDL)
+	}
+}
+
+// TestConvertTableDDL_UnsignedAutoIncrement 验证无符号自增列转换
+func TestConvertTableDDL_UnsignedAutoIncrement(t *testing.T) {
+	mysqlDDL := `CREATE TABLE test_unsigned_ai (
+  id bigint unsigned NOT NULL AUTO_INCREMENT,
+  id2 int unsigned NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB`
+
+	result, err := ConvertTableDDL(mysqlDDL, false)
+	if err != nil {
+		t.Fatalf("ConvertTableDDL failed: %v", err)
+	}
+
+	if !strings.Contains(result.DDL, `"id" BIGSERIAL`) {
+		t.Errorf("bigint unsigned AUTO_INCREMENT 应转为 BIGSERIAL，实际 DDL: %s", result.DDL)
+	}
+	if !strings.Contains(result.DDL, `"id2" BIGSERIAL`) {
+		t.Errorf("int unsigned AUTO_INCREMENT 应转为 BIGSERIAL，实际 DDL: %s", result.DDL)
+	}
+}
+
+// TestConvertTableDDL_BitTypes 验证 BIT 位字段类型转换
+// BIT(n) 本质是无符号整数（0 ~ 2^n-1）：n<=63 转 BIGINT，n>=64 转 NUMERIC(20,0)
+func TestConvertTableDDL_BitTypes(t *testing.T) {
+	mysqlDDL := `CREATE TABLE test_bit (
+  b1 bit(1) DEFAULT NULL,
+  b2 bit(32) DEFAULT NULL,
+  b3 bit(63) DEFAULT NULL,
+  b4 bit(64) DEFAULT NULL
+) ENGINE=InnoDB`
+
+	result, err := ConvertTableDDL(mysqlDDL, false)
+	if err != nil {
+		t.Fatalf("ConvertTableDDL failed: %v", err)
+	}
+
+	checks := []struct {
+		col      string
+		wantType string
+	}{
+		{"b1", "BIGINT"},
+		{"b2", "BIGINT"},
+		{"b3", "BIGINT"},
+		{"b4", "NUMERIC(20,0)"},
+	}
+	for _, c := range checks {
+		want := fmt.Sprintf(`"%s" %s`, c.col, c.wantType)
+		if !strings.Contains(result.DDL, want) {
+			t.Errorf("DDL 应包含 %q，实际 DDL: %s", want, result.DDL)
+		}
+	}
+
+	if strings.Contains(strings.ToLower(result.DDL), "bit(") {
+		t.Errorf("DDL 不应残留 bit(n) 类型: %s", result.DDL)
 	}
 }
