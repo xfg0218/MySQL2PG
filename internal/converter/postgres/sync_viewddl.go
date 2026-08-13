@@ -24,7 +24,7 @@ var (
 	reSep = regexp.MustCompile(`(?i)\s*separator\s*['"]([^'"]+)['"]`)
 	// 匹配 CONVERT 函数
 	reConvert = regexp.MustCompile(`(?i)\bconvert\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
-	reCast    = regexp.MustCompile(`(?i)\bcast\s*\(\s*(.+?)\s+as\s+([a-z_][a-z0-9_]*(?:\s*\(\s*[^)]+\s*\))?)\s*\)`)
+	reCast    = regexp.MustCompile(`(?i)\bcast\s*\(\s*(.+?)\s+as\s+([a-z_][a-z0-9_]*(?:\s+integer)?(?:\s*\(\s*[^)]+\s*\))?)\s*\)`)
 	// 匹配 CAST(x USING charset) 语法（MySQL 特有，PostgreSQL 不支持）
 	reCastUsing = regexp.MustCompile(`(?i)\bcast\s*\(\s*([^)]+)\s+using\s+[a-z0-9_]+\s*\)(?:\s+as\s+'[^']*')?`)
 	// 匹配 CONVERT(x USING charset) 语法（MySQL 特有，PostgreSQL 不支持）
@@ -1018,14 +1018,47 @@ func normalizeCastTypeForPG(t string) string {
 	normalized := strings.TrimSpace(t)
 	upper := strings.ToUpper(normalized)
 	switch {
-	case upper == "SIGNED", upper == "UNSIGNED":
+	// 整数类型
+	case upper == "SIGNED", upper == "UNSIGNED",
+		upper == "SIGNED INTEGER", upper == "UNSIGNED INTEGER":
 		return "BIGINT"
+	case upper == "YEAR":
+		return "INTEGER"
+
+	// 日期时间类型
 	case upper == "DATETIME":
 		return "TIMESTAMP"
-	case upper == "CHAR":
+	case strings.HasPrefix(upper, "DATETIME("):
+		return "TIMESTAMP" + normalized[len("DATETIME"):]
+
+	// 字符串类型
+	case upper == "CHAR", upper == "NCHAR":
 		return "TEXT"
+	case strings.HasPrefix(upper, "CHAR("), strings.HasPrefix(upper, "NCHAR("):
+		return "TEXT"
+
+	// 二进制类型
+	case upper == "BINARY", upper == "VARBINARY":
+		return "BYTEA"
+	case strings.HasPrefix(upper, "BINARY("), strings.HasPrefix(upper, "VARBINARY("):
+		return "BYTEA"
+
+	// 浮点数类型
+	case upper == "DOUBLE":
+		return "DOUBLE PRECISION"
+	case upper == "REAL":
+		return "DOUBLE PRECISION"
+	case upper == "FLOAT", strings.HasPrefix(upper, "FLOAT("):
+		return "REAL"
+
+	// JSON 类型
+	case upper == "JSON":
+		return "JSONB"
+
+	// DECIMAL 保留精度
 	case strings.HasPrefix(upper, "DECIMAL"):
 		return "NUMERIC" + normalized[len("DECIMAL"):]
+
 	default:
 		return normalized
 	}
