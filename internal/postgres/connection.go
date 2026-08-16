@@ -43,6 +43,16 @@ func (p *PostgreSQLVersionInfo) IsVersionGreaterOrEqual(major, minor int) bool {
 type Connection struct {
 	pool   *pgxpool.Pool
 	config *config.PostgreSQLConfig
+	ctx    context.Context
+}
+
+// context 返回连接持有的根 context
+// 未通过 NewConnection 构造时回退为 context.Background()，保证 nil 安全
+func (c *Connection) context() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // GetPgConnectionParams 获取 PostgreSQL 连接参数（导出方法）
@@ -247,8 +257,8 @@ func getTypedValue(dest *typedDest) interface{} {
 }
 
 // NewConnection 创建新的 PostgreSQL 连接
-func NewConnection(config *config.PostgreSQLConfig) (*Connection, error) {
-	ctx := context.Background()
+// ctx 为根 context（通常来自 signal.NotifyContext），取消后所有进行中的操作会被中断
+func NewConnection(ctx context.Context, config *config.PostgreSQLConfig) (*Connection, error) {
 
 	// 构建基础连接字符串
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
@@ -296,6 +306,7 @@ func NewConnection(config *config.PostgreSQLConfig) (*Connection, error) {
 	return &Connection{
 		pool:   pool,
 		config: config,
+		ctx:    ctx,
 	}, nil
 }
 
@@ -317,7 +328,7 @@ func (c *Connection) BeginTransaction(ctx context.Context) (pgx.Tx, error) {
 
 // ExecuteDDL 执行 DDL 语句
 func (c *Connection) ExecuteDDL(ddl string, originalMysqlDDL ...string) error {
-	ctx := context.Background()
+	ctx := c.context()
 	execDDL := sanitizeDDLForExecution(ddl)
 	_, err := c.pool.Exec(ctx, execDDL)
 	if err != nil {
@@ -332,7 +343,7 @@ func (c *Connection) ExecuteDDL(ddl string, originalMysqlDDL ...string) error {
 // ExecuteDDLWithTransaction 在事务中执行 DDL 语句
 func (c *Connection) ExecuteDDLWithTransaction(tx pgx.Tx, ddl string) error {
 	execDDL := sanitizeDDLForExecution(ddl)
-	_, err := tx.Exec(context.Background(), execDDL)
+	_, err := tx.Exec(c.context(), execDDL)
 	return err
 }
 
@@ -342,7 +353,7 @@ func sanitizeDDLForExecution(ddl string) string {
 
 // InsertData 插入数据
 func (c *Connection) InsertData(tableName string, columns []string, rows *sql.Rows) error {
-	ctx := context.Background()
+	ctx := c.context()
 
 	// 构建占位符模板
 	placeholders := make([]string, len(columns))
@@ -388,7 +399,7 @@ func (c *Connection) InsertData(tableName string, columns []string, rows *sql.Ro
 
 // InsertDataWithTransaction 在事务中插入数据
 func (c *Connection) InsertDataWithTransaction(tx pgx.Tx, tableName string, columns []string, rows *sql.Rows) error {
-	ctx := context.Background()
+	ctx := c.context()
 
 	// 构建占位符模板
 	placeholders := make([]string, len(columns))
@@ -434,7 +445,7 @@ func (c *Connection) InsertDataWithTransaction(tx pgx.Tx, tableName string, colu
 
 // BatchInsertDataWithTransaction 在事务中批量插入数据
 func (c *Connection) BatchInsertDataWithTransaction(tx pgx.Tx, tableName string, columns []string, batchSize int, rows *sql.Rows) error {
-	ctx := context.Background()
+	ctx := c.context()
 
 	// 构建列名字符串
 	var quotedColumns []string
@@ -570,7 +581,7 @@ func (c *Connection) executeBatchInsert(tx pgx.Tx, ctx context.Context, tableNam
 
 // GetVersion 获取 PostgreSQL 版本信息
 func (c *Connection) GetVersion() (string, error) {
-	ctx := context.Background()
+	ctx := c.context()
 	var version string
 	err := c.pool.QueryRow(ctx, "SELECT version()").Scan(&version)
 	if err != nil {
@@ -618,9 +629,10 @@ func ParsePostgreSQLVersion(version string) *PostgreSQLVersionInfo {
 }
 
 // TestConnection 测试 PostgreSQL 连接
-func TestConnection(config *config.PostgreSQLConfig) error {
+// ctx 用于取消控制（如信号取消）
+func TestConnection(ctx context.Context, config *config.PostgreSQLConfig) error {
 	// 测试连接时不使用压缩
-	conn, err := NewConnection(config)
+	conn, err := NewConnection(ctx, config)
 	if err != nil {
 		return fmt.Errorf("PostgreSQL 连接测试失败：%w", err)
 	}
@@ -631,7 +643,7 @@ func TestConnection(config *config.PostgreSQLConfig) error {
 
 // TableExists 检查表是否存在
 func (c *Connection) TableExists(tableName string) (bool, error) {
-	ctx := context.Background()
+	ctx := c.context()
 	query := `
 		SELECT EXISTS (
 			SELECT 1
@@ -650,7 +662,7 @@ func (c *Connection) TableExists(tableName string) (bool, error) {
 
 // GrantTablePrivileges 授予表权限
 func (c *Connection) GrantTablePrivileges(user, tableName string, privileges []string) error {
-	ctx := context.Background()
+	ctx := c.context()
 
 	// 构建权限字符串
 	privilegesStr := strings.Join(privileges, ", ")
@@ -668,7 +680,7 @@ func (c *Connection) GrantTablePrivileges(user, tableName string, privileges []s
 
 // GetTablePrivileges 获取表的权限信息
 func (c *Connection) GetTablePrivileges(tableName string) ([]map[string]string, error) {
-	ctx := context.Background()
+	ctx := c.context()
 
 	query := `
 		SELECT
@@ -707,7 +719,7 @@ func (c *Connection) GetTablePrivileges(tableName string) ([]map[string]string, 
 
 // GetTableRowCount 获取表的行数
 func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
-	ctx := context.Background()
+	ctx := c.context()
 	query := fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName)
 
 	var count int64
@@ -874,8 +886,11 @@ func resolveCopyColumnsAndPrimaryKey(columns []string, primaryKey string, lowerc
 	return copyColumns, resolvedPrimaryKey
 }
 
-func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKey string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, error) {
-	totalRows, lastValue, compositeLastValues, err := c.BatchInsertDataWithCompositeKeys(tx, tableName, columns, columnTypes, batchSize, []string{primaryKey}, lowercaseColumns, rows)
+// BatchInsertDataWithTransactionAndGetLastValue 批量插入数据并返回最后处理的主键值
+// ctx 用于取消控制：数据同步热路径传入脱离根取消信号的批次 context，
+// 保证取消时进行中的批次能完整执行完毕
+func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(ctx context.Context, tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKey string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, error) {
+	totalRows, lastValue, compositeLastValues, err := c.BatchInsertDataWithCompositeKeys(ctx, tx, tableName, columns, columnTypes, batchSize, []string{primaryKey}, lowercaseColumns, rows)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -888,8 +903,8 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 
 // BatchInsertDataWithCompositeKeys 批量插入数据并支持复合主键
 // 返回值：(总行数, 单主键最后值, 复合主键最后值列表, 错误)
-func (c *Connection) BatchInsertDataWithCompositeKeys(tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKeys []string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, []interface{}, error) {
-	ctx := context.Background()
+// ctx 用于取消控制，语义同 BatchInsertDataWithTransactionAndGetLastValue
+func (c *Connection) BatchInsertDataWithCompositeKeys(ctx context.Context, tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKeys []string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, []interface{}, error) {
 
 	// 准备批量插入
 	var rowCount int
@@ -1083,7 +1098,7 @@ func (c *Connection) GetCharset() (string, error) {
 		WHERE datname = $1
 	`
 	var charset string
-	err := c.pool.QueryRow(context.Background(), query, c.config.Database).Scan(&charset)
+	err := c.pool.QueryRow(c.context(), query, c.config.Database).Scan(&charset)
 	if err != nil {
 		return "", fmt.Errorf("获取 PostgreSQL 字符集失败：%w", err)
 	}

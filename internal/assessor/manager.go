@@ -20,16 +20,27 @@ type Assessor struct {
 	report          *AssessmentReport
 	mysqlVersion    *mysql.MySQLVersionInfo
 	postgresVersion *pgconn.PostgreSQLVersionInfo
+	ctx             context.Context
+}
+
+// context 返回评估器持有的根 context
+// 未通过 NewAssessor 设置时回退为 context.Background()，保证 nil 安全
+func (a *Assessor) context() context.Context {
+	if a.ctx == nil {
+		return context.Background()
+	}
+	return a.ctx
 }
 
 // NewAssessor 创建评估器
-func NewAssessor(mysqlConn *mysql.Connection, postgresConn *pgconn.Connection, cfg *config.Config) (*Assessor, error) {
+// ctx 为根 context（通常来自 signal.NotifyContext），用于取消控制
+func NewAssessor(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *pgconn.Connection, cfg *config.Config) (*Assessor, error) {
 	// 获取 MySQL 版本信息
 	mysqlVersion, _ := mysqlConn.GetVersionInfo()
-	
+
 	// 获取 PostgreSQL 版本信息
 	pgVersion, _ := postgresConn.GetVersionInfo()
-	
+
 	return &Assessor{
 		mysqlConn:       mysqlConn,
 		postgresConn:    postgresConn,
@@ -37,6 +48,7 @@ func NewAssessor(mysqlConn *mysql.Connection, postgresConn *pgconn.Connection, c
 		report:          &AssessmentReport{},
 		mysqlVersion:    mysqlVersion,
 		postgresVersion: pgVersion,
+		ctx:             ctx,
 	}, nil
 }
 
@@ -416,7 +428,7 @@ func (a *Assessor) assessObjects() {
 		table := &a.report.Tables[i]
 		// 获取表的 DDL
 		ddl := ""
-		if tableDDL, err := a.mysqlConn.GetTableDDL(context.Background(), table.Name); err == nil {
+		if tableDDL, err := a.mysqlConn.GetTableDDL(a.context(), table.Name); err == nil {
 			ddl = tableDDL
 			// 尝试使用现有转换函数进行转换，评估兼容性
 			result, err := postgres.ConvertTableDDL(ddl, a.config.Conversion.Options.LowercaseColumns)

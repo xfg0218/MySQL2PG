@@ -18,8 +18,8 @@ type DistributionKeyInfo struct {
 }
 
 // GetCurrentDistributionKey 获取表的当前分布键（Greenplum/Yugabyte）
-func GetCurrentDistributionKey(pool *pgxpool.Pool, tableName string, schemaName string, lowercaseColumns bool) (*DistributionKeyInfo, error) {
-	ctx := context.Background()
+// ctx 用于取消控制
+func GetCurrentDistributionKey(ctx context.Context, pool *pgxpool.Pool, tableName string, schemaName string, lowercaseColumns bool) (*DistributionKeyInfo, error) {
 
 	// Greenplum 查询分布键
 	query := `
@@ -122,14 +122,15 @@ func GenerateAlterDistributionKeySQL(tableName string, schemaName string, newDis
 }
 
 // AdjustDistributionKey 调整表的分布键
-func AdjustDistributionKey(pool *pgxpool.Pool, tableName string, schemaName string, uniqueColumns []string, lowercaseColumns bool, logFunc func(string, ...interface{})) (bool, error) {
+// ctx 用于取消控制
+func AdjustDistributionKey(ctx context.Context, pool *pgxpool.Pool, tableName string, schemaName string, uniqueColumns []string, lowercaseColumns bool, logFunc func(string, ...interface{})) (bool, error) {
 	// 处理默认 Schema
 	if schemaName == "" {
 		schemaName = "public" // 默认 schema
 	}
 
 	// 1. 查询当前分布键
-	currentDistKey, err := GetCurrentDistributionKey(pool, tableName, schemaName, lowercaseColumns)
+	currentDistKey, err := GetCurrentDistributionKey(ctx, pool, tableName, schemaName, lowercaseColumns)
 	if err != nil {
 		return false, fmt.Errorf("查询当前分布键失败: %w", err)
 	}
@@ -157,7 +158,6 @@ func AdjustDistributionKey(pool *pgxpool.Pool, tableName string, schemaName stri
 	logFunc("调整表 %s 分布键: (%s) → (%s)", tableName,
 		strings.Join(currentDistKey.Columns, ", "), strings.Join(newDistKey, ", "))
 
-	ctx := context.Background()
 	_, err = pool.Exec(ctx, alterSQL)
 	if err != nil {
 		return false, fmt.Errorf("执行分布键调整失败: %w", err)

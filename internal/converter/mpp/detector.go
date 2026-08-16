@@ -9,11 +9,10 @@ import (
 
 // DetectDatabaseType 自动检测 MPP 数据库类型
 // 优先使用版本号检测（更可靠），备用扩展检查
-func DetectDatabaseType(pool *pgxpool.Pool) string {
-	ctx := context.Background()
-
+// ctx 用于取消控制
+func DetectDatabaseType(ctx context.Context, pool *pgxpool.Pool) string {
 	// 优先：通过版本号检测（最可靠，不依赖扩展是否安装）
-	if dbType := detectFromVersion(pool); dbType != "unknown" {
+	if dbType := detectFromVersion(ctx, pool); dbType != "unknown" {
 		return dbType
 	}
 
@@ -29,8 +28,7 @@ func DetectDatabaseType(pool *pgxpool.Pool) string {
 }
 
 // detectFromVersion 通过 SELECT version() 检测数据库类型
-func detectFromVersion(pool *pgxpool.Pool) string {
-	ctx := context.Background()
+func detectFromVersion(ctx context.Context, pool *pgxpool.Pool) string {
 	var version string
 	err := pool.QueryRow(ctx, "SELECT version()").Scan(&version)
 	if err != nil {

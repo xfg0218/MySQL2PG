@@ -99,6 +99,7 @@ Start
 - **Lock-free Progress Aggregation**: Channel-based progress reporting eliminates mutex contention, achieving 51x faster progress updates (9155ns → 178ns) with 96% less memory.
 - **Connection Pool Management**: Supports custom connection pool settings for MySQL and PostgreSQL, with max connections up to 100+.
 - **Real-time Progress Monitoring**: Displays conversion progress in real-time, updating once per second, keeping users informed of the status.
+- **Safe Cancellation (Ctrl-C / SIGTERM)**: Context is threaded through the entire pipeline. On a cancel signal, no new tasks are dispatched; in-flight batches are allowed to commit fully before a safe exit (exit code 130), avoiding orphaned transactions caused by `kill -9`.
 
 ### 🎯 Precise Conversion Capability
 

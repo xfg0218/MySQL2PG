@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -54,6 +55,8 @@ type Manager struct {
 	totalTasks     int
 	completedTasks atomic.Int64
 	mutex          sync.Mutex
+	// 根 context（通常来自 signal.NotifyContext），取消后各阶段循环停止派发新任务
+	ctx context.Context
 	// 版本信息
 	mysqlVersion     *mysql.MySQLVersionInfo
 	postgreSQLVersion *postgres.PostgreSQLVersionInfo
@@ -98,7 +101,8 @@ type ConversionStageStat struct {
 
 // NewManager 创建新的转换管理器实例
 // 初始化数据库连接、配置和日志文件
-func NewManager(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config) (*Manager, error) {
+// ctx 为根 context（通常来自 signal.NotifyContext），用于取消控制；传 nil 时回退为 context.Background()
+func NewManager(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config) (*Manager, error) {
 	// 打开错误日志文件
 	errorLogFile, err := os.OpenFile(config.Run.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -120,8 +124,18 @@ func NewManager(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, 
 		config:              config,
 		errorLogFile:        errorLogFile,
 		logFile:             logFile,
+		ctx:                 ctx,
 		tableColumnNamesMap: make(map[string]map[string]string),
 	}, nil
+}
+
+// context 返回管理器持有的根 context
+// 未通过 NewManager 设置时回退为 context.Background()，保证 nil 安全
+func (m *Manager) context() context.Context {
+	if m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
 }
 
 // Close 关闭转换管理器
@@ -144,6 +158,11 @@ func (m *Manager) Close() error {
 // Run 执行完整的转换流程
 // 根据配置执行表DDL、数据、索引、函数、用户和权限的转换
 func (m *Manager) Run() error {
+	// 启动前检查取消信号
+	if err := m.context().Err(); err != nil {
+		return fmt.Errorf("转换已取消: %w", err)
+	}
+
 	m.Log("表MySQL 的DDL、数据、view、索引、函数、用户和权限的转换到 PostgreSQL ...")
 
 	// 检查是否启用了表列表功能
@@ -1257,6 +1276,11 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 	currentViewIndex := 0
 
 	for _, view := range views {
+		// 取消检查：根 context 取消后停止处理后续视图
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		// 检查是否在排除列表中
 		if m.config.Conversion.Options.SkipUseViewList {
 			if shouldSkipView(view.ViewName, m.config.Conversion.Options.SkipViewSet) {
@@ -1313,6 +1337,11 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 	currentTableIndex := 0
 
 	for _, table := range tables {
+		// 取消检查：根 context 取消后停止处理后续表
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 		currentTableIndex++
 
@@ -1534,6 +1563,11 @@ func (m *Manager) addColumnComments(table mysql.TableInfo, columnNameMap map[str
 // convertFunctions 转换函数
 func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore chan struct{}) error {
 	for _, function := range functions {
+		// 取消检查：根 context 取消后停止处理后续函数
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		// 检查是否在排除列表中
 		if m.config.Conversion.Options.SkipUseFunctionList {
 			if shouldSkipFunction(function.Name, m.config.Conversion.Options.SkipFunctionSet) {
@@ -1588,11 +1622,17 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		},
 		PostgresDB: m.postgresConn.GetPool(),
 		Schema:     schemaName,
+		Ctx:        m.context(),
 		LogFunc:    m.Log,
 		ErrorFunc:  m.logError,
 	}
 
 	for _, index := range indexes {
+		// 取消检查：根 context 取消后停止处理后续索引
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 
 		// 使用小写索引名进行日志输出
@@ -1666,6 +1706,11 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 // convertUsers 转换用户及权限
 func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) error {
 	for _, user := range users {
+		// 取消检查：根 context 取消后停止处理后续用户
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 
 		pgDDLs, err := ConvertUserDDL(user)
@@ -1706,6 +1751,7 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	progressChan := make(chan progressUpdate, m.config.Conversion.Limits.Concurrency)
 	return SyncTableData(
+		m.context(),
 		m.mysqlConn,
 		m.postgresConn,
 		m.config,
@@ -1725,6 +1771,11 @@ func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{
 // convertTablePrivileges 转换表权限
 func (m *Manager) convertTablePrivileges(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	for _, table := range tables {
+		// 取消检查：根 context 取消后停止处理后续表权限
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 		// 模拟权限转换
 		time.Sleep(100 * time.Millisecond)
@@ -1749,6 +1800,11 @@ func (m *Manager) convertTablePrivileges(tables []mysql.TableInfo, semaphore cha
 // convertTablePrivilegesNew 转换表权限（新的table_privileges选项）
 func (m *Manager) convertTablePrivilegesNew(tablePrivileges []mysql.TablePrivInfo, semaphore chan struct{}) error {
 	for _, tablePriv := range tablePrivileges {
+		// 取消检查：根 context 取消后停止处理后续表权限
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 
 		// 提取用户名（处理带主机和不带主机的情况）

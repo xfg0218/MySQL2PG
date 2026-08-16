@@ -59,7 +59,7 @@ type ViewInfo struct {
 func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, useTableList bool, tableList []string) ([]TableInfo, error) {
 	// 获取当前连接的用户名，以便更好地诊断权限问题
 	var currentUser string
-	if err := c.db.QueryRow("SELECT USER()").Scan(&currentUser); err != nil {
+	if err := c.db.QueryRowContext(c.context(), "SELECT USER()").Scan(&currentUser); err != nil {
 		return nil, fmt.Errorf("获取当前用户名失败: %w", err)
 	}
 
@@ -75,7 +75,7 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 		  AND table_type = 'BASE TABLE'
 		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
 	`
-	rows, err = c.db.Query(query, c.config.Database)
+	rows, err = c.db.QueryContext(c.context(), query, c.config.Database)
 
 	if err != nil {
 		// 如果失败，返回包含当前用户名的详细错误信息
@@ -149,6 +149,11 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 	semaphore := make(chan struct{}, maxConcurrent)
 
 	for _, tableName := range tableNames {
+		// 取消检查：根 context 取消后不再派发新的 DDL 获取任务
+		if err := c.context().Err(); err != nil {
+			break
+		}
+
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
@@ -156,7 +161,7 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			ctx, cancel := context.WithTimeout(c.context(), 120*time.Second)
 			defer cancel()
 
 			ddl, err := c.getTableDDL(ctx, name)
@@ -350,7 +355,7 @@ func (c *Connection) getTableDDL(ctx context.Context, tableName string) (string,
 func (c *Connection) getTableColumns(tableName string) ([]ColumnInfo, error) {
 	// 使用反引号包围表名，以处理包含特殊字符的表名
 	query := fmt.Sprintf("SHOW FULL COLUMNS FROM `%s`", tableName)
-	rows, err := c.db.Query(query)
+	rows, err := c.db.QueryContext(c.context(), query)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +397,7 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 		WHERE table_schema = ? AND table_name = ? 
 		ORDER BY index_name, seq_in_index
 	`
-	rows, err := c.db.Query(query, c.config.Database, tableName)
+	rows, err := c.db.QueryContext(c.context(), query, c.config.Database, tableName)
 	if err != nil {
 		return nil, err
 	}
@@ -440,7 +445,7 @@ func (c *Connection) GetAllIndexes() ([]IndexInfo, error) {
 		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
 		ORDER BY table_name, index_name, seq_in_index
 	`
-	rows, err := c.db.Query(query, c.config.Database)
+	rows, err := c.db.QueryContext(c.context(), query, c.config.Database)
 	if err != nil {
 		return nil, fmt.Errorf("查询索引信息失败：%w", err)
 	}
@@ -492,7 +497,7 @@ func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
 		WHERE table_schema = ?
 		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
 	`
-	rows, err := c.db.Query(query, database)
+	rows, err := c.db.QueryContext(c.context(), query, database)
 	if err != nil {
 		return nil, fmt.Errorf("查询视图定义失败: %w", err)
 	}
@@ -518,7 +523,7 @@ func (c *Connection) GetViews(database string) ([]ViewInfo, error) {
 func (c *Connection) GetViewDDL(viewName string) (string, error) {
 	query := `SHOW CREATE VIEW ` + viewName
 	var tableName, createView, charset, collation string
-	err := c.db.QueryRow(query).Scan(&tableName, &createView, &charset, &collation)
+	err := c.db.QueryRowContext(c.context(), query).Scan(&tableName, &createView, &charset, &collation)
 	if err != nil {
 		return "", fmt.Errorf("获取视图 DDL 失败：%w", err)
 	}
@@ -539,7 +544,7 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
 	query := fmt.Sprintf("SHOW FUNCTION STATUS WHERE Db = '%s'", c.config.Database)
 
-	rows, err := c.db.Query(query)
+	rows, err := c.db.QueryContext(c.context(), query)
 	if err != nil {
 		return nil, fmt.Errorf("获取函数列表失败: %w", err)
 	}
@@ -591,9 +596,14 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 
 	var functions []FunctionInfo
 	for _, funcName := range functionNames {
+		// 取消检查：根 context 取消后停止获取后续函数定义
+		if err := c.context().Err(); err != nil {
+			break
+		}
+
 		// 使用SHOW CREATE FUNCTION获取函数定义
 		funcQuery := fmt.Sprintf("SHOW CREATE FUNCTION `%s`", funcName)
-		funcRows, err := c.db.Query(funcQuery)
+		funcRows, err := c.db.QueryContext(c.context(), funcQuery)
 		if err != nil {
 			// 如果获取某个函数的定义失败，跳过该函数，继续处理其他函数
 			continue
@@ -693,7 +703,7 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 // GetUsers 获取所有用户信息
 func (c *Connection) GetUsers() ([]UserInfo, error) {
 	// MySQL中获取用户权限
-	rows, err := c.db.Query(`
+	rows, err := c.db.QueryContext(c.context(), `
 		SELECT user, host 
 		FROM mysql.user 
 		WHERE user != 'root' AND user != 'mysql.sys' AND 
@@ -736,7 +746,7 @@ func (c *Connection) getUserGrants(userName, host string) ([]string, error) {
 	var grantsStr string
 	// 直接使用字符串拼接构建查询语句
 	grantQuery := fmt.Sprintf("SHOW GRANTS FOR '%s'@'%s'", userName, host)
-	err := c.db.QueryRow(grantQuery).Scan(&grantsStr)
+	err := c.db.QueryRowContext(c.context(), grantQuery).Scan(&grantsStr)
 	if err != nil {
 		return nil, err
 	}
@@ -771,7 +781,7 @@ func (c *Connection) GetTablePrivileges() ([]TablePrivInfo, error) {
 		WHERE Table_priv != ''
 	`
 
-	rows, err := c.db.Query(query)
+	rows, err := c.db.QueryContext(c.context(), query)
 	if err != nil {
 		return nil, fmt.Errorf("获取表权限失败: %w", err)
 	}

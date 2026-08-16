@@ -55,10 +55,21 @@ func (m *MySQLVersionInfo) SupportsJsonTable() bool {
 type Connection struct {
 	db     *sql.DB
 	config *config.MySQLConfig
+	ctx    context.Context
+}
+
+// context 返回连接持有的根 context
+// 未通过 NewConnection 构造时回退为 context.Background()，保证 nil 安全
+func (c *Connection) context() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // NewConnection 创建新的MySQL连接
-func NewConnection(config *config.MySQLConfig) (*Connection, error) {
+// ctx 为根 context（通常来自 signal.NotifyContext），取消后所有进行中的查询会被中断
+func NewConnection(ctx context.Context, config *config.MySQLConfig) (*Connection, error) {
 	// 使用无压缩连接
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&charset=utf8mb4",
 		config.Username, config.Password, config.Host, config.Port, config.Database)
@@ -83,13 +94,14 @@ func NewConnection(config *config.MySQLConfig) (*Connection, error) {
 	db.SetConnMaxLifetime(time.Duration(config.ConnMaxLifetime) * time.Second) // 连接最大生命周期
 
 	// 测试连接
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		return nil, fmt.Errorf("MySQL连接测试失败: %w", err)
 	}
 
 	return &Connection{
 		db:     db,
 		config: config,
+		ctx:    ctx,
 	}, nil
 }
 
@@ -105,7 +117,7 @@ func (c *Connection) GetDB() *sql.DB {
 
 // GetTableColumns 获取表的列信息
 func (c *Connection) GetTableColumns(tableName string) ([]string, error) {
-	rows, err := c.db.Query(fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
+	rows, err := c.db.QueryContext(c.context(), fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
 	if err != nil {
 		return nil, fmt.Errorf("获取表列信息失败: %w", err)
 	}
@@ -128,7 +140,7 @@ func (c *Connection) GetTableColumns(tableName string) ([]string, error) {
 
 // GetTableColumnsWithTypes 获取表的列名和类型信息
 func (c *Connection) GetTableColumnsWithTypes(tableName string) ([]string, map[string]string, error) {
-	rows, err := c.db.Query(fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
+	rows, err := c.db.QueryContext(c.context(), fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
 	if err != nil {
 		return nil, nil, fmt.Errorf("获取表列信息失败: %w", err)
 	}
@@ -153,7 +165,9 @@ func (c *Connection) GetTableColumnsWithTypes(tableName string) ([]string, map[s
 }
 
 // GetTableData 获取表数据
-func (c *Connection) GetTableData(tableName string, columns []string, offset, limit int, orderBy string) (*sql.Rows, error) {
+// ctx 用于取消控制：数据同步热路径传入脱离根取消信号的批次 context，
+// 保证取消时进行中的批次能完整执行完毕
+func (c *Connection) GetTableData(ctx context.Context, tableName string, columns []string, offset, limit int, orderBy string) (*sql.Rows, error) {
 	// 使用反引号包围表名和列名，以处理包含特殊字符的名称
 	var quotedColumns []string
 	for _, col := range columns {
@@ -169,7 +183,7 @@ func (c *Connection) GetTableData(tableName string, columns []string, offset, li
 	}
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
-	rows, err := c.db.Query(query)
+	rows, err := c.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败: %w", err)
 	}
@@ -178,7 +192,8 @@ func (c *Connection) GetTableData(tableName string, columns []string, offset, li
 }
 
 // GetTableDataWithPagination 使用基于主键的分页获取表数据
-func (c *Connection) GetTableDataWithPagination(tableName string, columns []string, primaryKey string, lastValue interface{}, limit int) (*sql.Rows, error) {
+// ctx 用于取消控制，语义同 GetTableData
+func (c *Connection) GetTableDataWithPagination(ctx context.Context, tableName string, columns []string, primaryKey string, lastValue interface{}, limit int) (*sql.Rows, error) {
 	// 使用反引号包围表名、列名和主键，以处理包含特殊字符的名称
 	var quotedColumns []string
 	for _, col := range columns {
@@ -198,7 +213,7 @@ func (c *Connection) GetTableDataWithPagination(tableName string, columns []stri
 			columnsStr, tableName, primaryKey, limit)
 	}
 
-	rows, err := c.db.Query(query, args...)
+	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败: %w", err)
 	}
@@ -209,7 +224,8 @@ func (c *Connection) GetTableDataWithPagination(tableName string, columns []stri
 // GetTableDataWithCompositeKeyPagination 使用复合主键分页获取表数据
 // 性能优化：使用 WHERE (k1,k2,k3) > (?,?,?) 替代 OFFSET，避免大偏移量时的性能下降
 // MySQL 8.0+ 支持行构造函数比较
-func (c *Connection) GetTableDataWithCompositeKeyPagination(tableName string, columns []string, primaryKeys []string, lastValues []interface{}, limit int) (*sql.Rows, error) {
+// ctx 用于取消控制，语义同 GetTableData
+func (c *Connection) GetTableDataWithCompositeKeyPagination(ctx context.Context, tableName string, columns []string, primaryKeys []string, lastValues []interface{}, limit int) (*sql.Rows, error) {
 	// 使用反引号包围表名、列名和主键
 	var quotedColumns []string
 	for _, col := range columns {
@@ -238,7 +254,7 @@ func (c *Connection) GetTableDataWithCompositeKeyPagination(tableName string, co
 			columnsStr, tableName, primaryKeyStr, limit)
 	}
 
-	rows, err := c.db.Query(query, args...)
+	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败：%w", err)
 	}
@@ -252,7 +268,7 @@ func (c *Connection) GetTablePrimaryKeys(tableName string) ([]string, error) {
 	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
 	query := fmt.Sprintf("SHOW KEYS FROM `%s` WHERE Key_name = 'PRIMARY'", tableName)
 
-	rows, err := c.db.Query(query)
+	rows, err := c.db.QueryContext(c.context(), query)
 	if err != nil {
 		return nil, fmt.Errorf("获取表主键失败: %w", err)
 	}
@@ -328,7 +344,7 @@ func (c *Connection) EstimateRowSize(tableName string) (int64, error) {
 // GetTableRowCount 获取表的行数
 func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 	var count int64
-	err := c.db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM `%s`", tableName)).Scan(&count)
+	err := c.db.QueryRowContext(c.context(), fmt.Sprintf("SELECT COUNT(*) FROM `%s`", tableName)).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("获取表行数失败: %w", err)
 	}
@@ -339,7 +355,7 @@ func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 // GetVersion 获取MySQL版本信息
 func (c *Connection) GetVersion() (string, error) {
 	var version string
-	err := c.db.QueryRow("SELECT VERSION()").Scan(&version)
+	err := c.db.QueryRowContext(c.context(), "SELECT VERSION()").Scan(&version)
 	if err != nil {
 		return "", fmt.Errorf("获取MySQL版本失败: %w", err)
 	}
@@ -400,9 +416,10 @@ func ParseMySQLVersion(version string) *MySQLVersionInfo {
 }
 
 // TestConnection 测试MySQL连接
-func TestConnection(config *config.MySQLConfig) error {
+// ctx 用于取消控制（如信号取消）
+func TestConnection(ctx context.Context, config *config.MySQLConfig) error {
 	// 测试连接时不使用压缩
-	conn, err := NewConnection(config)
+	conn, err := NewConnection(ctx, config)
 	if err != nil {
 		return fmt.Errorf("MySQL连接测试失败: %w", err)
 	}
@@ -421,7 +438,7 @@ func (c *Connection) GetCharsetAndCollation() (string, string, error) {
 		FROM information_schema.SCHEMATA
 		WHERE schema_name = ?
 	`
-	err := c.db.QueryRow(query, c.config.Database).Scan(&charset, &collation)
+	err := c.db.QueryRowContext(c.context(), query, c.config.Database).Scan(&charset, &collation)
 	if err != nil {
 		// 如果查询失败，尝试使用 SHOW VARIABLES
 		charset, collation, err = c.getCharsetFromVariables()
@@ -437,11 +454,11 @@ func (c *Connection) GetCharsetAndCollation() (string, string, error) {
 func (c *Connection) getCharsetFromVariables() (string, string, error) {
 	var charset, collation string
 
-	if err := c.db.QueryRow("SHOW VARIABLES LIKE 'character_set_database'").Scan(&charset, &charset); err != nil {
+	if err := c.db.QueryRowContext(c.context(), "SHOW VARIABLES LIKE 'character_set_database'").Scan(&charset, &charset); err != nil {
 		return "", "", err
 	}
 
-	if err := c.db.QueryRow("SHOW VARIABLES LIKE 'collation_database'").Scan(&collation, &collation); err != nil {
+	if err := c.db.QueryRowContext(c.context(), "SHOW VARIABLES LIKE 'collation_database'").Scan(&collation, &collation); err != nil {
 		return "", "", err
 	}
 
