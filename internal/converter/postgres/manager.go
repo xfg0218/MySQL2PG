@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yourusername/mysql2pg/internal/config"
@@ -51,7 +52,7 @@ type Manager struct {
 	errorLogFile   *os.File
 	logFile        *os.File
 	totalTasks     int
-	completedTasks int
+	completedTasks atomic.Int64
 	mutex          sync.Mutex
 	// 版本信息
 	mysqlVersion     *mysql.MySQLVersionInfo
@@ -229,7 +230,7 @@ func (m *Manager) Run() error {
 		// 第四阶段：执行索引同步（如果启用）
 		if m.config.Conversion.Options.Indexes && len(indexes) > 0 {
 			m.Log("启用了索引同步功能，只同步指定的 %d 个索引", len(indexes))
-			m.completedTasks = 0
+			m.completedTasks.Store(0)
 
 			// 过滤Index
 			// 过滤出需要同步的表
@@ -1260,9 +1261,6 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 		if m.config.Conversion.Options.SkipUseViewList {
 			if shouldSkipView(view.ViewName, m.config.Conversion.Options.SkipViewSet) {
 				m.Log("跳过视图 %s（在排除列表中）", view.ViewName)
-				m.mutex.Lock()
-				m.completedTasks++
-				m.mutex.Unlock()
 				m.updateProgress()
 				continue
 			}
@@ -1294,16 +1292,12 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表视图 %s 成功\n", progress, m.completedTasks, m.totalTasks, view.ViewName)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表视图 %s 成功\n", progress, completed, m.totalTasks, view.ViewName)
 		}
 
 		m.Log("转换表视图 %s 完成", view.ViewName)
@@ -1360,16 +1354,12 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		if tableExists {
 			if m.config.Conversion.Options.SkipExistingTables {
 				// 更新进度
-				m.mutex.Lock()
-				m.completedTasks++
-				progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-				m.mutex.Unlock()
+				completed := m.completeTask()
+				progress := float64(completed) / float64(m.totalTasks) * 100
 
 				// 显示跳过信息（根据配置决定是否在控制台显示）
 				if m.config.Run.ShowConsoleLogs {
-					m.mutex.Lock()
-					fmt.Printf("进度: %.2f%% (%d/%d) : 表 %s 已存在，跳过创建\n", progress, m.completedTasks, m.totalTasks, table.Name)
-					m.mutex.Unlock()
+					fmt.Printf("进度: %.2f%% (%d/%d) : 表 %s 已存在，跳过创建\n", progress, completed, m.totalTasks, table.Name)
 				}
 
 				m.Log("表 %s 已存在，跳过创建", table.Name)
@@ -1431,16 +1421,12 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		m.addColumnComments(table, pgResult.ColumnNames)
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 成功\n", progress, m.completedTasks, m.totalTasks, table.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 成功\n", progress, completed, m.totalTasks, table.Name)
 		}
 
 		m.Log("转换表 %s 成功", table.Name)
@@ -1552,9 +1538,6 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 		if m.config.Conversion.Options.SkipUseFunctionList {
 			if shouldSkipFunction(function.Name, m.config.Conversion.Options.SkipFunctionSet) {
 				m.Log("跳过函数 %s（在排除列表中）", function.Name)
-				m.mutex.Lock()
-				m.completedTasks++
-				m.mutex.Unlock()
 				m.updateProgress()
 				continue // 移除错误的 semaphore
 			}
@@ -1580,16 +1563,12 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换函数 %s 成功\n", progress, m.completedTasks, m.totalTasks, function.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换函数 %s 成功\n", progress, completed, m.totalTasks, function.Name)
 		}
 
 		<-semaphore
@@ -1627,18 +1606,11 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 			if err != nil {
 				m.logError(fmt.Sprintf("处理 UNIQUE 索引 %s 失败: %v", lowercaseIndexName, err))
 				// 跳过该索引，继续处理其他索引
-				m.mutex.Lock()
-				m.completedTasks++
-				m.mutex.Unlock()
 				<-semaphore
 				m.updateProgress()
 				continue
 			}
 			if !shouldCreate {
-				// 更新进度
-				m.mutex.Lock()
-				m.completedTasks++
-				m.mutex.Unlock()
 				<-semaphore
 				m.updateProgress()
 				continue
@@ -1657,10 +1629,6 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 
 		// 如果没有生成DDL语句（比如只包含pri_key的索引），则跳过
 		if pgDDL == "" {
-			// 更新进度
-			m.mutex.Lock()
-			m.completedTasks++
-			m.mutex.Unlock()
 			<-semaphore
 			m.updateProgress()
 			continue
@@ -1682,16 +1650,12 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : [%s]转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, index.Table, lowercaseIndexName)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : [%s]转换索引 %s 成功\n", progress, completed, m.totalTasks, index.Table, lowercaseIndexName)
 		}
 
 		<-semaphore
@@ -1725,16 +1689,12 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换用户 %s 的权限成功\n", progress, m.completedTasks, m.totalTasks, user.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换用户 %s 的权限成功\n", progress, completed, m.totalTasks, user.Name)
 		}
 
 		<-semaphore
@@ -1770,16 +1730,12 @@ func (m *Manager) convertTablePrivileges(tables []mysql.TableInfo, semaphore cha
 		time.Sleep(100 * time.Millisecond)
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 的权限成功\n", progress, m.completedTasks, m.totalTasks, table.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 的权限成功\n", progress, completed, m.totalTasks, table.Name)
 		}
 
 		// 记录到日志文件
@@ -1859,12 +1815,9 @@ func (m *Manager) convertTablePrivilegesNew(tablePrivileges []mysql.TablePrivInf
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		completed := m.completedTasks
+		completed := m.completeTask()
 		total := m.totalTasks
 		progress := float64(completed) / float64(total) * 100
-		m.mutex.Unlock()
 
 		// 显示转换信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
@@ -1924,15 +1877,18 @@ func (m *Manager) logError(errMsg string, args ...interface{}) {
 	}
 }
 
-// updateProgress 更新进度
-func (m *Manager) updateProgress() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+// completeTask 原子地增加已完成任务数并返回增加后的值
+// 所有阶段的任务计数统一通过该方法或 updateProgress 完成，避免多处手动递增
+func (m *Manager) completeTask() int64 {
+	return m.completedTasks.Add(1)
+}
 
-	m.completedTasks++
+// updateProgress 更新进度（递增计数并输出通用进度日志的唯一入口）
+func (m *Manager) updateProgress() {
+	completed := m.completedTasks.Add(1)
 	if m.config.Run.ShowProgress && m.totalTasks > 0 {
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.Log("进度: %.2f%% (%d/%d)", progress, m.completedTasks, m.totalTasks)
+		progress := float64(completed) / float64(m.totalTasks) * 100
+		m.Log("进度: %.2f%% (%d/%d)", progress, completed, m.totalTasks)
 	}
 }
 

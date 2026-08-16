@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yourusername/mysql2pg/internal/config"
@@ -39,7 +40,7 @@ type progressUpdate struct {
 }
 
 // SyncTableData 同步表数据（主协调函数）
-func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), updateProgress func(), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}, progressChan chan progressUpdate) error {
+func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), updateProgress func(), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}, progressChan chan progressUpdate) error {
 	// 启动专用进度消费者 goroutine
 	progressDone := make(chan struct{})
 	go func() {
@@ -111,7 +112,7 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 }
 
 // syncSingleTable 同步单个表的数据
-func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, progressChan chan progressUpdate) error {
+func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, progressChan chan progressUpdate) error {
 	// 获取表列信息
 	columns, columnTypes, err := mysqlConn.GetTableColumnsWithTypes(table.Name)
 	if err != nil {
@@ -153,13 +154,13 @@ func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connect
 	}
 
 	// 显示同步成功信息
-	logSyncComplete(config, table.Name, processedRows, validationResult, log, logError, mutex, completedTasks, totalTasks)
+	logSyncComplete(config, table.Name, processedRows, validationResult, log, logError, completedTasks, totalTasks)
 
 	return nil
 }
 
 // handleEmptyTable 处理空表逻辑
-func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, tableName string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency) error {
+func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, tableName string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency) error {
 	log("表 %s 没有数据，跳过同步", tableName)
 
 	// 执行数据校验（如果启用）
@@ -190,11 +191,10 @@ func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, 
 
 	// 显示同步成功信息
 	if config.Run.ShowConsoleLogs {
-		mutex.Lock()
-		overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
-		currentTask := *completedTasks + 1
+		completed := completedTasks.Load()
+		overallProgress := float64(completed) / float64(totalTasks) * 100
+		currentTask := completed + 1
 		fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 数据成功，共有 0 行数据，%s \n", overallProgress, currentTask, totalTasks, tableName, validationResult)
-		mutex.Unlock()
 	}
 
 	log("表 %s 同步完成，0 行数据，%s", tableName, validationResult)
@@ -537,14 +537,13 @@ func validateData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection
 }
 
 // logSyncComplete 记录同步完成信息
-func logSyncComplete(config *config.Config, tableName string, processedRows int64, validationResult string, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *int, totalTasks int) {
+func logSyncComplete(config *config.Config, tableName string, processedRows int64, validationResult string, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), completedTasks *atomic.Int64, totalTasks int) {
 	// 显示同步成功信息（根据配置决定是否在控制台显示）
 	if config.Run.ShowConsoleLogs {
-		mutex.Lock()
-		overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
-		currentTask := *completedTasks + 1
+		completed := completedTasks.Load()
+		overallProgress := float64(completed) / float64(totalTasks) * 100
+		currentTask := completed + 1
 		fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 完成，%d 行数据，%s\n", overallProgress, currentTask, totalTasks, tableName, processedRows, validationResult)
-		mutex.Unlock()
 	}
 
 	// 记录同步完成信息
