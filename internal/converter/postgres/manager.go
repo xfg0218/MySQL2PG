@@ -68,6 +68,8 @@ type Manager struct {
 	inconsistentTables []TableDataInconsistency
 	// 存储包含 TIMESTAMP 列（映射为 TIMESTAMPTZ）的表名，迁移完成后输出供用户复核时区语义
 	timestampConvertedTables []string
+	// 存储无符号列转换说明（DECIMAL 系补 CHECK 约束、BIGINT UNSIGNED 提升等），迁移完成后输出供用户复核
+	unsignedConvertedReports []string
 	// 存储表名到列名映射的映射
 	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
 	// 评估模式：只评估不写入
@@ -1373,6 +1375,10 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		if HasTimestampColumn(table.DDL) {
 			m.timestampConvertedTables = append(m.timestampConvertedTables, table.Name)
 		}
+		if len(pgResult.UnsignedConversions) > 0 {
+			m.unsignedConvertedReports = append(m.unsignedConvertedReports,
+				fmt.Sprintf("表 %s: %s", table.Name, strings.Join(pgResult.UnsignedConversions, "; ")))
+		}
 		m.mutex.Unlock()
 
 		// 先检查表是否存在
@@ -2010,6 +2016,23 @@ func (m *Manager) generateSummaryTable() {
 		m.Log("以下 %d 张表包含 MySQL TIMESTAMP 列，已映射为 PostgreSQL TIMESTAMPTZ（存储 instant，值已按 UTC 对齐）:", len(timestampTables))
 		for _, t := range timestampTables {
 			m.Log("  - %s", t)
+		}
+	}
+
+	// 输出无符号列转换说明，供用户复核（DECIMAL 系 CHECK 约束、BIGINT UNSIGNED 类型提升）
+	m.mutex.Lock()
+	unsignedReports := append([]string(nil), m.unsignedConvertedReports...)
+	m.mutex.Unlock()
+	if len(unsignedReports) > 0 {
+		if m.config.Run.ShowConsoleLogs {
+			fmt.Printf("\n以下表包含 UNSIGNED 列转换，请复核类型提升与非负约束语义:\n")
+			for _, r := range unsignedReports {
+				fmt.Printf("  - %s\n", r)
+			}
+		}
+		m.Log("以下表包含 UNSIGNED 列转换，请复核类型提升与非负约束语义:")
+		for _, r := range unsignedReports {
+			m.Log("  - %s", r)
 		}
 	}
 }

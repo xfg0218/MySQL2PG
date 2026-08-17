@@ -413,6 +413,7 @@ Report is a single self-contained HTML file with inline CSS and Google Fonts —
 | `mediumint UNSIGNED` | `INTEGER` | 0~16777215 可由 INTEGER 容纳，无需提升 |
 | `int UNSIGNED` | `BIGINT` | 0~4294967295 超出 INTEGER 上限，提升 |
 | `bigint UNSIGNED` | `NUMERIC(20,0)` | 0~18446744073709551615 超出 BIGINT 上限，提升 |
+| `DECIMAL/FLOAT/DOUBLE UNSIGNED` | 对应类型 + `CHECK (col >= 0)` | PG 无无符号数值类型，非负约束以 CHECK 表达；转换报告输出清单 |
 | `ZEROFILL` 修饰 | 按 UNSIGNED 处理 | MySQL 中 ZEROFILL 隐含 UNSIGNED 语义 |
 | `bit(n)` (n ≤ 63) | `BIGINT` | BIT 本质是无符号整数（0 ~ 2^n-1） |
 | `bit(64)` | `NUMERIC(20,0)` | BIT(64) 最大值超出 BIGINT 上限 |

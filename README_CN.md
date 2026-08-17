@@ -323,6 +323,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 | mediumint unsigned | INTEGER | 无符号范围0~16777215可由INTEGER容纳 |
 | int unsigned | BIGINT | 无符号范围0~4294967295超出INTEGER上限，提升为BIGINT |
 | bigint unsigned | NUMERIC(20,0) | 无符号范围0~18446744073709551615超出BIGINT上限，提升为NUMERIC(20,0) |
+| decimal/float/double unsigned | NUMERIC/REAL/DOUBLE PRECISION + CHECK (col >= 0) | PG 无无符号数值类型，非负约束以 CHECK 表达（MySQL 8.0.17+ 已弃用该语法） |
 | bit(n) (n≤63) | BIGINT | BIT本质是无符号整数（0 ~ 2^n-1） |
 | bit(64) | NUMERIC(20,0) | BIT(64)最大值超出BIGINT上限 |
 

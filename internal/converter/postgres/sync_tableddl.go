@@ -228,6 +228,9 @@ type ConvertTableDDLResult struct {
 	ColumnNames    map[string]string // 键：原始列名，值：转换后的列名（带双引号格式）
 	ColumnComments map[string]string // 键：原始列名，值：列注释
 	PartitionDDLs  []string
+	// UnsignedConversions 记录无符号列的转换说明（DECIMAL 系补 CHECK 约束、
+	// BIGINT UNSIGNED 提升为 NUMERIC(20,0) 等），用于迁移报告提示用户复核
+	UnsignedConversions []string
 }
 
 // parseTableInfo 解析表名和是否为临时表
@@ -987,6 +990,19 @@ func promoteUnsignedTypes(s string) string {
 	return s
 }
 
+// reDecimalUnsignedColumn 匹配 DECIMAL 系类型（decimal/numeric/float/double/real）
+// 带 UNSIGNED/ZEROFILL 修饰的列定义；列名支持反引号、双引号（ConvertTableDDL
+// 会将反引号统一替换为双引号）与无引号三种形式
+var reDecimalUnsignedColumn = regexp.MustCompile("(?i)^\\s*[`\"]?[A-Za-z_$][A-Za-z0-9_$]*[`\"]?\\s+(?:double precision|decimal|numeric|float|double|real)\\s*(?:\\(\\d+(?:,\\s*\\d+)?\\))?[^,\\n]*\\b(?:unsigned|zerofill)\\b")
+
+// isUnsignedDecimalLikeColumn 判断 MySQL 列定义是否为带 UNSIGNED/ZEROFILL 修饰的
+// DECIMAL 系类型（decimal/numeric/float/double/real）
+// PostgreSQL 没有无符号类型，整数系的 UNSIGNED 已由 promoteUnsignedTypes 提升类型覆盖，
+// DECIMAL 系的非负语义无法通过类型表达，需在转换后补充 CHECK (col >= 0) 约束
+func isUnsignedDecimalLikeColumn(columnLine string) bool {
+	return reDecimalUnsignedColumn.MatchString(columnLine)
+}
+
 // processColumnDefinition 处理列定义，提取列名、类型定义和注释
 func processColumnDefinition(line string, lowercaseColumns bool) (columnName string, typeDefinition string, columnComment string, isConstraint bool, isIncompleteType bool, err error) {
 	line = strings.ReplaceAll(line, " ON UPDATE CURRENT_TIMESTAMP", "")
@@ -1315,6 +1331,8 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 	var primaryKeyColumns []string
 	columnNames := make(map[string]string)
 	generatedExpressionMap := make(map[string]string)
+	// 记录无符号列的转换说明（DECIMAL 系补 CHECK 约束、BIGINT UNSIGNED 提升等），用于迁移报告
+	var unsignedNotes []string
 
 	var incompleteTypeDef bool
 	var partialTypeDef string
@@ -1403,6 +1421,12 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 			continue
 		}
 
+		// 在剥离 UNSIGNED 修饰前记录符号性：
+		// DECIMAL 系 UNSIGNED 需在转换后补 CHECK (col >= 0)（PG 无无符号类型）；
+		// BIGINT UNSIGNED 会被提升为 NUMERIC(20,0)，记录备查（可能影响 ORM 映射）
+		isUnsignedDecimalLike := isUnsignedDecimalLikeColumn(trimmedLine)
+		isBigintUnsigned := reBigintUnsigned.MatchString(trimmedLine)
+
 		columnName, typeDefinition, columnComment, isConstraint, isIncompleteType, err := processColumnDefinition(trimmedLine, lowercaseColumns)
 		if err != nil {
 			return nil, err
@@ -1483,6 +1507,14 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 			}
 		}
 		newColumnDefinition := fmt.Sprintf(`"%s" %s`, columnName, typeDefinition)
+		if isUnsignedDecimalLike {
+			// MySQL DECIMAL 系 UNSIGNED 的非负语义在 PostgreSQL 中以 CHECK 约束表达
+			newColumnDefinition += fmt.Sprintf(` CHECK ("%s" >= 0)`, columnName)
+			unsignedNotes = append(unsignedNotes, fmt.Sprintf("列 %s: DECIMAL 系 UNSIGNED → %s + CHECK (\"%s\" >= 0)", columnName, typeDefinition, columnName))
+		}
+		if isBigintUnsigned {
+			unsignedNotes = append(unsignedNotes, fmt.Sprintf("列 %s: BIGINT UNSIGNED → %s（超出 int64 的值需 ORM/应用按大数处理）", columnName, typeDefinition))
+		}
 		columnDefinitions = append(columnDefinitions, newColumnDefinition)
 	}
 
@@ -1591,11 +1623,12 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 	}
 
 	return &ConvertTableDDLResult{
-		DDL:            finalDDL,
-		TableComment:   tableComment,
-		ColumnNames:    columnNamesMap,
-		ColumnComments: columnCommentsMap,
-		PartitionDDLs:  partitionDDLs,
+		DDL:                 finalDDL,
+		TableComment:        tableComment,
+		ColumnNames:         columnNamesMap,
+		ColumnComments:      columnCommentsMap,
+		PartitionDDLs:       partitionDDLs,
+		UnsignedConversions: unsignedNotes,
 	}, nil
 }
 
