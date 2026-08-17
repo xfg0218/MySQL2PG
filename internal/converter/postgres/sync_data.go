@@ -150,7 +150,7 @@ func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresC
 
 	// 如果表为空，处理空表逻辑
 	if totalRows == 0 {
-		return handleEmptyTable(postgresConn, config, table.Name, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables)
+		return handleEmptyTable(postgresConn, config, table.Name, table.DDL, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables)
 	}
 
 	// 取消检查：开始实际写入前若已取消则直接退出
@@ -177,6 +177,10 @@ func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresC
 		return err
 	}
 
+	// 回填自增列序列：CopyFrom 显式写入 id 不推进 PG 序列，
+	// 必须在数据插入完成后执行（TRUNCATE 会将序列重置回初始值）
+	backfillAutoIncrementSequence(postgresConn, config, table.Name, table.DDL, log, logError)
+
 	// 显示同步成功信息
 	logSyncComplete(config, table.Name, processedRows, validationResult, log, logError, completedTasks, totalTasks)
 
@@ -184,8 +188,12 @@ func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresC
 }
 
 // handleEmptyTable 处理空表逻辑
-func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, tableName string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency) error {
+// mysqlDDL 用于解析表级 AUTO_INCREMENT=N：空表也可能带有业务故意设置的自增起始值
+func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, tableName, mysqlDDL string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency) error {
 	log("表 %s 没有数据，跳过同步", tableName)
+
+	// 回填自增列序列：空表也可能通过 AUTO_INCREMENT=N 指定了起始值
+	backfillAutoIncrementSequence(postgresConn, config, tableName, mysqlDDL, log, logError)
 
 	// 执行数据校验（如果启用）
 	var validationResult string

@@ -1449,6 +1449,10 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		// 为每个列添加注释
 		m.addColumnComments(table, pgResult.ColumnNames)
 
+		// 按 MySQL 表级 AUTO_INCREMENT=N 设置序列初值
+		// 覆盖 data:false 仅结构迁移的场景（数据阶段的回填以表内最大值为准）
+		m.backfillInitialSequence(table)
+
 		// 更新进度
 		completed := m.completeTask()
 		progress := float64(completed) / float64(m.totalTasks) * 100

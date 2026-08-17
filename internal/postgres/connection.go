@@ -731,6 +731,33 @@ func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 	return count, nil
 }
 
+// SyncAutoIncrementSequence 回填自增列（SERIAL/BIGSERIAL）关联的序列
+// 使下一次隐式插入获得正确的下一个值。
+// nextValueLowerBound 为序列下一值的下限（MySQL 表级 AUTO_INCREMENT 起始值，未知时传 0），
+// 实际设置的下一值为 GREATEST(表内当前最大值+1, nextValueLowerBound)。
+// 返回 (false, nil) 表示目标列未关联序列（如既有表非 SERIAL 建表），调用方应告警并继续。
+func (c *Connection) SyncAutoIncrementSequence(tableName, columnName string, nextValueLowerBound int64) (bool, error) {
+	ctx := c.context()
+	tbl := pgQuoteIdentifier(tableName)
+	col := pgQuoteIdentifier(columnName)
+	query := fmt.Sprintf(
+		`SELECT setval(pg_get_serial_sequence('%s', '%s'), GREATEST(COALESCE((SELECT MAX(%s) FROM %s), 0) + 1, %d), false)`,
+		strings.ReplaceAll(tbl, "'", "''"),
+		strings.ReplaceAll(col, "'", "''"),
+		col, tbl, nextValueLowerBound)
+
+	var next *int64
+	if err := c.pool.QueryRow(ctx, query).Scan(&next); err != nil {
+		return false, fmt.Errorf("回填表 %s 列 %s 序列失败：%w", tableName, columnName, err)
+	}
+	return next != nil, nil
+}
+
+// pgQuoteIdentifier 用双引号包裹 PostgreSQL 标识符，并转义其中的双引号
+func pgQuoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
 func getColumnTypeByName(columnName string, columnTypes map[string]string) string {
 	if len(columnTypes) == 0 {
 		return ""
