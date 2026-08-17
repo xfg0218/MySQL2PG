@@ -2551,9 +2551,12 @@ CREATE TABLE `case_168_merge` (
 --   1) CHAR/VARCHAR 全长度表使用 latin1（1字节/字符），否则超出 MySQL 65,535 字节行宽限制
 --   2) VARCHAR/VARBINARY 超过行宽限制后无法全量穷举，按 2 的幂与常见边界值分表采样
 --   3) 长度从 1 开始：PostgreSQL 的 CHAR(n)/VARCHAR(n) 要求 n >= 1，MySQL 的 0 长度无法对应
+--   4) 四张全覆盖宽表（169/170/175/176）使用 MyISAM 引擎：InnoDB 16K 页另有 ~8126 字节
+--      行宽限制（定长列无法溢出外部页、大量变长列溢出指针开销仍超限），MyISAM 只受 65,535 限制
 -- ============================================================
 -- 创建 CHAR 全长度测试表：CHAR(1) ~ CHAR(255)，每个长度一个字段，测试全长度转换
 -- 使用 latin1（1字节/字符）以满足 MySQL 65,535 字节行宽限制；CHAR(n) -> CHAR(n)
+-- 引擎使用 MyISAM：InnoDB 16K 页有 ~8126 字节行宽限制，定长 CHAR 无法溢出到外部页
 DROP TABLE IF EXISTS case_169_char_full;
 CREATE TABLE case_169_char_full (
   col_char_001 char(1),
@@ -2811,10 +2814,11 @@ CREATE TABLE case_169_char_full (
   col_char_253 char(253),
   col_char_254 char(254),
   col_char_255 char(255)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+) ENGINE=MyISAM DEFAULT CHARSET=latin1;
 
 -- 创建 VARCHAR 行宽内全长度测试表：VARCHAR(1) ~ VARCHAR(355)，每个长度一个字段
 -- 355 为 MySQL 65,535 字节行宽限制内可容纳的最大连续覆盖范围（latin1）；VARCHAR(n) -> VARCHAR(n)
+-- 引擎使用 MyISAM：InnoDB 16K 页有 ~8126 字节行宽限制，大量 VARCHAR 列的溢出指针开销仍会超限
 DROP TABLE IF EXISTS case_170_varchar_full;
 CREATE TABLE case_170_varchar_full (
   col_varchar_001 varchar(1),
@@ -3172,7 +3176,7 @@ CREATE TABLE case_170_varchar_full (
   col_varchar_353 varchar(353),
   col_varchar_354 varchar(354),
   col_varchar_355 varchar(355)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+) ENGINE=MyISAM DEFAULT CHARSET=latin1;
 
 -- 创建 VARCHAR 长长度边界测试表 A（超出单表行宽限制，按边界值分表采样）
 DROP TABLE IF EXISTS case_171_varchar_bounds_a;
@@ -3207,6 +3211,7 @@ CREATE TABLE case_174_varchar_max (
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 
 -- 创建 BINARY 全长度测试表：BINARY(1) ~ BINARY(255)，每个长度一个字段；BINARY(n) -> BYTEA
+-- 引擎使用 MyISAM：InnoDB 16K 页有 ~8126 字节行宽限制，定长 BINARY 无法溢出到外部页
 DROP TABLE IF EXISTS case_175_binary_full;
 CREATE TABLE case_175_binary_full (
   col_binary_001 binary(1),
@@ -3464,9 +3469,10 @@ CREATE TABLE case_175_binary_full (
   col_binary_253 binary(253),
   col_binary_254 binary(254),
   col_binary_255 binary(255)
-) ENGINE=InnoDB;
+) ENGINE=MyISAM;
 
 -- 创建 VARBINARY 行宽内全长度测试表：VARBINARY(1) ~ VARBINARY(355)，每个长度一个字段；VARBINARY(n) -> BYTEA
+-- 引擎使用 MyISAM：InnoDB 16K 页有 ~8126 字节行宽限制，大量 VARBINARY 列的溢出指针开销仍会超限
 DROP TABLE IF EXISTS case_176_varbinary_full;
 CREATE TABLE case_176_varbinary_full (
   col_varbinary_001 varbinary(1),
@@ -3824,7 +3830,7 @@ CREATE TABLE case_176_varbinary_full (
   col_varbinary_353 varbinary(353),
   col_varbinary_354 varbinary(354),
   col_varbinary_355 varbinary(355)
-) ENGINE=InnoDB;
+) ENGINE=MyISAM;
 
 -- 创建 VARBINARY 长长度边界测试表 A
 DROP TABLE IF EXISTS case_177_varbinary_bounds_a;
@@ -5268,146 +5274,146 @@ CREATE TABLE case_187_decimal_scale (
   col_decimal_d30 decimal(65,30)
 ) ENGINE=InnoDB;
 
--- 创建 FLOAT(M,D) 宽度扫描测试表：FLOAT(1,2) ~ FLOAT(65,2)
--- (M,D) 语法在 MySQL 8.0.17+ 已弃用（仅警告）；FLOAT -> REAL
+-- 创建 FLOAT(M,D) 宽度扫描测试表：FLOAT(1,1) ~ FLOAT(65,1)
+-- (M,D) 语法在 MySQL 8.0.17+ 已弃用（仅警告）；MySQL 要求 M >= D，故 D 固定为 1；FLOAT -> REAL
 DROP TABLE IF EXISTS case_188_float_widths;
 CREATE TABLE case_188_float_widths (
-  col_float_w01 float(1,2),
-  col_float_w02 float(2,2),
-  col_float_w03 float(3,2),
-  col_float_w04 float(4,2),
-  col_float_w05 float(5,2),
-  col_float_w06 float(6,2),
-  col_float_w07 float(7,2),
-  col_float_w08 float(8,2),
-  col_float_w09 float(9,2),
-  col_float_w10 float(10,2),
-  col_float_w11 float(11,2),
-  col_float_w12 float(12,2),
-  col_float_w13 float(13,2),
-  col_float_w14 float(14,2),
-  col_float_w15 float(15,2),
-  col_float_w16 float(16,2),
-  col_float_w17 float(17,2),
-  col_float_w18 float(18,2),
-  col_float_w19 float(19,2),
-  col_float_w20 float(20,2),
-  col_float_w21 float(21,2),
-  col_float_w22 float(22,2),
-  col_float_w23 float(23,2),
-  col_float_w24 float(24,2),
-  col_float_w25 float(25,2),
-  col_float_w26 float(26,2),
-  col_float_w27 float(27,2),
-  col_float_w28 float(28,2),
-  col_float_w29 float(29,2),
-  col_float_w30 float(30,2),
-  col_float_w31 float(31,2),
-  col_float_w32 float(32,2),
-  col_float_w33 float(33,2),
-  col_float_w34 float(34,2),
-  col_float_w35 float(35,2),
-  col_float_w36 float(36,2),
-  col_float_w37 float(37,2),
-  col_float_w38 float(38,2),
-  col_float_w39 float(39,2),
-  col_float_w40 float(40,2),
-  col_float_w41 float(41,2),
-  col_float_w42 float(42,2),
-  col_float_w43 float(43,2),
-  col_float_w44 float(44,2),
-  col_float_w45 float(45,2),
-  col_float_w46 float(46,2),
-  col_float_w47 float(47,2),
-  col_float_w48 float(48,2),
-  col_float_w49 float(49,2),
-  col_float_w50 float(50,2),
-  col_float_w51 float(51,2),
-  col_float_w52 float(52,2),
-  col_float_w53 float(53,2),
-  col_float_w54 float(54,2),
-  col_float_w55 float(55,2),
-  col_float_w56 float(56,2),
-  col_float_w57 float(57,2),
-  col_float_w58 float(58,2),
-  col_float_w59 float(59,2),
-  col_float_w60 float(60,2),
-  col_float_w61 float(61,2),
-  col_float_w62 float(62,2),
-  col_float_w63 float(63,2),
-  col_float_w64 float(64,2),
-  col_float_w65 float(65,2)
+  col_float_w01 float(1,1),
+  col_float_w02 float(2,1),
+  col_float_w03 float(3,1),
+  col_float_w04 float(4,1),
+  col_float_w05 float(5,1),
+  col_float_w06 float(6,1),
+  col_float_w07 float(7,1),
+  col_float_w08 float(8,1),
+  col_float_w09 float(9,1),
+  col_float_w10 float(10,1),
+  col_float_w11 float(11,1),
+  col_float_w12 float(12,1),
+  col_float_w13 float(13,1),
+  col_float_w14 float(14,1),
+  col_float_w15 float(15,1),
+  col_float_w16 float(16,1),
+  col_float_w17 float(17,1),
+  col_float_w18 float(18,1),
+  col_float_w19 float(19,1),
+  col_float_w20 float(20,1),
+  col_float_w21 float(21,1),
+  col_float_w22 float(22,1),
+  col_float_w23 float(23,1),
+  col_float_w24 float(24,1),
+  col_float_w25 float(25,1),
+  col_float_w26 float(26,1),
+  col_float_w27 float(27,1),
+  col_float_w28 float(28,1),
+  col_float_w29 float(29,1),
+  col_float_w30 float(30,1),
+  col_float_w31 float(31,1),
+  col_float_w32 float(32,1),
+  col_float_w33 float(33,1),
+  col_float_w34 float(34,1),
+  col_float_w35 float(35,1),
+  col_float_w36 float(36,1),
+  col_float_w37 float(37,1),
+  col_float_w38 float(38,1),
+  col_float_w39 float(39,1),
+  col_float_w40 float(40,1),
+  col_float_w41 float(41,1),
+  col_float_w42 float(42,1),
+  col_float_w43 float(43,1),
+  col_float_w44 float(44,1),
+  col_float_w45 float(45,1),
+  col_float_w46 float(46,1),
+  col_float_w47 float(47,1),
+  col_float_w48 float(48,1),
+  col_float_w49 float(49,1),
+  col_float_w50 float(50,1),
+  col_float_w51 float(51,1),
+  col_float_w52 float(52,1),
+  col_float_w53 float(53,1),
+  col_float_w54 float(54,1),
+  col_float_w55 float(55,1),
+  col_float_w56 float(56,1),
+  col_float_w57 float(57,1),
+  col_float_w58 float(58,1),
+  col_float_w59 float(59,1),
+  col_float_w60 float(60,1),
+  col_float_w61 float(61,1),
+  col_float_w62 float(62,1),
+  col_float_w63 float(63,1),
+  col_float_w64 float(64,1),
+  col_float_w65 float(65,1)
 ) ENGINE=InnoDB;
 
--- 创建 DOUBLE(M,D) 宽度扫描测试表：DOUBLE(1,2) ~ DOUBLE(65,2)
--- (M,D) 语法在 MySQL 8.0.17+ 已弃用（仅警告）；DOUBLE -> DOUBLE PRECISION
+-- 创建 DOUBLE(M,D) 宽度扫描测试表：DOUBLE(1,1) ~ DOUBLE(65,1)
+-- (M,D) 语法在 MySQL 8.0.17+ 已弃用（仅警告）；MySQL 要求 M >= D，故 D 固定为 1；DOUBLE -> DOUBLE PRECISION
 DROP TABLE IF EXISTS case_189_double_widths;
 CREATE TABLE case_189_double_widths (
-  col_double_w01 double(1,2),
-  col_double_w02 double(2,2),
-  col_double_w03 double(3,2),
-  col_double_w04 double(4,2),
-  col_double_w05 double(5,2),
-  col_double_w06 double(6,2),
-  col_double_w07 double(7,2),
-  col_double_w08 double(8,2),
-  col_double_w09 double(9,2),
-  col_double_w10 double(10,2),
-  col_double_w11 double(11,2),
-  col_double_w12 double(12,2),
-  col_double_w13 double(13,2),
-  col_double_w14 double(14,2),
-  col_double_w15 double(15,2),
-  col_double_w16 double(16,2),
-  col_double_w17 double(17,2),
-  col_double_w18 double(18,2),
-  col_double_w19 double(19,2),
-  col_double_w20 double(20,2),
-  col_double_w21 double(21,2),
-  col_double_w22 double(22,2),
-  col_double_w23 double(23,2),
-  col_double_w24 double(24,2),
-  col_double_w25 double(25,2),
-  col_double_w26 double(26,2),
-  col_double_w27 double(27,2),
-  col_double_w28 double(28,2),
-  col_double_w29 double(29,2),
-  col_double_w30 double(30,2),
-  col_double_w31 double(31,2),
-  col_double_w32 double(32,2),
-  col_double_w33 double(33,2),
-  col_double_w34 double(34,2),
-  col_double_w35 double(35,2),
-  col_double_w36 double(36,2),
-  col_double_w37 double(37,2),
-  col_double_w38 double(38,2),
-  col_double_w39 double(39,2),
-  col_double_w40 double(40,2),
-  col_double_w41 double(41,2),
-  col_double_w42 double(42,2),
-  col_double_w43 double(43,2),
-  col_double_w44 double(44,2),
-  col_double_w45 double(45,2),
-  col_double_w46 double(46,2),
-  col_double_w47 double(47,2),
-  col_double_w48 double(48,2),
-  col_double_w49 double(49,2),
-  col_double_w50 double(50,2),
-  col_double_w51 double(51,2),
-  col_double_w52 double(52,2),
-  col_double_w53 double(53,2),
-  col_double_w54 double(54,2),
-  col_double_w55 double(55,2),
-  col_double_w56 double(56,2),
-  col_double_w57 double(57,2),
-  col_double_w58 double(58,2),
-  col_double_w59 double(59,2),
-  col_double_w60 double(60,2),
-  col_double_w61 double(61,2),
-  col_double_w62 double(62,2),
-  col_double_w63 double(63,2),
-  col_double_w64 double(64,2),
-  col_double_w65 double(65,2)
+  col_double_w01 double(1,1),
+  col_double_w02 double(2,1),
+  col_double_w03 double(3,1),
+  col_double_w04 double(4,1),
+  col_double_w05 double(5,1),
+  col_double_w06 double(6,1),
+  col_double_w07 double(7,1),
+  col_double_w08 double(8,1),
+  col_double_w09 double(9,1),
+  col_double_w10 double(10,1),
+  col_double_w11 double(11,1),
+  col_double_w12 double(12,1),
+  col_double_w13 double(13,1),
+  col_double_w14 double(14,1),
+  col_double_w15 double(15,1),
+  col_double_w16 double(16,1),
+  col_double_w17 double(17,1),
+  col_double_w18 double(18,1),
+  col_double_w19 double(19,1),
+  col_double_w20 double(20,1),
+  col_double_w21 double(21,1),
+  col_double_w22 double(22,1),
+  col_double_w23 double(23,1),
+  col_double_w24 double(24,1),
+  col_double_w25 double(25,1),
+  col_double_w26 double(26,1),
+  col_double_w27 double(27,1),
+  col_double_w28 double(28,1),
+  col_double_w29 double(29,1),
+  col_double_w30 double(30,1),
+  col_double_w31 double(31,1),
+  col_double_w32 double(32,1),
+  col_double_w33 double(33,1),
+  col_double_w34 double(34,1),
+  col_double_w35 double(35,1),
+  col_double_w36 double(36,1),
+  col_double_w37 double(37,1),
+  col_double_w38 double(38,1),
+  col_double_w39 double(39,1),
+  col_double_w40 double(40,1),
+  col_double_w41 double(41,1),
+  col_double_w42 double(42,1),
+  col_double_w43 double(43,1),
+  col_double_w44 double(44,1),
+  col_double_w45 double(45,1),
+  col_double_w46 double(46,1),
+  col_double_w47 double(47,1),
+  col_double_w48 double(48,1),
+  col_double_w49 double(49,1),
+  col_double_w50 double(50,1),
+  col_double_w51 double(51,1),
+  col_double_w52 double(52,1),
+  col_double_w53 double(53,1),
+  col_double_w54 double(54,1),
+  col_double_w55 double(55,1),
+  col_double_w56 double(56,1),
+  col_double_w57 double(57,1),
+  col_double_w58 double(58,1),
+  col_double_w59 double(59,1),
+  col_double_w60 double(60,1),
+  col_double_w61 double(61,1),
+  col_double_w62 double(62,1),
+  col_double_w63 double(63,1),
+  col_double_w64 double(64,1),
+  col_double_w65 double(65,1)
 ) ENGINE=InnoDB;
 
 -- 创建 BIT 全长度测试表：BIT(1) ~ BIT(64)，每个长度一个字段
