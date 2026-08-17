@@ -292,6 +292,14 @@ func NewConnection(ctx context.Context, config *config.PostgreSQLConfig) (*Conne
 	// 设置连接池大小
 	poolConfig.MaxConns = int32(config.MaxConns) // 使用配置文件中的最大连接数
 
+	// 固定会话时区为 UTC：MySQL TIMESTAMP 列映射为 TIMESTAMPTZ，读取端已固定 UTC
+	// （MySQL 会话时区固定为 UTC）；写入端不带显式时区偏移的值按会话 TimeZone 解释，
+	// 因此写入端也必须是 UTC，才能保证 instant 语义正确
+	poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, "SET TimeZone = 'UTC'")
+		return err
+	}
+
 	// 创建连接池
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {

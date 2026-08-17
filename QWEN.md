@@ -396,8 +396,8 @@ Report is a single self-contained HTML file with inline CSS and Google Fonts —
 | `varchar`, `varchar(255)` | `VARCHAR` | Preserves length |
 | `text`, `longtext` | `TEXT` | All text variants |
 | `blob`, `longblob`, `binary` | `BYTEA` | All binary types |
-| `datetime`, `datetime(6)` | `TIMESTAMP` | Preserves precision |
-| `timestamp`, `timestamp(6)` | `TIMESTAMP` | Preserves precision |
+| `datetime`, `datetime(6)` | `TIMESTAMP` | Naive time, preserves precision |
+| `timestamp`, `timestamp(6)` | `TIMESTAMPTZ` | MySQL TIMESTAMP is stored as UTC (timezone-aware); sessions pinned to UTC on both ends during migration |
 | `date` | `DATE` | |
 | `time` | `TIME` | Preserves precision |
 | `year` | `INTEGER` | |

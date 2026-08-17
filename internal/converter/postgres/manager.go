@@ -66,6 +66,8 @@ type Manager struct {
 	conversionStats []ConversionStageStat
 	// 存储数据校验不一致的表信息
 	inconsistentTables []TableDataInconsistency
+	// 存储包含 TIMESTAMP 列（映射为 TIMESTAMPTZ）的表名，迁移完成后输出供用户复核时区语义
+	timestampConvertedTables []string
 	// 存储表名到列名映射的映射
 	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
 	// 评估模式：只评估不写入
@@ -1365,9 +1367,12 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 			return err
 		}
 
-		// 存储列名映射，用于后续索引转换
+		// 存储列名映射，用于后续索引转换；同时记录包含 TIMESTAMP 列的表（映射为 TIMESTAMPTZ）
 		m.mutex.Lock()
 		m.tableColumnNamesMap[table.Name] = pgResult.ColumnNames
+		if HasTimestampColumn(table.DDL) {
+			m.timestampConvertedTables = append(m.timestampConvertedTables, table.Name)
+		}
 		m.mutex.Unlock()
 
 		// 先检查表是否存在
@@ -1990,6 +1995,23 @@ func (m *Manager) generateSummaryTable() {
 	m.Log("+--------------------------+----------------+-----------------------+")
 	m.Log("| %-22s | %-14s | %-21.2f |", "总耗时", "", totalDuration)
 	m.Log("+--------------------------+----------------+-----------------------+")
+
+	// 输出 TIMESTAMP -> TIMESTAMPTZ 转换清单，供用户复核时区语义
+	m.mutex.Lock()
+	timestampTables := append([]string(nil), m.timestampConvertedTables...)
+	m.mutex.Unlock()
+	if len(timestampTables) > 0 {
+		if m.config.Run.ShowConsoleLogs {
+			fmt.Printf("\n以下 %d 张表包含 MySQL TIMESTAMP 列，已映射为 PostgreSQL TIMESTAMPTZ（存储 instant，值已按 UTC 对齐）:\n", len(timestampTables))
+			for _, t := range timestampTables {
+				fmt.Printf("  - %s\n", t)
+			}
+		}
+		m.Log("以下 %d 张表包含 MySQL TIMESTAMP 列，已映射为 PostgreSQL TIMESTAMPTZ（存储 instant，值已按 UTC 对齐）:", len(timestampTables))
+		for _, t := range timestampTables {
+			m.Log("  - %s", t)
+		}
+	}
 }
 
 // centerText 居中文本

@@ -3,15 +3,42 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	gmysql "github.com/go-sql-driver/mysql"
 	"github.com/yourusername/mysql2pg/internal/config"
 )
+
+// utcConnector 包装 MySQL 驱动的 connector，在每个新建的连接上固定会话时区
+// MySQL TIMESTAMP 内部按 UTC 存储、存取时经会话时区与 UTC 互转；将会话时区固定为 UTC
+// 后，读取到的 TIMESTAMP 值恒为 UTC 墙钟时间，配合 timestamp -> TIMESTAMPTZ 映射，
+// 保证迁移不丢失时区语义（不固定时读取值会随源库会话时区漂移）
+type utcConnector struct {
+	base driver.Connector
+}
+
+func (c *utcConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.base.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if execer, ok := conn.(driver.ExecerContext); ok {
+		if _, err := execer.ExecContext(ctx, "SET time_zone = '+00:00'", nil); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("设置MySQL会话时区失败: %w", err)
+		}
+	}
+	return conn, nil
+}
+
+func (c *utcConnector) Driver() driver.Driver {
+	return c.base.Driver()
+}
 
 // MySQLVersionInfo MySQL 版本信息
 type MySQLVersionInfo struct {
@@ -83,10 +110,20 @@ func NewConnection(ctx context.Context, config *config.MySQLConfig) (*Connection
 		dsn += config.ConnectionParams
 	}
 
-	db, err := sql.Open("mysql", dsn)
+	driverCfg, err := gmysql.ParseDSN(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("打开MySQL连接失败: %w", err)
+		return nil, fmt.Errorf("解析MySQL连接串失败: %w", err)
 	}
+	// 会话时区已固定为 UTC，客户端时间解析也必须使用 UTC，
+	// 二者一致才能保证 parseTime 得到的时间值是正确的 UTC 墙钟时间
+	// （driver 默认即 UTC，此处显式覆盖，防止被用户连接参数中的 loc 覆盖）
+	driverCfg.Loc = time.UTC
+
+	connector, err := gmysql.NewConnector(driverCfg)
+	if err != nil {
+		return nil, fmt.Errorf("创建MySQL连接器失败: %w", err)
+	}
+	db := sql.OpenDB(&utcConnector{base: connector})
 
 	// 优化连接池配置
 	db.SetMaxOpenConns(config.MaxOpenConns)                                    // 最大打开连接数

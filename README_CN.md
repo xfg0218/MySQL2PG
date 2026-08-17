@@ -299,8 +299,8 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 | varchar, varchar(255), varchar(256), varchar(64), varchar(20), varchar(100), varchar(50), varchar(128), varchar(500), varchar(200) | VARCHAR | 所有varchar变体保持为VARCHAR，保留长度 |
 | text, longtext, mediumtext, tinytext | TEXT | 所有text变体统一转换为TEXT |
 | blob, longblob, mediumblob, tinyblob, binary, varbinary, varbinary(64) | BYTEA | 所有二进制类型统一转换为BYTEA |
-| datetime, datetime(6), datetime(3) | TIMESTAMP | datetime转换为TIMESTAMP，保留精度 |
-| timestamp, timestamp(6), timestamp(3) | TIMESTAMP | timestamp保持为TIMESTAMP，保留精度 |
+| datetime, datetime(6), datetime(3) | TIMESTAMP | datetime转换为TIMESTAMP（朴素时间），保留精度 |
+| timestamp, timestamp(6), timestamp(3) | TIMESTAMPTZ | MySQL TIMESTAMP 内部按 UTC 存储、为带时区语义的类型，映射为 TIMESTAMPTZ；迁移时会话时区固定为 UTC，保证 instant 不偏移 |
 | date | DATE | date保持为DATE |
 | time | TIME | time保持为TIME，保留精度 |
 | year | INTEGER | year转换为INTEGER |

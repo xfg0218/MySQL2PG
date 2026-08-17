@@ -135,7 +135,9 @@ var typeMappingOrder = []string{
 	// 位字段类型（按无符号整数语义转换）
 	"bit",
 	// 日期时间类型
-	"datetime", "timestamp", "date", "time", "year",
+	// timestamp 必须先于 datetime 替换：datetime 生成的 TIMESTAMP/TIMESTAMP(n)
+	// 否则会被 timestamp 的 (?i) 模式二次匹配误转为 TIMESTAMPTZ
+	"timestamp", "datetime", "date", "time", "year",
 	// JSON类型
 	"json", "jsonb",
 	// 空间类型
@@ -195,8 +197,10 @@ var typeMap = map[string]string{
 	// 由 cleanTypeDefinition 中的 reBit64 先行转为 NUMERIC(20,0)
 	"bit": "BIGINT",
 	// 日期时间类型
+	// MySQL TIMESTAMP 内部按 UTC 存储、存取经会话时区转换，是带时区语义的类型 -> TIMESTAMPTZ；
+	// DATETIME 为朴素时间（无时区）-> TIMESTAMP
 	"datetime":  "TIMESTAMP",
-	"timestamp": "TIMESTAMP",
+	"timestamp": "TIMESTAMPTZ",
 	"date":      "DATE",
 	"time":      "TIME",
 	"year":      "INTEGER",
@@ -1197,8 +1201,10 @@ func cleanTypeDefinition(typeDefinition string) string {
 							return fmt.Sprintf("%s(%s,%s)", strings.ToUpper(mysqlType), match[1], match[2])
 						}
 						return fmt.Sprintf("%s(%s)", strings.ToUpper(mysqlType), match[1])
-					case "datetime", "timestamp":
+					case "datetime":
 						return fmt.Sprintf("TIMESTAMP(%s)", match[1])
+					case "timestamp":
+						return fmt.Sprintf("TIMESTAMPTZ(%s)", match[1])
 					case "time":
 						return fmt.Sprintf("TIME(%s)", match[1])
 					case "char":
@@ -1616,4 +1622,18 @@ func GenerateColumnCommentsSQL(tableName string, columnNamesMap, columnCommentsM
 	}
 
 	return comments
+}
+
+var (
+	// reTimestampColumn 匹配 MySQL DDL 中 TIMESTAMP 类型的列定义行（列名带反引号，SHOW CREATE TABLE 标准格式）
+	reTimestampColumn = regexp.MustCompile("(?im)^\\s*`[^`]+`\\s+timestamp\\b")
+	// reTimestampColumnPlain 匹配列名不带反引号的形式（兜底）
+	reTimestampColumnPlain = regexp.MustCompile("(?im)^\\s*[A-Za-z_$][A-Za-z0-9_$]*\\s+timestamp\\b")
+)
+
+// HasTimestampColumn 判断 MySQL DDL 是否包含 TIMESTAMP 类型的列
+// 用于迁移报告输出 TIMESTAMP -> TIMESTAMPTZ 的转换清单；
+// DATETIME、CURRENT_TIMESTAMP 默认值与表级选项均不构成匹配
+func HasTimestampColumn(mysqlDDL string) bool {
+	return reTimestampColumn.MatchString(mysqlDDL) || reTimestampColumnPlain.MatchString(mysqlDDL)
 }

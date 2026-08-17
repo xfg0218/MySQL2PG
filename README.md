@@ -338,8 +338,8 @@ Supports conversion of 40+ MySQL field types to PostgreSQL compatible types, wit
 | varchar, varchar(255), etc.  | VARCHAR            | All varchar variants kept as VARCHAR, preserving length |
 | text, longtext, etc.         | TEXT               | All text variants to TEXT                               |
 | blob, longblob, binary, etc. | BYTEA              | All binary types to BYTEA                               |
-| datetime, datetime(6)        | TIMESTAMP          | datetime to TIMESTAMP, preserving precision             |
-| timestamp, timestamp(6)      | TIMESTAMP          | timestamp kept as TIMESTAMP, preserving precision       |
+| datetime, datetime(6)        | TIMESTAMP          | datetime to TIMESTAMP (naive time), preserving precision |
+| timestamp, timestamp(6)      | TIMESTAMPTZ        | MySQL TIMESTAMP is stored as UTC (timezone-aware), mapped to TIMESTAMPTZ; sessions are pinned to UTC during migration so instants never shift |
 | date                         | DATE               | date kept as DATE                                       |
 | time                         | TIME               | time kept as TIME, preserving precision                 |
 | year                         | INTEGER            | year to INTEGER                                         |
