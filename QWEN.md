@@ -450,10 +450,12 @@ bash scripts/integrationtests/run_integration_tests.sh
 
 ### Test Data
 
-The `scripts/mysql/insert_data.sql` file provides **10 test rows for all 167 tables** defined in `create_table.sql`, covering:
+The `scripts/mysql/insert_data.sql` file provides **10 test rows for all 167 original tables** (case_01~case_167) defined in `create_table.sql`, covering:
 - Basic types (integers, floats, strings, dates, JSON, binary)
 - Complex scenarios (e-commerce, CMS, finance, social, medical, hotel, restaurant)
 - Edge cases (partition tables, generated columns, reserved keywords, long identifiers)
+
+Note: `create_table.sql` defines 193 tables in total. The extra 25 (case_169~case_193) are type-length sweep tables (CHAR/VARCHAR/BINARY/VARBINARY/integer widths/DECIMAL/FLOAT/DOUBLE/BIT/temporal fsp, one table per type) used for full-length conversion coverage; they are DDL-only and need no INSERT data.
 
 ```bash
 # Insert test data (after create_table.sql)
@@ -470,7 +472,8 @@ mysql -u root -p test_db < scripts/mysql/insert_data.sql
 | Business scenarios (case_101~case_120) | 20 | 20 | Archive, CSV, Blackhole, UPSERT, multi-table DELETE |
 | Daily development (case_121~case_155) | 35 | 35 | E-commerce, CMS, finance, social, logs, sys admin |
 | Enhanced scenarios (case_156~case_167) | 12 | 12 | Composite FK, JSON generated columns, temporal mix |
-| **Total** | **167** | **84 integration tests** | Full coverage |
+| Type-length sweep (case_169~case_193) | 25 | - | Full-length conversion coverage per type, DDL only |
+| **Total** | **193** | **84 integration tests** | Full coverage |
 
 ## Development Conventions
 

@@ -131,7 +131,7 @@ Start
 - **Clear Example Output**: Provides example outputs for various scenarios to help users understand how the tool works.
 - **Comprehensive Error Handling**: Provides detailed error information when errors occur, facilitating troubleshooting.
 - **Integration Test Suite**: 84 test cases covering all configuration options and core features (`scripts/integrationtests/run_integration_tests.sh`).
-- **Test Data Generator**: 10 test rows for all 167 tables (`scripts/mysql/insert_data.sql`) covering basic types, business scenarios, and edge cases.
+- **Test Data Generator**: 10 test rows for all 167 original tables (`scripts/mysql/insert_data.sql`) covering basic types, business scenarios, and edge cases. `create_table.sql` defines 193 tables in total — the extra 25 (case_169~case_193) are type-length sweep tables for conversion coverage (DDL only, no test data).
 
 ## Important Function Details
 
@@ -958,7 +958,7 @@ bash scripts/integrationtests/run_integration_tests.sh
 
 ### 7. How to Insert Test Data?
 
-The project provides test data for all 167 tables:
+The project provides test data for all 167 original tables (case_01~case_167). The 25 type-length sweep tables (case_169~case_193) are DDL-only and need no data:
 
 ```bash
 # Create tables first
