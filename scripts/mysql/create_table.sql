@@ -2352,6 +2352,8 @@ CREATE TABLE case_155_rest_order_items (
   INDEX idx_dish_id (dish_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单明细表';
 
+-- 重复执行时先删子表再删父表（子表外键引用父表，顺序颠倒会报 3730）
+DROP TABLE IF EXISTS case_156_orders_child;
 DROP TABLE IF EXISTS case_156_orders_parent;
 CREATE TABLE case_156_orders_parent (
   tenant_id BIGINT UNSIGNED NOT NULL COMMENT '租户 ID',
@@ -2362,7 +2364,6 @@ CREATE TABLE case_156_orders_parent (
   INDEX idx_status_created (status, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='复合主键父表';
 
-DROP TABLE IF EXISTS case_156_orders_child;
 CREATE TABLE case_156_orders_child (
   item_id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '明细 ID',
   tenant_id BIGINT UNSIGNED NOT NULL COMMENT '租户 ID',
