@@ -348,10 +348,47 @@ type PartitionInfo struct {
 	SubPartitionCount int    // 子分区数量
 }
 
+// findMatchingParen 查找与 openIdx 处左括号匹配的右括号位置
+// 引号感知：字符串字面量（单/双引号，支持反斜杠与双写转义）内的括号不参与匹配
 func findMatchingParen(input string, openIdx int) int {
 	depth := 0
+	inSingle := false
+	inDouble := false
 	for i := openIdx; i < len(input); i++ {
-		switch input[i] {
+		ch := input[i]
+		if inSingle {
+			if ch == '\\' {
+				i++
+				continue
+			}
+			if ch == '\'' {
+				if i+1 < len(input) && input[i+1] == '\'' {
+					i++
+					continue
+				}
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			if ch == '\\' {
+				i++
+				continue
+			}
+			if ch == '"' {
+				if i+1 < len(input) && input[i+1] == '"' {
+					i++
+					continue
+				}
+				inDouble = false
+			}
+			continue
+		}
+		switch ch {
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
 		case '(':
 			depth++
 		case ')':

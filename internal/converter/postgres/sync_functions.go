@@ -514,12 +514,22 @@ func (c *FunctionConverter) applySpecificPatches() {
 }
 
 // convertDataTypes 转换基本数据类型
+// 单词级替换在字面量遮蔽下进行，字符串字面量内的 datetime/unsigned 等
+// 字样不会被误替换；反引号替换仅作用于字面量之外的标识符
 func (c *FunctionConverter) convertDataTypes() {
+	mask := newLiteralMask()
+	c.body = mask.mask(c.body)
 	c.body = reTinyInt.ReplaceAllString(c.body, "SMALLINT")
 	c.body = reDateTime.ReplaceAllString(c.body, "TIMESTAMP")
-	c.body = strings.ReplaceAll(c.body, "`", "\"")
+	c.body = mask.unmask(c.body)
+
+	c.body = replaceBackticksOutsideLiterals(c.body)
+
+	mask = newLiteralMask()
+	c.body = mask.mask(c.body)
 	c.body = reUnsigned.ReplaceAllString(c.body, "")
 	c.body = reZerofill.ReplaceAllString(c.body, "")
+	c.body = mask.unmask(c.body)
 }
 
 // convertBuiltinFunctions 转换内置函数
@@ -552,25 +562,28 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 
 	// 7. 字符串和数学函数替换
 	// 使用有序规则，避免存在前后依赖的模式被随机 map 遍历顺序破坏。
+	// readsLiteral 标记需要读取字符串字面量内容的规则（全局执行），
+	// 其余单词级替换在字面量遮蔽下执行，避免破坏字面量内容。
 	orderedReplacements := []struct {
-		re   *regexp.Regexp
-		repl string
+		re           *regexp.Regexp
+		repl         string
+		readsLiteral bool
 	}{
 		// reCharLength:   "LENGTH($1)", // PG supports char_length
-		{reRegexp, "~"},
-		{reSetVar, "$1 := "},
-		{reNow, "CURRENT_TIMESTAMP"},
-		{reCurrentDate, "CURRENT_DATE"},
-		{reSysDate, "CURRENT_TIMESTAMP"},
-		{reUnixTime, "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)"},
-		{reUnixTime2, "EXTRACT(EPOCH FROM $1)"},
-		{reFromUnix, "TO_TIMESTAMP($1)"},
-		{reDateFormat, "TO_CHAR($1, '$2')"},
-		{reSubstringIdx, "SPLIT_PART($1, '$2', $3)"},
+		{reRegexp, "~", false},
+		{reSetVar, "$1 := ", false},
+		{reNow, "CURRENT_TIMESTAMP", false},
+		{reCurrentDate, "CURRENT_DATE", false},
+		{reSysDate, "CURRENT_TIMESTAMP", false},
+		{reUnixTime, "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)", false},
+		{reUnixTime2, "EXTRACT(EPOCH FROM $1)", false},
+		{reFromUnix, "TO_TIMESTAMP($1)", false},
+		{reDateFormat, "TO_CHAR($1, '$2')", true},
+		{reSubstringIdx, "SPLIT_PART($1, '$2', $3)", true},
 		// reLeft:         "LEFT($1, $2)", // PG supports LEFT
 		// reRight:        "RIGHT($1, $2)", // PG supports RIGHT
-		{reSubstring1, "SUBSTRING($1 FROM $2)"},
-		{reSubstring2, "SUBSTRING($1 FROM $2 FOR $3)"},
+		{reSubstring1, "SUBSTRING($1 FROM $2)", false},
+		{reSubstring2, "SUBSTRING($1 FROM $2 FOR $3)", false},
 		// reReplace:      "REPLACE($1, '$2', '$3')", // PG supports REPLACE
 		// reCeiling:      "CEIL($1)", // PG supports CEILING/CEIL
 		// reFloor:        "FLOOR($1)", // PG supports FLOOR
@@ -584,28 +597,41 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 		// reSin:          "SIN($1)", // PG supports SIN
 		// reCos:          "COS($1)", // PG supports COS
 		// reTan:          "TAN($1)", // PG supports TAN
-		{reLeave, "EXIT;"},
-		{reIterate, "CONTINUE;"},
+		{reLeave, "EXIT;", false},
+		{reIterate, "CONTINUE;", false},
 		// 先处理完整的 UNTIL ... END REPEAT，再处理单独的 REPEAT。
-		{reUntil, "EXIT WHEN $1; END LOOP;"},
-		{reRepeat, "LOOP"},
+		{reUntil, "EXIT WHEN $1; END LOOP;", false},
+		{reRepeat, "LOOP", false},
 		// reIsNull:       "($1 IS NULL)", // Handled by processIsNull
 		// reNullIf:       "NULLIF($1, $2)", // PG supports NULLIF, removal prevents regex breakage
-		{reNullCase, "NULL"}, // 修复 nullcase 错误，假设其为 NULL
-		{reYear, "EXTRACT(YEAR FROM $1)"},
-		{reMonth, "EXTRACT(MONTH FROM $1)"},
-		{reDay, "EXTRACT(DAY FROM $1)"},
+		{reNullCase, "NULL", false}, // 修复 nullcase 错误，假设其为 NULL
+		{reYear, "EXTRACT(YEAR FROM $1)", false},
+		{reMonth, "EXTRACT(MONTH FROM $1)", false},
+		{reDay, "EXTRACT(DAY FROM $1)", false},
 		// reDateDiff:     "($1::date - $2::date)", // DATEDIFF(a, b) -> a - b (days) - 移至 processDateDiff 处理
 	}
 
+	// 需要读取字面量内容的规则先全局执行（其输出不与其他规则交互）
 	for _, item := range orderedReplacements {
-		body = item.re.ReplaceAllString(body, item.repl)
+		if item.readsLiteral {
+			body = item.re.ReplaceAllString(body, item.repl)
+		}
+	}
+
+	// 其余单词级替换在字面量遮蔽下执行，字符串字面量内的
+	// NOW/SYSDATE/LEAVE/年份函数等字样不会被误替换
+	mask := newLiteralMask()
+	maskedBody := mask.mask(body)
+	for _, item := range orderedReplacements {
+		if !item.readsLiteral {
+			maskedBody = item.re.ReplaceAllString(maskedBody, item.repl)
+		}
 	}
 
 	// ROW_COUNT() 处理
 	// MySQL: v_count := ROW_COUNT();
 	// PG: GET DIAGNOSTICS v_count = ROW_COUNT;
-	body = reRowCountAssign.ReplaceAllString(body, "GET DIAGNOSTICS $1 = ROW_COUNT;")
+	maskedBody = reRowCountAssign.ReplaceAllString(maskedBody, "GET DIAGNOSTICS $1 = ROW_COUNT;")
 
 	// 6. 简单的字符串替换
 	simpleReplacements := []struct {
@@ -619,8 +645,9 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 		{reRTrim, "RTRIM($1)"},
 	}
 	for _, r := range simpleReplacements {
-		body = r.re.ReplaceAllString(body, r.repl)
+		maskedBody = r.re.ReplaceAllString(maskedBody, r.repl)
 	}
+	body = mask.unmask(maskedBody)
 
 	c.body = body
 }
@@ -629,133 +656,90 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 // 该函数解析嵌套的 CONCAT 调用，并将其转换为 PostgreSQL 的 || 操作符
 // 例如: CONCAT(a, b, CONCAT(c, d)) -> a || b || c || d
 func (c *FunctionConverter) processConcat(body string) string {
+	searchFrom := 0
 	for {
-		loc := reConcat.FindStringIndex(body)
-		if loc == nil {
+		// 仅在字符串字面量之外查找 CONCAT
+		pos := findKeywordOutsideLiterals(body, "CONCAT", searchFrom)
+		if pos == -1 {
 			break
 		}
-		concatStart := loc[0]
-
-		// 寻找匹配的右括号
-		depth := 0
-		concatEnd := -1
-		for i := loc[1]; i < len(body); i++ {
-			if body[i] == '(' {
-				depth++
-			} else if body[i] == ')' {
-				depth--
-				if depth == -1 {
-					concatEnd = i
-					break
-				}
-			}
+		// 排除更长标识符的后缀（如 group_concat）与 CONCAT_WS
+		if pos > 0 && isIdentChar(body[pos-1]) {
+			searchFrom = pos + 6
+			continue
+		}
+		j := pos + len("CONCAT")
+		if j < len(body) && body[j] == '_' {
+			searchFrom = j + 1
+			continue
+		}
+		for j < len(body) && (body[j] == ' ' || body[j] == '\t' || body[j] == '\n' || body[j] == '\r') {
+			j++
+		}
+		if j >= len(body) || body[j] != '(' {
+			searchFrom = pos + 6
+			continue
 		}
 
-		if concatEnd == -1 {
-			break
+		// 引号感知的括号匹配
+		concatEnd, ok := findMatchingParenInViewExpr(body, j)
+		if !ok {
+			searchFrom = pos + 6
+			continue
 		}
 
-		concatExpr := body[concatStart : concatEnd+1]
-		paramsStr := body[loc[1]:concatEnd] // loc[1] is after "CONCAT("
-
-		// 解析参数列表，处理引号和嵌套括号
-		var params []string
-		var currentParam string
-		depth = 0
-		inString := false
-		stringChar := byte(0)
-
-		for _, char := range paramsStr {
-			if char == '"' || char == '\'' {
-				if !inString {
-					inString = true
-					stringChar = byte(char)
-				} else if char == rune(stringChar) {
-					inString = false
-					stringChar = byte(0)
-				}
-				currentParam += string(char)
-				continue
-			}
-
-			if inString {
-				currentParam += string(char)
-				continue
-			}
-
-			if char == '(' {
-				depth++
-				currentParam += string(char)
-			} else if char == ')' {
-				depth--
-				currentParam += string(char)
-			} else if char == ',' && depth == 0 {
-				params = append(params, strings.TrimSpace(currentParam))
-				currentParam = ""
-			} else {
-				currentParam += string(char)
-			}
+		// 解析参数列表（引号感知，字面量内的逗号/括号不参与分割）
+		params := splitTopLevelCommas(body[j+1 : concatEnd])
+		for i := range params {
+			params[i] = strings.TrimSpace(params[i])
 		}
-		params = append(params, strings.TrimSpace(currentParam))
 
 		// 使用 || 连接所有参数
 		newExpr := strings.Join(params, " || ")
-		// 为了防止无限循环（如果 newExpr 中包含 CONCAT，虽然这里应该是 ||），
-		// 我们只替换第一个匹配项。但 regex 也是找第一个。
-		// 关键是 replace 后的字符串不应该再被 regex 匹配到（除非是嵌套的）。
-		// CONCAT(CONCAT(a,b), c) -> CONCAT(a||b, c) -> a||b||c.
-		// 正确。
-		body = strings.Replace(body, concatExpr, newExpr, 1)
+		body = body[:pos] + newExpr + body[concatEnd+1:]
+		searchFrom = pos + len(newExpr)
 	}
 	return body
 }
 
 // processGroupConcat 处理 GROUP_CONCAT 函数
 // GROUP_CONCAT(expr SEPARATOR sep) -> STRING_AGG(expr::text, sep)
+// 仅在字符串字面量之外查找 GROUP_CONCAT，括号匹配引号感知
 func (c *FunctionConverter) processGroupConcat(body string) string {
+	searchFrom := 0
 	for {
-		startIdx := strings.Index(strings.ToUpper(body), "GROUP_CONCAT")
+		startIdx := findKeywordOutsideLiterals(body, "GROUP_CONCAT", searchFrom)
 		if startIdx == -1 {
 			break
 		}
 
-		// 找到 GROUP_CONCAT 后的括号
-		paramStart := strings.Index(body[startIdx:], "(")
-		if paramStart == -1 {
-			break
+		// 找到 GROUP_CONCAT 后的括号（允许空白）
+		j := startIdx + len("GROUP_CONCAT")
+		for j < len(body) && (body[j] == ' ' || body[j] == '\t' || body[j] == '\n' || body[j] == '\r') {
+			j++
 		}
-		paramStart += startIdx
-
-		// 寻找匹配的右括号
-		depth := 0
-		paramEnd := -1
-		for i := paramStart + 1; i < len(body); i++ {
-			if body[i] == '(' {
-				depth++
-			} else if body[i] == ')' {
-				if depth == 0 {
-					paramEnd = i
-					break
-				}
-				depth--
-			}
+		if j >= len(body) || body[j] != '(' {
+			searchFrom = startIdx + len("GROUP_CONCAT")
+			continue
 		}
 
-		if paramEnd == -1 {
-			break
+		// 引号感知的括号匹配
+		paramEnd, ok := findMatchingParenInViewExpr(body, j)
+		if !ok {
+			searchFrom = startIdx + len("GROUP_CONCAT")
+			continue
 		}
 
-		fullMatch := body[startIdx : paramEnd+1]
-		content := body[paramStart+1 : paramEnd]
+		content := body[j+1 : paramEnd]
 
-		// 解析 SEPARATOR
+		// 解析 SEPARATOR（字面量之外的关键字才算）
 		separator := "', '" // 默认分隔符
 		expr := content
 
-		sepIdx := strings.Index(strings.ToUpper(content), "SEPARATOR")
+		sepIdx := findKeywordOutsideLiterals(content, "SEPARATOR", 0)
 		if sepIdx != -1 {
 			expr = strings.TrimSpace(content[:sepIdx])
-			sepVal := strings.TrimSpace(content[sepIdx+9:]) // +9 for "SEPARATOR"
+			sepVal := strings.TrimSpace(content[sepIdx+len("SEPARATOR"):])
 			// 清理引号
 			if len(sepVal) >= 2 && ((sepVal[0] == '\'' && sepVal[len(sepVal)-1] == '\'') || (sepVal[0] == '"' && sepVal[len(sepVal)-1] == '"')) {
 				separator = sepVal
@@ -766,64 +750,45 @@ func (c *FunctionConverter) processGroupConcat(body string) string {
 
 		// 替换
 		newExpr := fmt.Sprintf("STRING_AGG((%s)::text, %s)", expr, separator)
-		body = strings.Replace(body, fullMatch, newExpr, 1)
+		body = body[:startIdx] + newExpr + body[paramEnd+1:]
+		searchFrom = startIdx + len(newExpr)
 	}
 	return body
 }
 
 // processConcatWs 处理 CONCAT_WS 函数并保留分隔符与参数顺序。
+// 仅在字符串字面量之外查找 CONCAT_WS，括号匹配引号感知
 func (c *FunctionConverter) processConcatWs(body string) string {
+	searchFrom := 0
 	for {
-		loc := reConcatWs.FindStringIndex(body)
-		if loc == nil {
+		startIdx := findKeywordOutsideLiterals(body, "CONCAT_WS", searchFrom)
+		if startIdx == -1 {
 			break
 		}
-		startIdx := loc[0]
-		paramStart := loc[1] - 1 // 指向 '('
-
-		depth := 0
-		paramEnd := -1
-		inString := false
-		stringChar := byte(0)
-		for i := paramStart + 1; i < len(body); i++ {
-			ch := body[i]
-			if ch == '\'' || ch == '"' {
-				if !inString {
-					inString = true
-					stringChar = ch
-				} else if ch == stringChar {
-					if ch == '\'' && i+1 < len(body) && body[i+1] == '\'' {
-						i++
-						continue
-					}
-					inString = false
-					stringChar = 0
-				}
-			}
-			if inString {
-				continue
-			}
-			if ch == '(' {
-				depth++
-				continue
-			}
-			if ch == ')' {
-				if depth == 0 {
-					paramEnd = i
-					break
-				}
-				depth--
-			}
+		// 排除更长标识符的后缀
+		if startIdx > 0 && isIdentChar(body[startIdx-1]) {
+			searchFrom = startIdx + len("CONCAT_WS")
+			continue
 		}
-		if paramEnd == -1 {
-			break
+		j := startIdx + len("CONCAT_WS")
+		for j < len(body) && (body[j] == ' ' || body[j] == '\t' || body[j] == '\n' || body[j] == '\r') {
+			j++
+		}
+		if j >= len(body) || body[j] != '(' {
+			searchFrom = startIdx + len("CONCAT_WS")
+			continue
 		}
 
-		fullMatch := body[startIdx : paramEnd+1]
-		paramsStr := body[paramStart+1 : paramEnd]
-		args := splitArgsWithContext(paramsStr)
+		paramEnd, ok := findMatchingParenInViewExpr(body, j)
+		if !ok {
+			searchFrom = startIdx + len("CONCAT_WS")
+			continue
+		}
+
+		args := splitArgsWithContext(body[j+1 : paramEnd])
 		if len(args) < 2 {
-			break
+			searchFrom = paramEnd + 1
+			continue
 		}
 
 		separator := strings.TrimSpace(args[0])
@@ -835,11 +800,13 @@ func (c *FunctionConverter) processConcatWs(body string) string {
 			}
 		}
 		if len(exprs) == 0 {
-			break
+			searchFrom = paramEnd + 1
+			continue
 		}
 
 		newExpr := fmt.Sprintf("ARRAY_TO_STRING(ARRAY[%s], %s)", strings.Join(exprs, ", "), separator)
-		body = strings.Replace(body, fullMatch, newExpr, 1)
+		body = body[:startIdx] + newExpr + body[paramEnd+1:]
+		searchFrom = startIdx + len(newExpr)
 	}
 	return body
 }
@@ -901,314 +868,184 @@ func splitArgsWithContext(paramsStr string) []string {
 
 // processDateDiff 处理 DATEDIFF 函数
 // DATEDIFF(expr1, expr2) -> (expr1::date - expr2::date)
-// 支持嵌套括号
+// 仅在字符串字面量之外查找 DATEDIFF，括号匹配引号感知
 func (c *FunctionConverter) processDateDiff(body string) string {
+	searchFrom := 0
 	for {
-		startIdx := strings.Index(strings.ToUpper(body), "DATEDIFF")
+		startIdx := findKeywordOutsideLiterals(body, "DATEDIFF", searchFrom)
 		if startIdx == -1 {
 			break
 		}
-
-		// 找到 DATEDIFF 后的括号
-		paramStart := strings.Index(body[startIdx:], "(")
-		if paramStart == -1 {
-			break
+		// 排除更长标识符的后缀
+		if startIdx > 0 && isIdentChar(body[startIdx-1]) {
+			searchFrom = startIdx + len("DATEDIFF")
+			continue
 		}
-		paramStart += startIdx
-
-		// 寻找匹配的右括号
-		depth := 0
-		paramEnd := -1
-		for i := paramStart + 1; i < len(body); i++ {
-			if body[i] == '(' {
-				depth++
-			} else if body[i] == ')' {
-				if depth == 0 {
-					paramEnd = i
-					break
-				}
-				depth--
-			}
+		j := startIdx + len("DATEDIFF")
+		for j < len(body) && (body[j] == ' ' || body[j] == '\t' || body[j] == '\n' || body[j] == '\r') {
+			j++
+		}
+		if j >= len(body) || body[j] != '(' {
+			searchFrom = startIdx + len("DATEDIFF")
+			continue
 		}
 
-		if paramEnd == -1 {
-			break
+		paramEnd, ok := findMatchingParenInViewExpr(body, j)
+		if !ok {
+			searchFrom = startIdx + len("DATEDIFF")
+			continue
 		}
 
-		fullMatch := body[startIdx : paramEnd+1]
-		paramsStr := body[paramStart+1 : paramEnd]
-
-		// 解析参数 (处理嵌套逗号)
-		var params []string
-		var currentParam string
-		depth = 0
-		inString := false
-		stringChar := byte(0)
-
-		for _, char := range paramsStr {
-			if char == '"' || char == '\'' {
-				if !inString {
-					inString = true
-					stringChar = byte(char)
-				} else if char == rune(stringChar) {
-					inString = false
-					stringChar = byte(0)
-				}
-				currentParam += string(char)
-				continue
-			}
-
-			if inString {
-				currentParam += string(char)
-				continue
-			}
-
-			if char == '(' {
-				depth++
-				currentParam += string(char)
-			} else if char == ')' {
-				depth--
-				currentParam += string(char)
-			} else if char == ',' && depth == 0 {
-				params = append(params, strings.TrimSpace(currentParam))
-				currentParam = ""
-			} else {
-				currentParam += string(char)
-			}
+		// 解析参数（引号感知，字面量内的逗号/括号不参与分割）
+		params := splitTopLevelCommas(body[j+1 : paramEnd])
+		for i := range params {
+			params[i] = strings.TrimSpace(params[i])
 		}
-		params = append(params, strings.TrimSpace(currentParam))
 
 		if len(params) == 2 {
 			// DATEDIFF(a, b) -> (a - b)
 			// 注意：MySQL DATEDIFF(a, b) = a - b. PG date - date = integer days.
 			// 所以顺序是 (a - b).
 			newExpr := fmt.Sprintf("(%s - %s)", params[0], params[1])
-			body = strings.Replace(body, fullMatch, newExpr, 1)
+			body = body[:startIdx] + newExpr + body[paramEnd+1:]
+			searchFrom = startIdx + len(newExpr)
 		} else {
 			// 参数数量不对，保留原 DATEDIFF 让 PostgreSQL 报错
-			// 标记为未处理，避免死循环
-			body = strings.Replace(body, fullMatch, "DATEDIFF_UNHANDLED", 1)
+			searchFrom = paramEnd + 1
 		}
 	}
-	// 恢复 DATEDIFF_UNHANDLED (如果需要，或者就留着报错)
-	body = strings.ReplaceAll(body, "DATEDIFF_UNHANDLED", "DATEDIFF")
 	return body
 }
 
 // processIfFunction 处理 IF 函数
 // IF(expr1, expr2, expr3) -> CASE WHEN expr1 THEN expr2 ELSE expr3 END
+// 仅在字符串字面量之外查找 IF(，括号匹配引号感知；
+// IFNULL/IF(...) 之外的 IF 语句形式（无左括号）不受影响
 func (c *FunctionConverter) processIfFunction(body string) string {
-	reIfStart := regexp.MustCompile(`(?i)\bIF\s*\(`)
+	searchFrom := 0
 	for {
-		loc := reIfStart.FindStringIndex(body)
-		if loc == nil {
+		startIdx := findKeywordOutsideLiterals(body, "IF", searchFrom)
+		if startIdx == -1 {
 			break
 		}
-		startIdx := loc[0]
-		// loc[1] is after '(', so '(' is at loc[1]-1
-		paramStart := loc[1] - 1
-
-		// 寻找匹配的右括号
-		depth := 0
-		paramEnd := -1
-		for i := paramStart + 1; i < len(body); i++ {
-			if body[i] == '(' {
-				depth++
-			} else if body[i] == ')' {
-				if depth == 0 {
-					paramEnd = i
-					break
-				}
-				depth--
-			}
+		// 排除更长标识符的后缀（如 x_if）
+		if startIdx > 0 && isIdentChar(body[startIdx-1]) {
+			searchFrom = startIdx + 2
+			continue
+		}
+		j := startIdx + len("IF")
+		for j < len(body) && (body[j] == ' ' || body[j] == '\t' || body[j] == '\n' || body[j] == '\r') {
+			j++
+		}
+		if j >= len(body) || body[j] != '(' {
+			// 非 IF( 形式（IF 语句、IFNULL 等），跳过
+			searchFrom = startIdx + 2
+			continue
 		}
 
-		if paramEnd == -1 {
-			break
+		paramEnd, ok := findMatchingParenInViewExpr(body, j)
+		if !ok {
+			searchFrom = startIdx + 2
+			continue
 		}
 
-		fullMatch := body[startIdx : paramEnd+1]
-		paramsStr := body[paramStart+1 : paramEnd]
-
-		// 解析参数
-		var params []string
-		var currentParam string
-		depth = 0
-		inString := false
-		stringChar := byte(0)
-
-		for _, char := range paramsStr {
-			if char == '"' || char == '\'' {
-				if !inString {
-					inString = true
-					stringChar = byte(char)
-				} else if char == rune(stringChar) {
-					inString = false
-					stringChar = byte(0)
-				}
-				currentParam += string(char)
-				continue
-			}
-
-			if inString {
-				currentParam += string(char)
-				continue
-			}
-
-			if char == '(' {
-				depth++
-				currentParam += string(char)
-			} else if char == ')' {
-				depth--
-				currentParam += string(char)
-			} else if char == ',' && depth == 0 {
-				params = append(params, strings.TrimSpace(currentParam))
-				currentParam = ""
-			} else {
-				currentParam += string(char)
-			}
+		// 解析参数（引号感知，字面量内的逗号/括号不参与分割）
+		params := splitTopLevelCommas(body[j+1 : paramEnd])
+		for i := range params {
+			params[i] = strings.TrimSpace(params[i])
 		}
-		params = append(params, strings.TrimSpace(currentParam))
 
 		if len(params) == 3 {
 			newExpr := fmt.Sprintf("CASE WHEN %s THEN %s ELSE %s END", params[0], params[1], params[2])
-			body = strings.Replace(body, fullMatch, newExpr, 1)
+			body = body[:startIdx] + newExpr + body[paramEnd+1:]
+			searchFrom = startIdx + len(newExpr)
 		} else {
-			// 参数数量不对，可能是解析错误或非标准用法
-			// 破坏匹配以避免死循环
-			body = strings.Replace(body, fullMatch, "IF_UNHANDLED"+fullMatch[2:], 1)
+			// 参数数量不对，可能是解析错误或非标准用法，保留原样跳过
+			searchFrom = paramEnd + 1
 		}
 	}
-	body = strings.ReplaceAll(body, "IF_UNHANDLED", "IF")
 	return body
 }
 
 // processIfNull 处理 IFNULL 函数
 // IFNULL(expr1, expr2) -> COALESCE(expr1, expr2)
+// 仅在字符串字面量之外查找 IFNULL，括号匹配引号感知，
+// 字符串字面量内的 IFNULL 文本与括号不会被误处理
 func (c *FunctionConverter) processIfNull(body string) string {
-	reIfNullStart := regexp.MustCompile(`(?i)\bIFNULL\s*\(`)
+	searchFrom := 0
 	for {
-		loc := reIfNullStart.FindStringIndex(body)
-		if loc == nil {
+		pos := findKeywordOutsideLiterals(body, "IFNULL", searchFrom)
+		if pos == -1 {
 			break
 		}
-		startIdx := loc[0]
-		paramStart := loc[1] - 1
-
-		// 寻找匹配的右括号
-		depth := 0
-		paramEnd := -1
-		for i := paramStart + 1; i < len(body); i++ {
-			if body[i] == '(' {
-				depth++
-			} else if body[i] == ')' {
-				if depth == 0 {
-					paramEnd = i
-					break
-				}
-				depth--
-			}
+		// 排除更长标识符的后缀（如 x_ifnull）
+		if pos > 0 && isIdentChar(body[pos-1]) {
+			searchFrom = pos + 6
+			continue
 		}
-
-		if paramEnd == -1 {
-			break
+		// IFNULL 与左括号之间允许空白
+		j := pos + len("IFNULL")
+		for j < len(body) && (body[j] == ' ' || body[j] == '\t' || body[j] == '\n' || body[j] == '\r') {
+			j++
 		}
-
-		fullMatch := body[startIdx : paramEnd+1]
-		paramsStr := body[paramStart+1 : paramEnd]
-
-		// 解析参数
-		var params []string
-		var currentParam string
-		depth = 0
-		inString := false
-		stringChar := byte(0)
-
-		for _, char := range paramsStr {
-			if char == '"' || char == '\'' {
-				if !inString {
-					inString = true
-					stringChar = byte(char)
-				} else if char == rune(stringChar) {
-					inString = false
-					stringChar = byte(0)
-				}
-				currentParam += string(char)
-				continue
-			}
-
-			if inString {
-				currentParam += string(char)
-				continue
-			}
-
-			if char == '(' {
-				depth++
-				currentParam += string(char)
-			} else if char == ')' {
-				depth--
-				currentParam += string(char)
-			} else if char == ',' && depth == 0 {
-				params = append(params, strings.TrimSpace(currentParam))
-				currentParam = ""
-			} else {
-				currentParam += string(char)
-			}
+		if j >= len(body) || body[j] != '(' {
+			searchFrom = pos + 6
+			continue
 		}
-		params = append(params, strings.TrimSpace(currentParam))
-
+		paramEnd, ok := findMatchingParenInViewExpr(body, j)
+		if !ok {
+			searchFrom = pos + 6
+			continue
+		}
+		params := splitTopLevelCommas(body[j+1 : paramEnd])
+		for i := range params {
+			params[i] = strings.TrimSpace(params[i])
+		}
 		if len(params) == 2 {
 			newExpr := fmt.Sprintf("COALESCE(%s, %s)", params[0], params[1])
-			body = strings.Replace(body, fullMatch, newExpr, 1)
+			body = body[:pos] + newExpr + body[paramEnd+1:]
+			searchFrom = pos + len(newExpr)
 		} else {
-			body = strings.Replace(body, fullMatch, "IFNULL_UNHANDLED"+fullMatch[6:], 1)
+			// 参数数量不为 2 的 IFNULL 保持原样，跳过
+			searchFrom = paramEnd + 1
 		}
 	}
-	body = strings.ReplaceAll(body, "IFNULL_UNHANDLED", "IFNULL")
 	return body
 }
 
 // processIsNull 处理 ISNULL 函数
 // ISNULL(expr) -> (expr IS NULL)
+// 仅在字符串字面量之外查找 ISNULL，括号匹配引号感知
 func (c *FunctionConverter) processIsNull(body string) string {
-	reIsNullStart := regexp.MustCompile(`(?i)\bISNULL\s*\(`)
+	searchFrom := 0
 	for {
-		loc := reIsNullStart.FindStringIndex(body)
-		if loc == nil {
+		pos := findKeywordOutsideLiterals(body, "ISNULL", searchFrom)
+		if pos == -1 {
 			break
 		}
-		startIdx := loc[0]
-		paramStart := loc[1] - 1
-
-		// 寻找匹配的右括号
-		depth := 0
-		paramEnd := -1
-		for i := paramStart + 1; i < len(body); i++ {
-			if body[i] == '(' {
-				depth++
-			} else if body[i] == ')' {
-				if depth == 0 {
-					paramEnd = i
-					break
-				}
-				depth--
-			}
+		// 排除更长标识符的后缀
+		if pos > 0 && isIdentChar(body[pos-1]) {
+			searchFrom = pos + 6
+			continue
+		}
+		j := pos + len("ISNULL")
+		for j < len(body) && (body[j] == ' ' || body[j] == '\t' || body[j] == '\n' || body[j] == '\r') {
+			j++
+		}
+		if j >= len(body) || body[j] != '(' {
+			searchFrom = pos + 6
+			continue
+		}
+		paramEnd, ok := findMatchingParenInViewExpr(body, j)
+		if !ok {
+			searchFrom = pos + 6
+			continue
 		}
 
-		if paramEnd == -1 {
-			break
-		}
-
-		fullMatch := body[startIdx : paramEnd+1]
-		paramsStr := body[paramStart+1 : paramEnd]
-
-		// 简单处理：ISNULL 只有一个参数，不需要分割逗号，但需要处理嵌套括号以确保正确截取
-		// 实际上 paramsStr 就是整个参数表达式
-		// 但为了保险，我们可以去掉首尾空格
-		param := strings.TrimSpace(paramsStr)
-
+		param := strings.TrimSpace(body[j+1 : paramEnd])
 		newExpr := fmt.Sprintf("(%s IS NULL)", param)
-		body = strings.Replace(body, fullMatch, newExpr, 1)
+		body = body[:pos] + newExpr + body[paramEnd+1:]
+		searchFrom = pos + len(newExpr)
 	}
 	return body
 }
