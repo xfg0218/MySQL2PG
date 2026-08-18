@@ -549,7 +549,6 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 		{reUnixTime, "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)", false},
 		{reUnixTime2, "EXTRACT(EPOCH FROM $1)", false},
 		{reFromUnix, "TO_TIMESTAMP($1)", false},
-		{reDateFormat, "TO_CHAR($1, '$2')", true},
 		{reSubstringIdx, "SPLIT_PART($1, '$2', $3)", true},
 		// reLeft:         "LEFT($1, $2)", // PG supports LEFT
 		// reRight:        "RIGHT($1, $2)", // PG supports RIGHT
@@ -583,6 +582,16 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 	}
 
 	// 需要读取字面量内容的规则先全局执行（其输出不与其他规则交互）
+	// DATE_FORMAT -> TO_CHAR：格式说明符经 convertMySQLDateFormatToPG 转换（issue-12，
+	// 否则 MySQL 的 %Y-%m-%d 会原样进入 PG to_char 产生错误的格式化结果）
+	body = reDateFormat.ReplaceAllStringFunc(body, func(m string) string {
+		match := reDateFormat.FindStringSubmatch(m)
+		if len(match) < 3 {
+			return m
+		}
+		pgFormat := convertMySQLDateFormatToPG(match[2])
+		return fmt.Sprintf("TO_CHAR(%s, %s)", strings.TrimSpace(match[1]), pgFormat)
+	})
 	for _, item := range orderedReplacements {
 		if item.readsLiteral {
 			body = item.re.ReplaceAllString(body, item.repl)
@@ -1066,8 +1075,10 @@ func (c *FunctionConverter) handleVariables() {
 	body := c.body
 
 	// 1. 移除 DECLARE 和 标签
+	// reLabel 必须只在字面量之外应用，否则会删除字符串中的 "HH24:" "MI:" 等
+	// 形如 "单词:" 的内容（issue-12）
 	body = reDeclare.ReplaceAllString(body, "")
-	body = reLabel.ReplaceAllString(body, "")
+	body = replaceRegexOutsideLiterals(body, reLabel, "")
 	body = reHandler.ReplaceAllString(body, "")
 
 	// 2. 提取变量声明

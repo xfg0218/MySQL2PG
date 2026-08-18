@@ -69,7 +69,7 @@ Start
  │     └─ Support 50+ function mappings (e.g., NOW() → CURRENT_TIMESTAMP, IFNULL() → COALESCE())
  │
  ├─▶ [Step 7] Convert users (users: true)
- │     └─ MySQL Users → PostgreSQL Roles (preserve password hashes)
+ │     └─ MySQL Users → PostgreSQL Roles (passwords are not migrated: hash formats are incompatible; a reset list with ALTER USER templates is output after migration)
  │
  ├─▶ [Step 8] Convert table privileges (table_privileges: true)
  │     └─ GRANT SELECT ON table → GRANT USAGE, SELECT ON table

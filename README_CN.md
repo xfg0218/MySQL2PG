@@ -70,7 +70,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │     └─ 支持50+函数映射（如 NOW() → CURRENT_TIMESTAMP，IFNULL() → COALESCE()）
  │
  ├─▶ [Step 7] 转换用户 (users: true)
- │     └─ MySQL 用户 → PostgreSQL 角色（保留密码哈希）
+ │     └─ MySQL 用户 → PostgreSQL 角色（密码不可迁移：哈希格式不兼容，迁移后输出需重置密码的用户清单与 ALTER USER 模板）
  │
  ├─▶ [Step 8] 转换表权限 (table_privileges: true)
  │     └─ GRANT SELECT ON table → GRANT USAGE, SELECT ON table

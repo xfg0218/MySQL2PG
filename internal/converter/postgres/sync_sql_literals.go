@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -146,6 +147,21 @@ func replaceBackticksOutsideLiterals(sql string) string {
 	for _, seg := range splitSQLSegments(sql) {
 		if seg.kind == segIdent {
 			b.WriteString(backtickIdentToPG(seg.text))
+		} else {
+			b.WriteString(seg.text)
+		}
+	}
+	return b.String()
+}
+
+// replaceRegexOutsideLiterals 仅在字符串字面量之外的代码区域应用正则替换。
+// 用于清除语句标签等结构性文本时避免误伤字面量内容
+// （如 reLabel 会把 'HH24:MI:SS' 中的 "HH24:" "MI:" 当作标签删除，issue-12）
+func replaceRegexOutsideLiterals(sql string, re *regexp.Regexp, repl string) string {
+	var b strings.Builder
+	for _, seg := range splitSQLSegments(sql) {
+		if seg.kind == segCode {
+			b.WriteString(re.ReplaceAllString(seg.text, repl))
 		} else {
 			b.WriteString(seg.text)
 		}

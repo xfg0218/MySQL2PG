@@ -44,9 +44,14 @@ type FunctionInfo struct {
 }
 
 // UserInfo 用户信息
+// PasswordHash/AuthPlugin 仅用于感知源库用户的密码状态：
+// MySQL 与 PostgreSQL 的密码哈希格式不兼容（SHA1 体系 vs SCRAM/MD5），
+// 密码本身不可迁移，迁移后需人工重设（issue-10）
 type UserInfo struct {
-	Name   string
-	Grants []string
+	Name         string
+	Grants       []string
+	PasswordHash string
+	AuthPlugin   string
 }
 
 // ViewInfo 视图信息
@@ -701,17 +706,18 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 }
 
 // GetUsers 获取所有用户信息
+// 同时读取 authentication_string 与 plugin 以感知密码状态（密码本身不可迁移，issue-10）
 func (c *Connection) GetUsers() ([]UserInfo, error) {
 	// MySQL中获取用户权限
 	rows, err := c.db.QueryContext(c.context(), `
-		SELECT user, host 
+		SELECT user, host, authentication_string, plugin
 		FROM mysql.user 
-		WHERE user != 'root' AND user != 'mysql.sys' AND 
-		user != 'mysql.session' AND user != 'mysql.infoschema' AND 
-		user != 'mysql.pfsadmin' AND user != 'mysql.pfs' AND 
-		user != 'mysql.pfs_admin' AND user != 'mysql.pfs_admin_role' AND 
-		user != 'mysql.pfs_role_admin' AND user != 'mysql.pfs_role_admin_role' AND 
-		user != 'mysql.pfs_role_admin_role_role' AND 
+		WHERE user != 'root' AND user != 'mysql.sys' AND
+		user != 'mysql.session' AND user != 'mysql.infoschema' AND
+		user != 'mysql.pfsadmin' AND user != 'mysql.pfs' AND
+		user != 'mysql.pfs_admin' AND user != 'mysql.pfs_admin_role' AND
+		user != 'mysql.pfs_role_admin' AND user != 'mysql.pfs_role_admin_role' AND
+		user != 'mysql.pfs_role_admin_role_role' AND
 		user != 'mysql.pfs_role_admin_role_role_role' AND user != 'mysql.pfsadmin'
 	`)
 	if err != nil {
@@ -722,7 +728,8 @@ func (c *Connection) GetUsers() ([]UserInfo, error) {
 	var users []UserInfo
 	for rows.Next() {
 		var userName, host string
-		if err := rows.Scan(&userName, &host); err != nil {
+		var passwordHash, authPlugin sql.NullString
+		if err := rows.Scan(&userName, &host, &passwordHash, &authPlugin); err != nil {
 			return nil, fmt.Errorf("扫描用户信息失败: %w", err)
 		}
 
@@ -733,8 +740,10 @@ func (c *Connection) GetUsers() ([]UserInfo, error) {
 		}
 
 		users = append(users, UserInfo{
-			Name:   fmt.Sprintf("%s@%s", userName, host),
-			Grants: grants,
+			Name:         fmt.Sprintf("%s@%s", userName, host),
+			Grants:       grants,
+			PasswordHash: passwordHash.String,
+			AuthPlugin:   authPlugin.String,
 		})
 	}
 

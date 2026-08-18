@@ -66,6 +66,8 @@ type Manager struct {
 	conversionStats []ConversionStageStat
 	// 存储数据校验不一致的表信息
 	inconsistentTables []TableDataInconsistency
+	// 存储源库设置了密码、迁移后需要人工重置密码的用户（密码哈希格式不兼容，不可迁移，issue-10）
+	passwordResetUsers []string
 	// 存储表名到列名映射的映射
 	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
 	// 评估模式：只评估不写入
@@ -315,6 +317,9 @@ func (m *Manager) Run() error {
 		// 显示数据不一致表的统计信息
 		m.displayInconsistentTables()
 
+		// 显示需人工重置密码的用户清单（密码不可迁移，issue-10）
+		m.displayPasswordResetUsers()
+
 		// 生成汇总表格
 		m.generateSummaryTable()
 
@@ -339,6 +344,9 @@ func (m *Manager) Run() error {
 
 	// 显示数据不一致表的统计信息
 	m.displayInconsistentTables()
+
+	// 显示需人工重置密码的用户清单（密码不可迁移，issue-10）
+	m.displayPasswordResetUsers()
 
 	m.Log("转换完成!")
 	return nil
@@ -1737,6 +1745,15 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 			}
 		}
 
+		// 记录源库设置了密码的用户：密码哈希格式不兼容无法迁移，需人工重设（issue-10）
+		if user.PasswordHash != "" {
+			if userParts := strings.Split(user.Name, "@"); len(userParts) == 2 && !strings.HasPrefix(userParts[0], "mysql.") {
+				m.mutex.Lock()
+				m.passwordResetUsers = append(m.passwordResetUsers, normalizePGRoleName(userParts[0]))
+				m.mutex.Unlock()
+			}
+		}
+
 		// 更新进度
 		completed := m.completeTask()
 		progress := float64(completed) / float64(m.totalTasks) * 100
@@ -2030,6 +2047,38 @@ func (m *Manager) displayInconsistentTables() {
 		m.Log("+------------------+----------------+------------------+")
 
 		m.Log("共发现 %d 个表数据校验不一致", len(m.inconsistentTables))
+	}
+}
+
+// displayPasswordResetUsers 显示迁移后需要人工重置密码的用户清单（issue-10）
+// MySQL 与 PostgreSQL 的密码哈希格式不兼容（SHA1 体系 vs SCRAM/MD5），密码不可迁移
+func (m *Manager) displayPasswordResetUsers() {
+	m.mutex.Lock()
+	collected := append([]string(nil), m.passwordResetUsers...)
+	m.mutex.Unlock()
+	if len(collected) == 0 {
+		return
+	}
+
+	// 去重（同一用户名可能对应多个主机维度）并保持顺序
+	seen := make(map[string]bool)
+	var users []string
+	for _, u := range collected {
+		if !seen[u] {
+			seen[u] = true
+			users = append(users, u)
+		}
+	}
+
+	if m.config.Run.ShowConsoleLogs {
+		fmt.Printf("\n注意: 密码不可迁移（MySQL 与 PostgreSQL 密码哈希格式不兼容），以下 %d 个用户需人工重置密码:\n", len(users))
+		for _, u := range users {
+			fmt.Printf("  ALTER USER %s PASSWORD '<请填写密码>';\n", quotePGIdentifier(u))
+		}
+	}
+	m.Log("注意: 密码不可迁移（MySQL 与 PostgreSQL 密码哈希格式不兼容），以下 %d 个用户需人工重置密码:", len(users))
+	for _, u := range users {
+		m.Log("  ALTER USER %s PASSWORD '<请填写密码>';", quotePGIdentifier(u))
 	}
 }
 

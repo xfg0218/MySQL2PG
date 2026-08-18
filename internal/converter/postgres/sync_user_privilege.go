@@ -7,6 +7,24 @@ import (
 	"github.com/yourusername/mysql2pg/internal/mysql"
 )
 
+// normalizePGRoleName 将 MySQL 用户名规范化为 PostgreSQL 角色名：
+// 点号替换为下划线，与 PG 命名习惯对齐。
+// 用户创建（ConvertUserDDL）与表权限（ConvertTablePrivilegeDDL）必须使用
+// 同一规范化逻辑，否则 GRANT 指向的角色与已创建角色不一致（issue-11）。
+func normalizePGRoleName(userName string) string {
+	return strings.ReplaceAll(userName, ".", "_")
+}
+
+// quotePGIdentifier 用双引号包裹 PostgreSQL 标识符，并转义其中的双引号
+func quotePGIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// escapeSQLString 转义 SQL 字符串字面量中的单引号（双写）
+func escapeSQLString(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
 // ConvertUserDDL 将MySQL用户权限转换为PostgreSQL用户权限
 func ConvertUserDDL(user mysql.UserInfo) ([]string, error) {
 	var pgDDLs []string
@@ -25,11 +43,12 @@ func ConvertUserDDL(user mysql.UserInfo) ([]string, error) {
 	}
 
 	// 处理用户名中的特殊字符，将点号替换为下划线以符合PostgreSQL命名规则
-	pgUserName := strings.ReplaceAll(userName, ".", "_")
+	pgUserName := normalizePGRoleName(userName)
+	quotedRole := quotePGIdentifier(pgUserName)
 
 	// 创建用户 - PostgreSQL 不支持 IF NOT EXISTS，所以先检查用户是否存在
 	// 使用引号语法确保特殊字符被正确处理
-	pgDDLs = append(pgDDLs, fmt.Sprintf("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN CREATE USER \"%s\"; END IF; END $$;", pgUserName, pgUserName))
+	pgDDLs = append(pgDDLs, fmt.Sprintf("DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN CREATE USER %s; END IF; END $$;", escapeSQLString(pgUserName), quotedRole))
 
 	// 转换权限
 	for _, grant := range user.Grants {
@@ -45,28 +64,28 @@ func ConvertUserDDL(user mysql.UserInfo) ([]string, error) {
 
 			// 处理通配符数据库
 			if dbSpec == "*.*" {
-				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE postgres TO \"%s\";", pgUserName))
-				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO \"%s\";", pgUserName))
-				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO \"%s\";", pgUserName))
+				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE postgres TO %s;", quotedRole))
+				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO %s;", quotedRole))
+				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %s;", quotedRole))
 			} else {
 				// 处理特定数据库
 				dbName := strings.Split(dbSpec, ".")[0]
-				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO \"%s\";", dbName, pgUserName))
-				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO \"%s\";", pgUserName))
-				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO \"%s\";", pgUserName))
+				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO %s;", dbName, quotedRole))
+				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO %s;", quotedRole))
+				pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %s;", quotedRole))
 			}
 		} else if strings.Contains(grant, "SELECT ON") {
 			// 处理SELECT权限
-			pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"%s\";", pgUserName))
+			pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO %s;", quotedRole))
 		} else if strings.Contains(grant, "INSERT ON") {
 			// 处理INSERT权限
-			pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT INSERT ON ALL TABLES IN SCHEMA public TO \"%s\";", pgUserName))
+			pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT INSERT ON ALL TABLES IN SCHEMA public TO %s;", quotedRole))
 		} else if strings.Contains(grant, "UPDATE ON") {
 			// 处理UPDATE权限
-			pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT UPDATE ON ALL TABLES IN SCHEMA public TO \"%s\";", pgUserName))
+			pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT UPDATE ON ALL TABLES IN SCHEMA public TO %s;", quotedRole))
 		} else if strings.Contains(grant, "DELETE ON") {
 			// 处理DELETE权限
-			pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT DELETE ON ALL TABLES IN SCHEMA public TO \"%s\";", pgUserName))
+			pgDDLs = append(pgDDLs, fmt.Sprintf("GRANT DELETE ON ALL TABLES IN SCHEMA public TO %s;", quotedRole))
 		}
 	}
 
