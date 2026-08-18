@@ -13,7 +13,7 @@ func TestConvertTableDDL_DecimalUnsignedCheck(t *testing.T) {
 		ddl       string
 		wantCheck string // 必须包含的 CHECK 子串，空则不要求
 		rejectSub string // 不得包含的子串
-		wantNote  bool   // UnsignedConversions 是否应有记录
+		wantSub   string // 必须包含的其他子串，空则不要求
 	}{
 		{
 			name: "decimal unsigned 补 CHECK 约束",
@@ -22,7 +22,6 @@ func TestConvertTableDDL_DecimalUnsignedCheck(t *testing.T) {
 				"  `name` varchar(20)\n" +
 				") ENGINE=InnoDB;",
 			wantCheck: `CHECK ("amount" >= 0)`,
-			wantNote:  true,
 		},
 		{
 			name: "decimal 无 unsigned 不生成 CHECK",
@@ -30,7 +29,6 @@ func TestConvertTableDDL_DecimalUnsignedCheck(t *testing.T) {
 				"  `amount` decimal(10,2) NOT NULL\n" +
 				");",
 			rejectSub: "CHECK",
-			wantNote:  false,
 		},
 		{
 			name: "float unsigned 补 CHECK 约束",
@@ -38,7 +36,6 @@ func TestConvertTableDDL_DecimalUnsignedCheck(t *testing.T) {
 				"  `score` float unsigned DEFAULT NULL\n" +
 				");",
 			wantCheck: `CHECK ("score" >= 0)`,
-			wantNote:  true,
 		},
 		{
 			name: "double unsigned 补 CHECK 约束",
@@ -46,7 +43,6 @@ func TestConvertTableDDL_DecimalUnsignedCheck(t *testing.T) {
 				"  `val` double unsigned DEFAULT NULL\n" +
 				");",
 			wantCheck: `CHECK ("val" >= 0)`,
-			wantNote:  true,
 		},
 		{
 			name: "zerofill 隐含 unsigned 同样补 CHECK",
@@ -54,7 +50,6 @@ func TestConvertTableDDL_DecimalUnsignedCheck(t *testing.T) {
 				"  `amount` decimal(8,2) zerofill\n" +
 				");",
 			wantCheck: `CHECK ("amount" >= 0)`,
-			wantNote:  true,
 		},
 		{
 			name: "int unsigned 走类型提升不生成 CHECK",
@@ -62,14 +57,15 @@ func TestConvertTableDDL_DecimalUnsignedCheck(t *testing.T) {
 				"  `c` int unsigned DEFAULT NULL\n" +
 				");",
 			rejectSub: "CHECK",
-			wantNote:  false,
+			wantSub:   "BIGINT",
 		},
 		{
-			name: "bigint unsigned 提升 NUMERIC(20,0) 并记录 ORM 提示",
+			name: "bigint unsigned 提升 NUMERIC(20,0) 不生成 CHECK",
 			ddl: "CREATE TABLE `t` (\n" +
 				"  `uid` bigint unsigned NOT NULL\n" +
 				");",
-			wantNote: true,
+			rejectSub: "CHECK",
+			wantSub:   "NUMERIC(20,0)",
 		},
 	}
 
@@ -85,8 +81,8 @@ func TestConvertTableDDL_DecimalUnsignedCheck(t *testing.T) {
 			if tt.rejectSub != "" && strings.Contains(result.DDL, tt.rejectSub) {
 				t.Errorf("转换结果不应包含 %q，实际 DDL:\n%s", tt.rejectSub, result.DDL)
 			}
-			if got := len(result.UnsignedConversions) > 0; got != tt.wantNote {
-				t.Errorf("UnsignedConversions 记录存在性 = %v, want %v（内容: %v）", got, tt.wantNote, result.UnsignedConversions)
+			if tt.wantSub != "" && !strings.Contains(result.DDL, tt.wantSub) {
+				t.Errorf("转换结果缺少 %q，实际 DDL:\n%s", tt.wantSub, result.DDL)
 			}
 		})
 	}

@@ -228,9 +228,6 @@ type ConvertTableDDLResult struct {
 	ColumnNames    map[string]string // 键：原始列名，值：转换后的列名（带双引号格式）
 	ColumnComments map[string]string // 键：原始列名，值：列注释
 	PartitionDDLs  []string
-	// UnsignedConversions 记录无符号列的转换说明（DECIMAL 系补 CHECK 约束、
-	// BIGINT UNSIGNED 提升为 NUMERIC(20,0) 等），用于迁移报告提示用户复核
-	UnsignedConversions []string
 }
 
 // parseTableInfo 解析表名和是否为临时表
@@ -1368,8 +1365,6 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 	var primaryKeyColumns []string
 	columnNames := make(map[string]string)
 	generatedExpressionMap := make(map[string]string)
-	// 记录无符号列的转换说明（DECIMAL 系补 CHECK 约束、BIGINT UNSIGNED 提升等），用于迁移报告
-	var unsignedNotes []string
 
 	var incompleteTypeDef bool
 	var partialTypeDef string
@@ -1459,10 +1454,8 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 		}
 
 		// 在剥离 UNSIGNED 修饰前记录符号性：
-		// DECIMAL 系 UNSIGNED 需在转换后补 CHECK (col >= 0)（PG 无无符号类型）；
-		// BIGINT UNSIGNED 会被提升为 NUMERIC(20,0)，记录备查（可能影响 ORM 映射）
+		// DECIMAL 系 UNSIGNED 需在转换后补 CHECK (col >= 0)（PG 无无符号类型）
 		isUnsignedDecimalLike := isUnsignedDecimalLikeColumn(trimmedLine)
-		isBigintUnsigned := reBigintUnsigned.MatchString(trimmedLine)
 
 		columnName, typeDefinition, columnComment, isConstraint, isIncompleteType, err := processColumnDefinition(trimmedLine, lowercaseColumns)
 		if err != nil {
@@ -1547,10 +1540,6 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 		if isUnsignedDecimalLike {
 			// MySQL DECIMAL 系 UNSIGNED 的非负语义在 PostgreSQL 中以 CHECK 约束表达
 			newColumnDefinition += fmt.Sprintf(` CHECK ("%s" >= 0)`, columnName)
-			unsignedNotes = append(unsignedNotes, fmt.Sprintf("列 %s: DECIMAL 系 UNSIGNED → %s + CHECK (\"%s\" >= 0)", columnName, typeDefinition, columnName))
-		}
-		if isBigintUnsigned {
-			unsignedNotes = append(unsignedNotes, fmt.Sprintf("列 %s: BIGINT UNSIGNED → %s（超出 int64 的值需 ORM/应用按大数处理）", columnName, typeDefinition))
 		}
 		columnDefinitions = append(columnDefinitions, newColumnDefinition)
 	}
@@ -1660,12 +1649,11 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 	}
 
 	return &ConvertTableDDLResult{
-		DDL:                 finalDDL,
-		TableComment:        tableComment,
-		ColumnNames:         columnNamesMap,
-		ColumnComments:      columnCommentsMap,
-		PartitionDDLs:       partitionDDLs,
-		UnsignedConversions: unsignedNotes,
+		DDL:            finalDDL,
+		TableComment:   tableComment,
+		ColumnNames:    columnNamesMap,
+		ColumnComments: columnCommentsMap,
+		PartitionDDLs:  partitionDDLs,
 	}, nil
 }
 
@@ -1692,18 +1680,4 @@ func GenerateColumnCommentsSQL(tableName string, columnNamesMap, columnCommentsM
 	}
 
 	return comments
-}
-
-var (
-	// reTimestampColumn 匹配 MySQL DDL 中 TIMESTAMP 类型的列定义行（列名带反引号，SHOW CREATE TABLE 标准格式）
-	reTimestampColumn = regexp.MustCompile("(?im)^\\s*`[^`]+`\\s+timestamp\\b")
-	// reTimestampColumnPlain 匹配列名不带反引号的形式（兜底）
-	reTimestampColumnPlain = regexp.MustCompile("(?im)^\\s*[A-Za-z_$][A-Za-z0-9_$]*\\s+timestamp\\b")
-)
-
-// HasTimestampColumn 判断 MySQL DDL 是否包含 TIMESTAMP 类型的列
-// 用于迁移报告输出 TIMESTAMP -> TIMESTAMPTZ 的转换清单；
-// DATETIME、CURRENT_TIMESTAMP 默认值与表级选项均不构成匹配
-func HasTimestampColumn(mysqlDDL string) bool {
-	return reTimestampColumn.MatchString(mysqlDDL) || reTimestampColumnPlain.MatchString(mysqlDDL)
 }
