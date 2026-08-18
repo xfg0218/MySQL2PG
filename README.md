@@ -112,7 +112,7 @@ Start
 ### ✅ Data Integrity Assurance
 
 - **Million-level Data Support**: Supports conversion of millions of records with 100% data integrity retention.
-- **Multi-dimensional Data Validation**: Automatically validates data consistency after synchronization, with 100% accuracy, supporting batch and incremental validation.
+- **Row-Count Data Validation**: Automatically compares MySQL/PostgreSQL row counts after synchronization. With `truncate_before_sync=true`, a validation mismatch aborts the migration. Batch validation supported.
 - **Data Inconsistency Detection**: Automatically tallies tables with mismatched row counts and provides a detailed list of inconsistent tables.
 - **Flexible Sync Strategies**: Supports full synchronization and incremental synchronization (preserving existing data), configurable to truncate tables before sync.
 
@@ -148,9 +148,10 @@ Start
 
 - **Description**: Verifies data consistency between MySQL and PostgreSQL after data synchronization to ensure migration integrity.
 - **Configuration**: `validate_data: true` - Enable data validation function.
-- **Method**: Compares the row counts of two tables.
+- **Method**: Compares the row counts of two tables (row-count level; cannot detect content changes that keep row counts equal).
 - **Logic**: If data validation fails, the tool decides whether to interrupt execution based on the `truncate_before_sync` setting.
 - **Use Case**: Ensuring migration integrity, especially during critical data migrations in production environments.
+- **Note**: Validation is row-count based. Concurrent writes to the source during migration can cause row-count drift (false inconsistency reports); stop source writes during synchronization.
 
 ### truncate\_before\_sync Option
 
@@ -427,8 +428,8 @@ View conversion accuracy reaches 98%, supporting batch conversion (10 per batch)
 
 ### 8. Data Validation
 
-- Verifies MySQL and PostgreSQL data consistency, 100% accuracy.
-- Supports batch validation.
+- Compares MySQL and PostgreSQL row counts (row-count level validation).
+- With `truncate_before_sync=true`, a validation mismatch aborts the migration with an error.
 - Automatically tallies mismatched tables.
 
 ### 9. Concurrent Conversion

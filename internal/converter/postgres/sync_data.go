@@ -205,10 +205,8 @@ func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, 
 			return fmt.Errorf("同步表 %s 失败: %w", tableName, err)
 		}
 
-		if pgRowCount == totalRows {
-			validationResult = "数据一致"
-		} else {
-			validationResult = "数据不一致"
+		validationResult, err = evaluateRowCountValidation(tableName, totalRows, pgRowCount, config.Conversion.Options.TruncateBeforeSync)
+		if validationResult == "数据不一致" {
 			mutex.Lock()
 			*inconsistentTables = append(*inconsistentTables, TableDataInconsistency{
 				TableName:        tableName,
@@ -216,6 +214,10 @@ func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, 
 				PostgresRowCount: pgRowCount,
 			})
 			mutex.Unlock()
+		}
+		if err != nil {
+			logError(err.Error())
+			return err
 		}
 	} else {
 		validationResult = "跳过验证"
@@ -562,10 +564,8 @@ func validateData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection
 			return "", fmt.Errorf("同步表 %s 失败: %w", tableName, err)
 		}
 
-		if pgRowCount == finalMySQLRowCount {
-			validationResult = "数据一致"
-		} else {
-			validationResult = "数据不一致"
+		validationResult, err = evaluateRowCountValidation(tableName, finalMySQLRowCount, pgRowCount, config.Conversion.Options.TruncateBeforeSync)
+		if validationResult == "数据不一致" {
 			mutex.Lock()
 			*inconsistentTables = append(*inconsistentTables, TableDataInconsistency{
 				TableName:        tableName,
@@ -574,11 +574,29 @@ func validateData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection
 			})
 			mutex.Unlock()
 		}
+		if err != nil {
+			logError(err.Error())
+			return validationResult, err
+		}
 	} else {
 		validationResult = "跳过验证"
 	}
 
 	return validationResult, nil
+}
+
+// evaluateRowCountValidation 评估行数校验结果
+// truncateBeforeSync=true 且行数不一致时返回错误（数据被清空后同步仍不一致，
+// 属于真实的数据丢失/损坏，必须终止迁移）；truncate=false 时不一致仅记录不阻断
+// （追加模式下目标表原有数据会导致行数天然不相等）
+func evaluateRowCountValidation(tableName string, mysqlCount, pgCount int64, truncateBeforeSync bool) (string, error) {
+	if mysqlCount == pgCount {
+		return "数据一致", nil
+	}
+	if truncateBeforeSync {
+		return "数据不一致", fmt.Errorf("表 %s 数据校验不一致: MySQL %d 行, PostgreSQL %d 行 (truncate_before_sync=true，终止迁移)", tableName, mysqlCount, pgCount)
+	}
+	return "数据不一致", nil
 }
 
 // logSyncComplete 记录同步完成信息
