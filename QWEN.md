@@ -31,7 +31,7 @@
 | **License** | Apache-2.0 |
 | **Repository** | https://github.com/xfg0218/MySQL2PG |
 | **View Conversion** | 42 views 100% convertible |
-| **Function Conversion** | 113 functions 100% convertible |
+| **Function Conversion** | 113 functions 100% convertible（依赖用户变量行号或复杂游标控制流的函数建议人工复核） |
 
 ### Core Features
 
@@ -614,7 +614,7 @@ go tool pprof -http=:8080 http://localhost:6060/debug/pprof/heap
 
 ### Test Status
 - ✅ 42 views 100% convertible
-- ✅ 113 functions core syntax 100% convertible
+- ✅ 113 functions core syntax 100% convertible（依赖用户变量行号或复杂游标控制流的函数建议人工复核）
 - ✅ 41+ test cases all passing
 - ✅ Code coverage 88%+
 

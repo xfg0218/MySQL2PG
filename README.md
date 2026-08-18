@@ -89,7 +89,7 @@ Start
 - **MySQL Support**: Fully compatible with MySQL 5.7+ and MySQL 9.0+
 - **PostgreSQL Support**: Fully compatible with PostgreSQL 12+ to PostgreSQL 18+
 - **View Conversion**: 42 views 100% convertible, supporting all MySQL 5.7+ view syntax
-- **Function Conversion**: 113 functions core syntax 100% convertible, supporting complex stored procedure syntax
+- **Function Conversion**: 113 functions core syntax 100% convertible, supporting complex stored procedure syntax. Functions relying on user-variable row numbering (@row_index-style idioms) or complex cursor control flow should be reviewed manually after conversion.
 
 ### 🚀 High-Performance Design
 
@@ -407,6 +407,7 @@ View conversion accuracy reaches 98%, supporting batch conversion (10 per batch)
 - Supports 50+ common MySQL functions to PostgreSQL equivalents.
 - Function conversion accuracy > 95%.
 - Supports batch conversion (5 per batch).
+- Known limitation: functions relying on user-variable row numbering (@row_index-style) or complex cursor control flow should be reviewed manually after conversion.
 
 ### 5. Index Conversion
 

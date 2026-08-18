@@ -195,7 +195,7 @@ func (c *FunctionConverter) Convert() (string, error) {
 		return "", err
 	}
 
-	// 4. 应用特定函数的特殊补丁（如 complex_join_function）
+	// 4. 应用通用补丁（如 MySQL 特有 Handler 语句移除；不做按函数名的定制补丁）
 	c.applySpecificPatches()
 
 	// 5. 转换数据类型
@@ -475,42 +475,13 @@ func (c *FunctionConverter) extractBody() error {
 // 转换逻辑方法
 // =================================================================================================
 
-// applySpecificPatches 应用针对特定函数的补丁
+// applySpecificPatches 应用通用补丁
+// 注意：不做任何按函数名匹配的定制补丁——按名补丁会把针对个别函数的改写
+// 强加给所有同名（或名字含该子串）的函数，产生不可解释的输出。
+// 无法通用转换的语法应在迁移报告中提示人工复核，而非静默定制改写。
 func (c *FunctionConverter) applySpecificPatches() {
 	// 通用补丁：移除 MySQL 特有的 Handler 语句
 	c.body = reHandlerSpecific.ReplaceAllString(c.body, "")
-
-	if strings.Contains(c.mysqlFunc.Name, "complex_join_function") {
-		// 修复缺少END IF的问题
-		c.body = regexp.MustCompile(`(?i)if\s+v_done\s+then\s+exit;\s*else\s+v_count\s*:=\s+v_count\s*\+\s*1;\s*--\s*条件判断`).ReplaceAllString(c.body, "if v_done then exit;\n\telse\n\tv_count := v_count + 1; -- 条件判断")
-
-		// 修复return update_count但实际返回变量是v_result的问题
-		c.body = regexp.MustCompile(`(?i)close\s+cur;\s*return\s+update_count;`).ReplaceAllString(c.body, "close cur;\n\treturn v_result;")
-
-		// 确保函数体末尾有正确的END IF
-		if strings.Contains(c.body, "end loop;") && !strings.Contains(c.body, "end if;\nend loop;") {
-			loopIndex := strings.LastIndex(c.body, "end loop;")
-			if loopIndex != -1 {
-				c.body = c.body[:loopIndex] + "end if;\n" + c.body[loopIndex:]
-			}
-		}
-	}
-
-	if strings.Contains(c.mysqlFunc.Name, "comprehensive_reporting") {
-		// 1. 修复 SELECT 列表中的变量赋值: v_row_index := v_row_index + 1
-		// 替换为 ROW_NUMBER() OVER (ORDER BY amount) - 1
-		// 使用 (?i) 忽略大小写，并放宽匹配规则 (匹配 @row_index 或 v_row_index)
-		reRowIndex := regexp.MustCompile(`(?i)(@\w+|v_row_index)\s*:=\s*(@\w+|v_row_index)\s*\+\s*1`)
-		c.body = reRowIndex.ReplaceAllString(c.body, "ROW_NUMBER() OVER (ORDER BY amount) - 1")
-
-		// 2. 修复 WHERE 子句中的 v_row_index 使用
-		reWhereRowIndex := regexp.MustCompile(`(?i)where\s+row_index\s+in\s*\(\s*floor\s*\(\s*(@\w+|v_row_index)\s*/\s*2\s*\)\s*,\s*ceil\s*\(\s*(@\w+|v_row_index)\s*/\s*2\s*\)\s*\)`)
-		c.body = reWhereRowIndex.ReplaceAllString(c.body, "where row_index in (floor((v_total_orders - 1)::numeric / 2), ceil((v_total_orders - 1)::numeric / 2))")
-
-		// 3. 移除 set v_row_index = -1;
-		reSetIndex := regexp.MustCompile(`(?i)set\s+(@\w+|v_row_index)\s*=\s*-1\s*;?`)
-		c.body = reSetIndex.ReplaceAllString(c.body, "")
-	}
 }
 
 // convertDataTypes 转换基本数据类型
