@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/yourusername/mysql2pg/internal/config"
 	converter "github.com/yourusername/mysql2pg/internal/converter/postgres"
@@ -16,7 +19,14 @@ import (
 // Version 是工具版本号，构建时通过 ldflags 注入
 var Version = "dev"
 
+// exitCodeCancelled 用户通过 Ctrl-C / SIGTERM 取消迁移时的退出码（SIGINT 惯例值）
+const exitCodeCancelled = 130
+
 func main() {
+
+	// 根 context：支持 Ctrl-C / SIGTERM 信号取消，实现优雅停机
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// 监听本地 6060 端口，用于性能分析
 	go func() {
@@ -25,7 +35,7 @@ func main() {
 
 	// 检测 assess 子命令
 	if isAssess, assessArgs := detectAssessCommand(os.Args[1:]); isAssess {
-		runAssess(assessArgs)
+		runAssess(ctx, assessArgs)
 		return
 	}
 
@@ -71,26 +81,26 @@ func main() {
 	}
 
 	// 测试MySQL连接
-	if err := mysql.TestConnection(&cfg.MySQL); err != nil {
+	if err := mysql.TestConnection(ctx, &cfg.MySQL); err != nil {
 		fmt.Printf("MySQL连接测试失败: %v\n", err)
 		os.Exit(1)
 	}
 
 	// 测试PostgreSQL连接
-	if err := pgconn.TestConnection(&cfg.PostgreSQL); err != nil {
+	if err := pgconn.TestConnection(ctx, &cfg.PostgreSQL); err != nil {
 		fmt.Printf("PostgreSQL连接测试失败: %v\n", err)
 		os.Exit(1)
 	}
 
 	// 创建MySQL连接
-	mysqlConn, err := mysql.NewConnection(&cfg.MySQL)
+	mysqlConn, err := mysql.NewConnection(ctx, &cfg.MySQL)
 	if err != nil {
 		fmt.Printf("创建MySQL连接失败: %v\n", err)
 		os.Exit(1)
 	}
 	defer mysqlConn.Close()
 
-	postgresConn, err := pgconn.NewConnection(&cfg.PostgreSQL)
+	postgresConn, err := pgconn.NewConnection(ctx, &cfg.PostgreSQL)
 	if err != nil {
 		fmt.Printf("创建PostgreSQL连接失败: %v\n", err)
 		os.Exit(1)
@@ -162,7 +172,7 @@ func main() {
 	}
 
 	// 创建转换管理器并运行转换
-	manager, err := converter.NewManager(mysqlConn, postgresConn, cfg)
+	manager, err := converter.NewManager(ctx, mysqlConn, postgresConn, cfg)
 	if err != nil {
 		fmt.Printf("创建转换管理器失败: %v\n", err)
 		os.Exit(1)
@@ -170,6 +180,11 @@ func main() {
 	defer manager.Close()
 
 	if err := manager.Run(); err != nil {
+		// 区分用户取消与真正的转换失败
+		if ctx.Err() != nil {
+			fmt.Printf("\n迁移已被用户取消，已安全停止: %v\n", err)
+			os.Exit(exitCodeCancelled)
+		}
 		fmt.Printf("转换失败: %v\n", err)
 		os.Exit(1)
 	}

@@ -31,7 +31,7 @@
 | **License** | Apache-2.0 |
 | **Repository** | https://github.com/xfg0218/MySQL2PG |
 | **View Conversion** | 42 views 100% convertible |
-| **Function Conversion** | 113 functions 100% convertible |
+| **Function Conversion** | 113 functions 100% convertible（依赖用户变量行号或复杂游标控制流的函数建议人工复核） |
 
 ### Core Features
 
@@ -396,8 +396,8 @@ Report is a single self-contained HTML file with inline CSS and Google Fonts —
 | `varchar`, `varchar(255)` | `VARCHAR` | Preserves length |
 | `text`, `longtext` | `TEXT` | All text variants |
 | `blob`, `longblob`, `binary` | `BYTEA` | All binary types |
-| `datetime`, `datetime(6)` | `TIMESTAMP` | Preserves precision |
-| `timestamp`, `timestamp(6)` | `TIMESTAMP` | Preserves precision |
+| `datetime`, `datetime(6)` | `TIMESTAMP` | Naive time, preserves precision |
+| `timestamp`, `timestamp(6)` | `TIMESTAMPTZ` | MySQL TIMESTAMP is stored as UTC (timezone-aware); sessions pinned to UTC on both ends during migration |
 | `date` | `DATE` | |
 | `time` | `TIME` | Preserves precision |
 | `year` | `INTEGER` | |
@@ -408,6 +408,15 @@ Report is a single self-contained HTML file with inline CSS and Google Fonts —
 | `geometry`, `point`, `linestring`, etc. | Same | Spatial types preserved |
 | `bigint AUTO_INCREMENT` | `BIGSERIAL` | |
 | `int AUTO_INCREMENT` | `SERIAL` | |
+| `tinyint UNSIGNED` | `SMALLINT` | 0~255 可由 SMALLINT 容纳，无需提升 |
+| `smallint UNSIGNED` | `INTEGER` | 0~65535 超出 SMALLINT 上限，提升 |
+| `mediumint UNSIGNED` | `INTEGER` | 0~16777215 可由 INTEGER 容纳，无需提升 |
+| `int UNSIGNED` | `BIGINT` | 0~4294967295 超出 INTEGER 上限，提升 |
+| `bigint UNSIGNED` | `NUMERIC(20,0)` | 0~18446744073709551615 超出 BIGINT 上限，提升 |
+| `DECIMAL/FLOAT/DOUBLE UNSIGNED` | 对应类型 + `CHECK (col >= 0)` | PG 无无符号数值类型，非负约束以 CHECK 表达；转换报告输出清单 |
+| `ZEROFILL` 修饰 | 按 UNSIGNED 处理 | MySQL 中 ZEROFILL 隐含 UNSIGNED 语义 |
+| `bit(n)` (n ≤ 63) | `BIGINT` | BIT 本质是无符号整数（0 ~ 2^n-1） |
+| `bit(64)` | `NUMERIC(20,0)` | BIT(64) 最大值超出 BIGINT 上限 |
 
 ## Performance Optimizations (Applied)
 
@@ -442,10 +451,12 @@ bash scripts/integrationtests/run_integration_tests.sh
 
 ### Test Data
 
-The `scripts/mysql/insert_data.sql` file provides **10 test rows for all 167 tables** defined in `create_table.sql`, covering:
+The `scripts/mysql/insert_data.sql` file provides **10 test rows for all 167 original tables** (case_01~case_167) defined in `create_table.sql`, covering:
 - Basic types (integers, floats, strings, dates, JSON, binary)
 - Complex scenarios (e-commerce, CMS, finance, social, medical, hotel, restaurant)
 - Edge cases (partition tables, generated columns, reserved keywords, long identifiers)
+
+Note: `create_table.sql` defines 193 tables in total. The extra 25 (case_169~case_193) are type-length sweep tables (CHAR/VARCHAR/BINARY/VARBINARY/integer widths/DECIMAL/FLOAT/DOUBLE/BIT/temporal fsp, one table per type) used for full-length conversion coverage; they are DDL-only and need no INSERT data.
 
 ```bash
 # Insert test data (after create_table.sql)
@@ -462,7 +473,8 @@ mysql -u root -p test_db < scripts/mysql/insert_data.sql
 | Business scenarios (case_101~case_120) | 20 | 20 | Archive, CSV, Blackhole, UPSERT, multi-table DELETE |
 | Daily development (case_121~case_155) | 35 | 35 | E-commerce, CMS, finance, social, logs, sys admin |
 | Enhanced scenarios (case_156~case_167) | 12 | 12 | Composite FK, JSON generated columns, temporal mix |
-| **Total** | **167** | **84 integration tests** | Full coverage |
+| Type-length sweep (case_169~case_193) | 25 | - | Full-length conversion coverage per type, DDL only |
+| **Total** | **193** | **84 integration tests** | Full coverage |
 
 ## Development Conventions
 
@@ -602,7 +614,7 @@ go tool pprof -http=:8080 http://localhost:6060/debug/pprof/heap
 
 ### Test Status
 - ✅ 42 views 100% convertible
-- ✅ 113 functions core syntax 100% convertible
+- ✅ 113 functions core syntax 100% convertible（依赖用户变量行号或复杂游标控制流的函数建议人工复核）
 - ✅ 41+ test cases all passing
 - ✅ Code coverage 88%+
 

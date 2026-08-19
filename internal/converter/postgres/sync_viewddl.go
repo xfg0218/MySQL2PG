@@ -24,7 +24,7 @@ var (
 	reSep = regexp.MustCompile(`(?i)\s*separator\s*['"]([^'"]+)['"]`)
 	// 匹配 CONVERT 函数
 	reConvert = regexp.MustCompile(`(?i)\bconvert\s*\(\s*([^,]+)\s*,\s*([^)]+)\)`)
-	reCast    = regexp.MustCompile(`(?i)\bcast\s*\(\s*(.+?)\s+as\s+([a-z_][a-z0-9_]*(?:\s*\(\s*[^)]+\s*\))?)\s*\)`)
+	reCast    = regexp.MustCompile(`(?i)\bcast\s*\(\s*(.+?)\s+as\s+([a-z_][a-z0-9_]*(?:\s+integer)?(?:\s*\(\s*[^)]+\s*\))?)\s*\)`)
 	// 匹配 CAST(x USING charset) 语法（MySQL 特有，PostgreSQL 不支持）
 	reCastUsing = regexp.MustCompile(`(?i)\bcast\s*\(\s*([^)]+)\s+using\s+[a-z0-9_]+\s*\)(?:\s+as\s+'[^']*')?`)
 	// 匹配 CONVERT(x USING charset) 语法（MySQL 特有，PostgreSQL 不支持）
@@ -199,22 +199,31 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("empty view definition for view '%s'", viewName)
 	}
 
-	//  首先将反引号替换为双引号（标识符引用），确保所有后续正则表达式处理正确
-	processed := strings.ReplaceAll(viewDefinition, "`", `"`)
+	// 将反引号标识符替换为双引号形式；字符串字面量内部的反引号保持原样
+	processed := replaceBackticksOutsideLiterals(viewDefinition)
 	if processed == "" {
 		return "", fmt.Errorf("failed to process backticks in view definition for view '%s'", viewName)
 	}
 
 	processed = reIndexHint.ReplaceAllString(processed, "")
-	processed = strings.Join(strings.Fields(processed), " ")
+	// 空白压缩必须感知引号状态：字符串字面量内的连续空白属于数据内容，不可压缩
+	processed = compressWhitespaceOutsideLiterals(processed)
 	if processed == "" {
 		return "", fmt.Errorf("failed to remove mysql index hints in view definition for view '%s'", viewName)
 	}
+
+	// 遮蔽字符串字面量：ISNULL 全局替换不应改写字符串字面量内部的内容
+	// （紧随其后的 TO_DAYS/REGEXP_*/JSON_* 等转换需要读取真实字面量，
+	// 因此在它们之前恢复）
+	litMask := newLiteralMask()
+	processed = litMask.mask(processed)
 
 	processed = reISNULL.ReplaceAllString(processed, "($1 IS NULL)")
 	if processed == "" {
 		return "", fmt.Errorf("failed to replace isnull in view definition for view '%s'", viewName)
 	}
+
+	processed = litMask.unmask(processed)
 
 	processed = replaceToDaysExpressions(processed)
 	if processed == "" {
@@ -318,11 +327,14 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "", fmt.Errorf("failed to remove database prefix in view definition for view '%s'", viewName)
 	}
 
-	// 将IFNULL/ifnull替换为COALESCE
+	// 将IFNULL/ifnull替换为COALESCE（遮蔽字面量，字符串内的 IFNULL 不被改写）
+	litMaskIfnull := newLiteralMask()
+	processed = litMaskIfnull.mask(processed)
 	processed = reIfnull.ReplaceAllString(processed, "COALESCE(")
 	if processed == "" {
 		return "", fmt.Errorf("failed to replace IFNULL with COALESCE in view definition for view '%s'", viewName)
 	}
+	processed = litMaskIfnull.unmask(processed)
 
 	// GROUP_CONCAT -> string_agg 的增强转换，支持 DISTINCT、ORDER BY 和 SEPARATOR
 	// 使用括号匹配计数提取完整内容，支持嵌套函数调用如 CAST(...)
@@ -850,6 +862,13 @@ func lowerSQLPreservingSingleQuotedLiterals(sql string) string {
 	inSingleQuoted := false
 	for i := 0; i < len(sql); i++ {
 		ch := sql[i]
+		if inSingleQuoted && ch == '\\' && i+1 < len(sql) {
+			// 反斜杠转义（如 \' \\）：原样保留两个字符，不触发引号状态切换
+			out.WriteByte(ch)
+			out.WriteByte(sql[i+1])
+			i++
+			continue
+		}
 		if ch == '\'' {
 			out.WriteByte(ch)
 			if inSingleQuoted && i+1 < len(sql) && sql[i+1] == '\'' {
@@ -985,25 +1004,46 @@ func findMatchingParenInViewExpr(s string, openIdx int) (int, bool) {
 	inSingle := false
 	inDouble := false
 	for i := openIdx + 1; i < len(s); i++ {
-		switch s[i] {
-		case '\'':
-			if !inDouble {
-				inSingle = !inSingle
+		ch := s[i]
+		if inSingle {
+			if ch == '\\' {
+				i++ // 跳过反斜杠转义字符
+				continue
 			}
-		case '"':
-			if !inSingle {
-				inDouble = !inDouble
-			}
-		case '(':
-			if !inSingle && !inDouble {
-				depth++
-			}
-		case ')':
-			if !inSingle && !inDouble {
-				depth--
-				if depth == 0 {
-					return i, true
+			if ch == '\'' {
+				if i+1 < len(s) && s[i+1] == '\'' {
+					i++ // '' 双写转义
+					continue
 				}
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			if ch == '\\' {
+				i++
+				continue
+			}
+			if ch == '"' {
+				if i+1 < len(s) && s[i+1] == '"' {
+					i++
+					continue
+				}
+				inDouble = false
+			}
+			continue
+		}
+		switch ch {
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i, true
 			}
 		}
 	}
@@ -1018,14 +1058,47 @@ func normalizeCastTypeForPG(t string) string {
 	normalized := strings.TrimSpace(t)
 	upper := strings.ToUpper(normalized)
 	switch {
-	case upper == "SIGNED", upper == "UNSIGNED":
+	// 整数类型
+	case upper == "SIGNED", upper == "UNSIGNED",
+		upper == "SIGNED INTEGER", upper == "UNSIGNED INTEGER":
 		return "BIGINT"
+	case upper == "YEAR":
+		return "INTEGER"
+
+	// 日期时间类型
 	case upper == "DATETIME":
 		return "TIMESTAMP"
-	case upper == "CHAR":
+	case strings.HasPrefix(upper, "DATETIME("):
+		return "TIMESTAMP" + normalized[len("DATETIME"):]
+
+	// 字符串类型
+	case upper == "CHAR", upper == "NCHAR":
 		return "TEXT"
+	case strings.HasPrefix(upper, "CHAR("), strings.HasPrefix(upper, "NCHAR("):
+		return "TEXT"
+
+	// 二进制类型
+	case upper == "BINARY", upper == "VARBINARY":
+		return "BYTEA"
+	case strings.HasPrefix(upper, "BINARY("), strings.HasPrefix(upper, "VARBINARY("):
+		return "BYTEA"
+
+	// 浮点数类型
+	case upper == "DOUBLE":
+		return "DOUBLE PRECISION"
+	case upper == "REAL":
+		return "DOUBLE PRECISION"
+	case upper == "FLOAT", strings.HasPrefix(upper, "FLOAT("):
+		return "REAL"
+
+	// JSON 类型
+	case upper == "JSON":
+		return "JSONB"
+
+	// DECIMAL 保留精度
 	case strings.HasPrefix(upper, "DECIMAL"):
 		return "NUMERIC" + normalized[len("DECIMAL"):]
+
 	default:
 		return normalized
 	}
@@ -1391,34 +1464,15 @@ func replaceToDaysExpressions(s string) string {
 	out := s
 	idx := 0
 	for {
-		pos := -1
-		for i := idx; i <= len(out)-8; i++ {
-			if strings.ToLower(out[i:i+8]) == "to_days(" {
-				pos = i
-				break
-			}
-		}
+		// 仅在字符串字面量之外查找 to_days(
+		pos := findKeywordOutsideLiterals(out, "to_days(", idx)
 		if pos == -1 {
 			break
 		}
 
 		openParen := pos + 7
-		depth := 1
-		end := openParen + 1
-		for i := openParen + 1; i < len(out); i++ {
-			switch out[i] {
-			case '(':
-				depth++
-			case ')':
-				depth--
-				if depth == 0 {
-					end = i
-					i = len(out)
-				}
-			}
-		}
-
-		if depth > 0 {
+		end, ok := findMatchingParenInViewExpr(out, openParen)
+		if !ok {
 			idx = pos + 8
 			continue
 		}
@@ -1812,37 +1866,24 @@ func replaceConcatExpressions(s string) string {
 	out := s
 	idx := 0
 	for {
-		// 直接在原字符串中查找 "concat("，不区分大小写
-		pos := -1
-		for i := idx; i <= len(out)-6; i++ {
-			if strings.ToLower(out[i:i+6]) == "concat(" {
-				pos = i
-				break
-			}
-		}
+		// 仅在字符串字面量之外查找 concat(
+		pos := findKeywordOutsideLiterals(out, "concat(", idx)
 		if pos == -1 {
 			break
 		}
-		// 找到括号开始
-		start := pos + 6 // len("concat(")
-		depth := 1
-		end := start
-		// 找到匹配的右括号
-		for i := start; i < len(out); i++ {
-			switch out[i] {
-			case '(':
-				depth++
-			case ')':
-				depth--
-				if depth == 0 {
-					end = i
-					break
-				}
-			}
+		// 排除更长标识符的后缀（如 group_concat(）
+		if pos > 0 && isIdentChar(out[pos-1]) {
+			idx = pos + 7
+			continue
 		}
-		// 如果找不到匹配的右括号，跳过这个函数调用
-		if depth > 0 {
-			idx = pos + 6
+		// 找到括号开始
+		start := pos + 7 // len("concat(")
+		// 引号感知的括号匹配（同时修复旧实现 break 只退出 switch、
+		// end 被后续平衡括号反复覆盖导致替换范围外扩的问题；
+		// 旧实现关键字查找切片长度错误导致本函数从未生效）
+		end, ok := findMatchingParenInViewExpr(out, start-1)
+		if !ok {
+			idx = pos + 7
 			continue
 		}
 		// 分割参数
@@ -1868,48 +1909,27 @@ func replaceConcatExpressions(s string) string {
 }
 
 // extractGroupConcatContent 提取 GROUP_CONCAT(...) 内部完整内容
-// 使用括号匹配计数,支持嵌套函数调用如 CAST(...), CONCAT(...) 等
+// 使用引号感知的括号匹配,支持嵌套函数调用如 CAST(...), CONCAT(...) 等；
+// 字符串字面量内的 GROUP_CONCAT( 文本与括号不参与匹配
 // 返回: 完整匹配(含 GROUP_CONCAT), 内部内容, 起始位置, 结束位置
 func extractGroupConcatContent(s string, startIdx int) (string, string, int, int) {
-	upper := strings.ToUpper(s)
-	gcIdx := strings.Index(upper[startIdx:], "GROUP_CONCAT(")
+	gcIdx := findKeywordOutsideLiterals(s, "GROUP_CONCAT(", startIdx)
 	if gcIdx == -1 {
 		return "", "", -1, -1
 	}
-	gcIdx += startIdx
 
-	// 找到左括号位置
-	openParen := strings.Index(s[gcIdx:], "(")
-	if openParen == -1 {
-		return "", "", -1, -1
-	}
-	openParen += gcIdx
+	// 找到左括号位置（紧随关键字，无需再搜索，避免命中字面量内的括号）
+	openParen := gcIdx + len("GROUP_CONCAT(") - 1
 
-	// 括号匹配计数
-	depth := 1
-	i := openParen + 1
-loop:
-	for i < len(s) && depth > 0 {
-		switch s[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				break loop
-			}
-		}
-		i++
-	}
-
-	if depth != 0 {
-		// 未找到匹配的右括号
+	// 引号感知的括号匹配
+	end, ok := findMatchingParenInViewExpr(s, openParen)
+	if !ok {
 		return "", "", -1, -1
 	}
 
-	fullMatch := s[gcIdx : i+1]
-	inner := s[openParen+1 : i]
-	return fullMatch, inner, gcIdx, i
+	fullMatch := s[gcIdx : end+1]
+	inner := s[openParen+1 : end]
+	return fullMatch, inner, gcIdx, end
 }
 
 // convertGroupConcatToStringAgg 将 GROUP_CONCAT 转换为 string_agg

@@ -70,7 +70,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │     └─ 支持50+函数映射（如 NOW() → CURRENT_TIMESTAMP，IFNULL() → COALESCE()）
  │
  ├─▶ [Step 7] 转换用户 (users: true)
- │     └─ MySQL 用户 → PostgreSQL 角色（保留密码哈希）
+ │     └─ MySQL 用户 → PostgreSQL 角色（密码不可迁移：哈希格式不兼容，迁移后输出需重置密码的用户清单与 ALTER USER 模板）
  │
  ├─▶ [Step 8] 转换表权限 (table_privileges: true)
  │     └─ GRANT SELECT ON table → GRANT USAGE, SELECT ON table
@@ -89,11 +89,11 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 - **MySQL 支持**：全面兼容 MySQL 5.7+ 和 MySQL 9.0+ 版本
 - **PostgreSQL 支持**：全面兼容 PostgreSQL 12+ 到 PostgreSQL 18+ 版本
 - **视图转换支持**：42 个视图 100% 可转换，支持所有 MySQL 5.7+ 视图语法
-- **函数转换支持**：113 个函数核心语法 100% 可转换，支持复杂的存储过程语法
+- **函数转换支持**：113 个函数核心语法 100% 可转换，支持复杂的存储过程语法；使用用户变量行号（@row_index 类习惯用法）或复杂游标控制流的函数转换后建议人工复核
 - **MySQL 支持**：全面兼容 MySQL 5.7+ 和 MySQL 8.0+ 版本
 - **PostgreSQL 支持**：全面兼容 PostgreSQL 12+ 到 PostgreSQL 18+ 版本
 - **视图转换支持**：42 个视图 100% 可转换，支持所有 MySQL 5.7+ 视图语法
-- **函数转换支持**：113 个函数核心语法 100% 可转换，支持复杂的存储过程语法
+- **函数转换支持**：113 个函数核心语法 100% 可转换，支持复杂的存储过程语法；使用用户变量行号（@row_index 类习惯用法）或复杂游标控制流的函数转换后建议人工复核
 
 ### 🚀 高性能设计
 - **并发转换引擎**：支持根据硬件配置配置并发线程数，转换速度比单线程提升5-10倍
@@ -102,6 +102,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 - **无锁进度聚合**：基于 channel 的进度上报消除 mutex 竞争，进度更新速度提升 51 倍（9155ns → 178ns），内存减少 96%
 - **连接池管理**：支持自定义MySQL和PostgreSQL连接池设置，最大连接数可达100+
 - **实时进度监控**：实时展示转换进度，进度更新频率1次/秒，让用户实时了解转换状态
+- **安全取消（Ctrl-C / SIGTERM）**：全链路 context 贯通，收到取消信号后停止派发新任务，等待进行中的批次完整提交后安全退出（退出码 130），避免 kill -9 导致的事务残留
 
 ### 🎯 精准转换能力
 - **字段类型智能映射**：支持几乎所有的MySQL字段类型到PostgreSQL的精确转换，映射准确率达到90.9%
@@ -112,7 +113,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 
 ### ✅ 数据完整性保障
 - **百万级数据支持**：支持百万级数据量转换，数据完整性保持率100%
-- **多维度数据校验**：同步后自动验证数据一致性，校验准确率100%，支持批量校验和增量数据校验
+- **数据行数校验**：同步后自动比对 MySQL 与 PostgreSQL 的行数一致性；`truncate_before_sync=true` 时校验不一致将终止迁移，支持批量校验
 - **数据不一致检测**：自动统计数据量不匹配的表，提供详细的不一致表清单
 - **灵活同步策略**：支持全量同步和保留已有数据同步，可配置同步前是否清空表数据
 
@@ -142,9 +143,10 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 ### 数据校验
 - **功能说明**：在同步数据后验证MySQL和PostgreSQL的数据一致性，确保数据迁移的完整性
 - **参数配置**：`validate_data: true` - 启用数据校验功能
-- **验证方式**：比较两张表的行数是否一致
+- **验证方式**：比较两张表的行数是否一致（行数级校验，无法检测行数相同但内容变化的情况）
 - **处理逻辑**：如果数据校验失败，工具会根据 `truncate_before_sync` 设置决定是否中断执行
 - **使用场景**：确保数据迁移的完整性，特别是在生产环境中进行重要数据迁移时
+- **注意事项**：校验基于行数比对，迁移期间源库如有并发写入可能出现行数漂移（误报不一致），建议同步期间源库停止写入
 
 ### truncate_before_sync 选项
 - **功能说明**：控制在同步数据前是否清空PostgreSQL中的表数据，提供灵活的同步策略
@@ -298,8 +300,8 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 | varchar, varchar(255), varchar(256), varchar(64), varchar(20), varchar(100), varchar(50), varchar(128), varchar(500), varchar(200) | VARCHAR | 所有varchar变体保持为VARCHAR，保留长度 |
 | text, longtext, mediumtext, tinytext | TEXT | 所有text变体统一转换为TEXT |
 | blob, longblob, mediumblob, tinyblob, binary, varbinary, varbinary(64) | BYTEA | 所有二进制类型统一转换为BYTEA |
-| datetime, datetime(6), datetime(3) | TIMESTAMP | datetime转换为TIMESTAMP，保留精度 |
-| timestamp, timestamp(6), timestamp(3) | TIMESTAMP | timestamp保持为TIMESTAMP，保留精度 |
+| datetime, datetime(6), datetime(3) | TIMESTAMP | datetime转换为TIMESTAMP（朴素时间），保留精度 |
+| timestamp, timestamp(6), timestamp(3) | TIMESTAMPTZ | MySQL TIMESTAMP 内部按 UTC 存储、为带时区语义的类型，映射为 TIMESTAMPTZ；迁移时会话时区固定为 UTC，保证 instant 不偏移 |
 | date | DATE | date保持为DATE |
 | time | TIME | time保持为TIME，保留精度 |
 | year | INTEGER | year转换为INTEGER |
@@ -317,6 +319,14 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 | geometrycollection | GEOMETRYCOLLECTION | geometrycollection保持为GEOMETRYCOLLECTION |
 | bigint AUTO_INCREMENT | BIGSERIAL | 自增bigint转换为BIGSERIAL |
 | int AUTO_INCREMENT | SERIAL | 自增int转换为SERIAL |
+| tinyint unsigned | SMALLINT | 无符号范围0~255可由SMALLINT容纳 |
+| smallint unsigned | INTEGER | 无符号范围0~65535超出SMALLINT上限，提升为INTEGER |
+| mediumint unsigned | INTEGER | 无符号范围0~16777215可由INTEGER容纳 |
+| int unsigned | BIGINT | 无符号范围0~4294967295超出INTEGER上限，提升为BIGINT |
+| bigint unsigned | NUMERIC(20,0) | 无符号范围0~18446744073709551615超出BIGINT上限，提升为NUMERIC(20,0) |
+| decimal/float/double unsigned | NUMERIC/REAL/DOUBLE PRECISION + CHECK (col >= 0) | PG 无无符号数值类型，非负约束以 CHECK 表达（MySQL 8.0.17+ 已弃用该语法） |
+| bit(n) (n≤63) | BIGINT | BIT本质是无符号整数（0 ~ 2^n-1） |
+| bit(64) | NUMERIC(20,0) | BIT(64)最大值超出BIGINT上限 |
 
 ### 2. 数据转换
 - 支持百万级数据量转换，数据完整性保持率100%
@@ -405,6 +415,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 - 支持50+个常用MySQL函数到PostgreSQL等效函数的转换
 - 函数转换准确率达到95%以上
 - 支持批量转换函数，每批可达5个
+- 已知限制：依赖用户变量行号（@row_index 类）或复杂游标控制流的函数，转换结果建议人工复核
 
 ### 5. 索引转换
 - 支持主键、唯一索引、普通索引等多种索引类型的转换
@@ -422,8 +433,8 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 - 可单独控制是否转换表权限
 
 ### 8. 数据校验功能
-- 验证MySQL和PostgreSQL数据一致性，校验准确率100%
-- 支持批量校验
+- 比对MySQL和PostgreSQL的行数一致性（行数级校验）
+- `truncate_before_sync=true` 时校验不一致将终止迁移并返回错误
 - 自动统计数据量不匹配的表，提供详细的不一致表清单
 
 ### 9. 并发转换

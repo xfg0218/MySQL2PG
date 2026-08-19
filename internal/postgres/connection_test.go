@@ -159,3 +159,117 @@ func TestResetTypedDestinationsResetsNullableState(t *testing.T) {
 		t.Fatalf("NullBool 未正确重置: %+v", *v)
 	}
 }
+
+// TestMakeTypedDestBigintUnsigned BIGINT UNSIGNED 最大值超出 int64 范围，
+// 必须使用 NullString 透传（NullInt64 会在 Scan 阶段因 strconv 越界失败）
+func TestMakeTypedDestBigintUnsigned(t *testing.T) {
+	cases := []struct {
+		name    string
+		colType string
+	}{
+		{name: "bigint unsigned", colType: "bigint unsigned"},
+		{name: "bigint(20) unsigned", colType: "bigint(20) unsigned"},
+		{name: "大写 BIGINT(20) UNSIGNED", colType: "BIGINT(20) UNSIGNED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dest := makeTypedDest(tc.colType)
+			if _, ok := dest.value.(*sql.NullString); !ok {
+				t.Fatalf("期望 *sql.NullString，实际 %T", dest.value)
+			}
+		})
+	}
+
+	// 有符号 bigint 保持 NullInt64（回归验证）
+	dest := makeTypedDest("bigint(20)")
+	if _, ok := dest.value.(*sql.NullInt64); !ok {
+		t.Fatalf("有符号 bigint 期望 *sql.NullInt64，实际 %T", dest.value)
+	}
+}
+
+// TestParseMySQLBitValue 验证 BIT 列大端序二进制值到十进制数的解析
+func TestParseMySQLBitValue(t *testing.T) {
+	cases := []struct {
+		name   string
+		data   []byte
+		want   string
+		wantOk bool
+	}{
+		{name: "单字节 1", data: []byte{0x01}, want: "1", wantOk: true},
+		{name: "单字节 255", data: []byte{0xFF}, want: "255", wantOk: true},
+		{name: "4 字节 65535", data: []byte{0x00, 0x00, 0xFF, 0xFF}, want: "65535", wantOk: true},
+		{name: "8 字节 uint64 最大值", data: []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, want: "18446744073709551615", wantOk: true},
+		{name: "8 字节 int64 最大值+1", data: []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, want: "9223372036854775808", wantOk: true},
+		{name: "空值", data: []byte{}, want: "", wantOk: false},
+		{name: "超过 8 字节", data: make([]byte, 9), want: "", wantOk: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseMySQLBitValue(tc.data)
+			if ok != tc.wantOk || got != tc.want {
+				t.Fatalf("parseMySQLBitValue(%v) = (%q, %v)，期望 (%q, %v)", tc.data, got, ok, tc.want, tc.wantOk)
+			}
+		})
+	}
+}
+
+// TestIsValidPGTime 验证 MySQL TIME 值到 PostgreSQL TIME 范围的判定
+func TestIsValidPGTime(t *testing.T) {
+	cases := []struct {
+		val  string
+		want bool
+	}{
+		{"00:00:00", true},
+		{"23:59:59", true},
+		{"12:30:45.123456", true},
+		{"24:00:00", true},
+		{"24:00:00.000000", true},
+		{"-00:30:00", false},
+		{"-838:59:59", false},
+		{"838:59:59", false},
+		{"25:00:00", false},
+		{"24:00:01", false},
+		{"24:01:00", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.val, func(t *testing.T) {
+			if got := isValidPGTime(tc.val); got != tc.want {
+				t.Fatalf("isValidPGTime(%q) = %v，期望 %v", tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestConvertBatchColumnValueBitAndTime 验证 BIT 值转换与 TIME 超范围处理
+func TestConvertBatchColumnValueBitAndTime(t *testing.T) {
+	columnTypes := map[string]string{
+		"flags": "bit(8)",
+		"big":   "bit(64)",
+		"dur":   "time",
+		"dt":    "datetime",
+	}
+
+	// BIT 值转十进制数（目标列 BIGINT/NUMERIC(20,0)）
+	if got := convertBatchColumnValue("flags", []byte{0x05}, columnTypes); got != "5" {
+		t.Fatalf("bit(8) 值 0x05 期望转为 \"5\"，实际 %v", got)
+	}
+	if got := convertBatchColumnValue("big", []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, columnTypes); got != "18446744073709551615" {
+		t.Fatalf("bit(64) 最大值期望透传为十进制字符串，实际 %v", got)
+	}
+
+	// TIME 超范围值转 NULL，范围内值透传
+	if got := convertBatchColumnValue("dur", "838:59:59", columnTypes); got != nil {
+		t.Fatalf("超范围 TIME 期望转 NULL，实际 %v", got)
+	}
+	if got := convertBatchColumnValue("dur", "-01:00:00", columnTypes); got != nil {
+		t.Fatalf("负值 TIME 期望转 NULL，实际 %v", got)
+	}
+	if got := convertBatchColumnValue("dur", "12:30:45", columnTypes); got != "12:30:45" {
+		t.Fatalf("范围内 TIME 期望透传，实际 %v", got)
+	}
+
+	// datetime 列不走 TIME 范围检查
+	if got := convertBatchColumnValue("dt", "2024-01-01 10:00:00", columnTypes); got != "2024-01-01 10:00:00" {
+		t.Fatalf("datetime 值期望透传，实际 %v", got)
+	}
+}

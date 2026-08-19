@@ -159,7 +159,7 @@ func GenerateAssessmentHTML(report *AssessmentReport, outputPath string) error {
         
         /* Tables */
         .data-table {
-            width: 100%;
+            width: 100%%;
             border-collapse: collapse;
             font-size: 0.9rem;
         }

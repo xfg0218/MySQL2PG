@@ -1,10 +1,12 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yourusername/mysql2pg/internal/config"
@@ -51,8 +53,10 @@ type Manager struct {
 	errorLogFile   *os.File
 	logFile        *os.File
 	totalTasks     int
-	completedTasks int
+	completedTasks atomic.Int64
 	mutex          sync.Mutex
+	// 根 context（通常来自 signal.NotifyContext），取消后各阶段循环停止派发新任务
+	ctx context.Context
 	// 版本信息
 	mysqlVersion     *mysql.MySQLVersionInfo
 	postgreSQLVersion *postgres.PostgreSQLVersionInfo
@@ -62,6 +66,8 @@ type Manager struct {
 	conversionStats []ConversionStageStat
 	// 存储数据校验不一致的表信息
 	inconsistentTables []TableDataInconsistency
+	// 存储源库设置了密码、迁移后需要人工重置密码的用户（密码哈希格式不兼容，不可迁移，issue-10）
+	passwordResetUsers []string
 	// 存储表名到列名映射的映射
 	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
 	// 评估模式：只评估不写入
@@ -97,7 +103,8 @@ type ConversionStageStat struct {
 
 // NewManager 创建新的转换管理器实例
 // 初始化数据库连接、配置和日志文件
-func NewManager(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config) (*Manager, error) {
+// ctx 为根 context（通常来自 signal.NotifyContext），用于取消控制；传 nil 时回退为 context.Background()
+func NewManager(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config) (*Manager, error) {
 	// 打开错误日志文件
 	errorLogFile, err := os.OpenFile(config.Run.ErrorLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -119,8 +126,18 @@ func NewManager(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, 
 		config:              config,
 		errorLogFile:        errorLogFile,
 		logFile:             logFile,
+		ctx:                 ctx,
 		tableColumnNamesMap: make(map[string]map[string]string),
 	}, nil
+}
+
+// context 返回管理器持有的根 context
+// 未通过 NewManager 设置时回退为 context.Background()，保证 nil 安全
+func (m *Manager) context() context.Context {
+	if m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
 }
 
 // Close 关闭转换管理器
@@ -143,6 +160,11 @@ func (m *Manager) Close() error {
 // Run 执行完整的转换流程
 // 根据配置执行表DDL、数据、索引、函数、用户和权限的转换
 func (m *Manager) Run() error {
+	// 启动前检查取消信号
+	if err := m.context().Err(); err != nil {
+		return fmt.Errorf("转换已取消: %w", err)
+	}
+
 	m.Log("表MySQL 的DDL、数据、view、索引、函数、用户和权限的转换到 PostgreSQL ...")
 
 	// 检查是否启用了表列表功能
@@ -229,7 +251,7 @@ func (m *Manager) Run() error {
 		// 第四阶段：执行索引同步（如果启用）
 		if m.config.Conversion.Options.Indexes && len(indexes) > 0 {
 			m.Log("启用了索引同步功能，只同步指定的 %d 个索引", len(indexes))
-			m.completedTasks = 0
+			m.completedTasks.Store(0)
 
 			// 过滤Index
 			// 过滤出需要同步的表
@@ -295,6 +317,9 @@ func (m *Manager) Run() error {
 		// 显示数据不一致表的统计信息
 		m.displayInconsistentTables()
 
+		// 显示需人工重置密码的用户清单（密码不可迁移，issue-10）
+		m.displayPasswordResetUsers()
+
 		// 生成汇总表格
 		m.generateSummaryTable()
 
@@ -319,6 +344,9 @@ func (m *Manager) Run() error {
 
 	// 显示数据不一致表的统计信息
 	m.displayInconsistentTables()
+
+	// 显示需人工重置密码的用户清单（密码不可迁移，issue-10）
+	m.displayPasswordResetUsers()
 
 	m.Log("转换完成!")
 	return nil
@@ -1256,13 +1284,15 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 	currentViewIndex := 0
 
 	for _, view := range views {
+		// 取消检查：根 context 取消后停止处理后续视图
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		// 检查是否在排除列表中
 		if m.config.Conversion.Options.SkipUseViewList {
 			if shouldSkipView(view.ViewName, m.config.Conversion.Options.SkipViewSet) {
 				m.Log("跳过视图 %s（在排除列表中）", view.ViewName)
-				m.mutex.Lock()
-				m.completedTasks++
-				m.mutex.Unlock()
 				m.updateProgress()
 				continue
 			}
@@ -1294,16 +1324,12 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表视图 %s 成功\n", progress, m.completedTasks, m.totalTasks, view.ViewName)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表视图 %s 成功\n", progress, completed, m.totalTasks, view.ViewName)
 		}
 
 		m.Log("转换表视图 %s 完成", view.ViewName)
@@ -1319,6 +1345,11 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 	currentTableIndex := 0
 
 	for _, table := range tables {
+		// 取消检查：根 context 取消后停止处理后续表
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 		currentTableIndex++
 
@@ -1360,16 +1391,12 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		if tableExists {
 			if m.config.Conversion.Options.SkipExistingTables {
 				// 更新进度
-				m.mutex.Lock()
-				m.completedTasks++
-				progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-				m.mutex.Unlock()
+				completed := m.completeTask()
+				progress := float64(completed) / float64(m.totalTasks) * 100
 
 				// 显示跳过信息（根据配置决定是否在控制台显示）
 				if m.config.Run.ShowConsoleLogs {
-					m.mutex.Lock()
-					fmt.Printf("进度: %.2f%% (%d/%d) : 表 %s 已存在，跳过创建\n", progress, m.completedTasks, m.totalTasks, table.Name)
-					m.mutex.Unlock()
+					fmt.Printf("进度: %.2f%% (%d/%d) : 表 %s 已存在，跳过创建\n", progress, completed, m.totalTasks, table.Name)
 				}
 
 				m.Log("表 %s 已存在，跳过创建", table.Name)
@@ -1430,17 +1457,17 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		// 为每个列添加注释
 		m.addColumnComments(table, pgResult.ColumnNames)
 
+		// 按 MySQL 表级 AUTO_INCREMENT=N 设置序列初值
+		// 覆盖 data:false 仅结构迁移的场景（数据阶段的回填以表内最大值为准）
+		m.backfillInitialSequence(table)
+
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 成功\n", progress, m.completedTasks, m.totalTasks, table.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 成功\n", progress, completed, m.totalTasks, table.Name)
 		}
 
 		m.Log("转换表 %s 成功", table.Name)
@@ -1548,13 +1575,15 @@ func (m *Manager) addColumnComments(table mysql.TableInfo, columnNameMap map[str
 // convertFunctions 转换函数
 func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore chan struct{}) error {
 	for _, function := range functions {
+		// 取消检查：根 context 取消后停止处理后续函数
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		// 检查是否在排除列表中
 		if m.config.Conversion.Options.SkipUseFunctionList {
 			if shouldSkipFunction(function.Name, m.config.Conversion.Options.SkipFunctionSet) {
 				m.Log("跳过函数 %s（在排除列表中）", function.Name)
-				m.mutex.Lock()
-				m.completedTasks++
-				m.mutex.Unlock()
 				m.updateProgress()
 				continue // 移除错误的 semaphore
 			}
@@ -1580,16 +1609,12 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换函数 %s 成功\n", progress, m.completedTasks, m.totalTasks, function.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换函数 %s 成功\n", progress, completed, m.totalTasks, function.Name)
 		}
 
 		<-semaphore
@@ -1609,11 +1634,17 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		},
 		PostgresDB: m.postgresConn.GetPool(),
 		Schema:     schemaName,
+		Ctx:        m.context(),
 		LogFunc:    m.Log,
 		ErrorFunc:  m.logError,
 	}
 
 	for _, index := range indexes {
+		// 取消检查：根 context 取消后停止处理后续索引
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 
 		// 使用小写索引名进行日志输出
@@ -1627,18 +1658,11 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 			if err != nil {
 				m.logError(fmt.Sprintf("处理 UNIQUE 索引 %s 失败: %v", lowercaseIndexName, err))
 				// 跳过该索引，继续处理其他索引
-				m.mutex.Lock()
-				m.completedTasks++
-				m.mutex.Unlock()
 				<-semaphore
 				m.updateProgress()
 				continue
 			}
 			if !shouldCreate {
-				// 更新进度
-				m.mutex.Lock()
-				m.completedTasks++
-				m.mutex.Unlock()
 				<-semaphore
 				m.updateProgress()
 				continue
@@ -1657,10 +1681,6 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 
 		// 如果没有生成DDL语句（比如只包含pri_key的索引），则跳过
 		if pgDDL == "" {
-			// 更新进度
-			m.mutex.Lock()
-			m.completedTasks++
-			m.mutex.Unlock()
 			<-semaphore
 			m.updateProgress()
 			continue
@@ -1682,16 +1702,12 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : [%s]转换索引 %s 成功\n", progress, m.completedTasks, m.totalTasks, index.Table, lowercaseIndexName)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : [%s]转换索引 %s 成功\n", progress, completed, m.totalTasks, index.Table, lowercaseIndexName)
 		}
 
 		<-semaphore
@@ -1702,6 +1718,11 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 // convertUsers 转换用户及权限
 func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) error {
 	for _, user := range users {
+		// 取消检查：根 context 取消后停止处理后续用户
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 
 		pgDDLs, err := ConvertUserDDL(user)
@@ -1724,17 +1745,22 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 			}
 		}
 
+		// 记录源库设置了密码的用户：密码哈希格式不兼容无法迁移，需人工重设（issue-10）
+		if user.PasswordHash != "" {
+			if userParts := strings.Split(user.Name, "@"); len(userParts) == 2 && !strings.HasPrefix(userParts[0], "mysql.") {
+				m.mutex.Lock()
+				m.passwordResetUsers = append(m.passwordResetUsers, normalizePGRoleName(userParts[0]))
+				m.mutex.Unlock()
+			}
+		}
+
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换用户 %s 的权限成功\n", progress, m.completedTasks, m.totalTasks, user.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换用户 %s 的权限成功\n", progress, completed, m.totalTasks, user.Name)
 		}
 
 		<-semaphore
@@ -1746,6 +1772,7 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	progressChan := make(chan progressUpdate, m.config.Conversion.Limits.Concurrency)
 	return SyncTableData(
+		m.context(),
 		m.mysqlConn,
 		m.postgresConn,
 		m.config,
@@ -1765,21 +1792,22 @@ func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{
 // convertTablePrivileges 转换表权限
 func (m *Manager) convertTablePrivileges(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	for _, table := range tables {
+		// 取消检查：根 context 取消后停止处理后续表权限
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 		// 模拟权限转换
 		time.Sleep(100 * time.Millisecond)
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.mutex.Unlock()
+		completed := m.completeTask()
+		progress := float64(completed) / float64(m.totalTasks) * 100
 
 		// 显示转换成功信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			m.mutex.Lock()
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 的权限成功\n", progress, m.completedTasks, m.totalTasks, table.Name)
-			m.mutex.Unlock()
+			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 的权限成功\n", progress, completed, m.totalTasks, table.Name)
 		}
 
 		// 记录到日志文件
@@ -1793,6 +1821,11 @@ func (m *Manager) convertTablePrivileges(tables []mysql.TableInfo, semaphore cha
 // convertTablePrivilegesNew 转换表权限（新的table_privileges选项）
 func (m *Manager) convertTablePrivilegesNew(tablePrivileges []mysql.TablePrivInfo, semaphore chan struct{}) error {
 	for _, tablePriv := range tablePrivileges {
+		// 取消检查：根 context 取消后停止处理后续表权限
+		if err := m.context().Err(); err != nil {
+			return err
+		}
+
 		semaphore <- struct{}{}
 
 		// 提取用户名（处理带主机和不带主机的情况）
@@ -1859,12 +1892,9 @@ func (m *Manager) convertTablePrivilegesNew(tablePrivileges []mysql.TablePrivInf
 		}
 
 		// 更新进度
-		m.mutex.Lock()
-		m.completedTasks++
-		completed := m.completedTasks
+		completed := m.completeTask()
 		total := m.totalTasks
 		progress := float64(completed) / float64(total) * 100
-		m.mutex.Unlock()
 
 		// 显示转换信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
@@ -1924,15 +1954,18 @@ func (m *Manager) logError(errMsg string, args ...interface{}) {
 	}
 }
 
-// updateProgress 更新进度
-func (m *Manager) updateProgress() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+// completeTask 原子地增加已完成任务数并返回增加后的值
+// 所有阶段的任务计数统一通过该方法或 updateProgress 完成，避免多处手动递增
+func (m *Manager) completeTask() int64 {
+	return m.completedTasks.Add(1)
+}
 
-	m.completedTasks++
+// updateProgress 更新进度（递增计数并输出通用进度日志的唯一入口）
+func (m *Manager) updateProgress() {
+	completed := m.completedTasks.Add(1)
 	if m.config.Run.ShowProgress && m.totalTasks > 0 {
-		progress := float64(m.completedTasks) / float64(m.totalTasks) * 100
-		m.Log("进度: %.2f%% (%d/%d)", progress, m.completedTasks, m.totalTasks)
+		progress := float64(completed) / float64(m.totalTasks) * 100
+		m.Log("进度: %.2f%% (%d/%d)", progress, completed, m.totalTasks)
 	}
 }
 
@@ -2014,6 +2047,38 @@ func (m *Manager) displayInconsistentTables() {
 		m.Log("+------------------+----------------+------------------+")
 
 		m.Log("共发现 %d 个表数据校验不一致", len(m.inconsistentTables))
+	}
+}
+
+// displayPasswordResetUsers 显示迁移后需要人工重置密码的用户清单（issue-10）
+// MySQL 与 PostgreSQL 的密码哈希格式不兼容（SHA1 体系 vs SCRAM/MD5），密码不可迁移
+func (m *Manager) displayPasswordResetUsers() {
+	m.mutex.Lock()
+	collected := append([]string(nil), m.passwordResetUsers...)
+	m.mutex.Unlock()
+	if len(collected) == 0 {
+		return
+	}
+
+	// 去重（同一用户名可能对应多个主机维度）并保持顺序
+	seen := make(map[string]bool)
+	var users []string
+	for _, u := range collected {
+		if !seen[u] {
+			seen[u] = true
+			users = append(users, u)
+		}
+	}
+
+	if m.config.Run.ShowConsoleLogs {
+		fmt.Printf("\n注意: 密码不可迁移（MySQL 与 PostgreSQL 密码哈希格式不兼容），以下 %d 个用户需人工重置密码:\n", len(users))
+		for _, u := range users {
+			fmt.Printf("  ALTER USER %s PASSWORD '<请填写密码>';\n", quotePGIdentifier(u))
+		}
+	}
+	m.Log("注意: 密码不可迁移（MySQL 与 PostgreSQL 密码哈希格式不兼容），以下 %d 个用户需人工重置密码:", len(users))
+	for _, u := range users {
+		m.Log("  ALTER USER %s PASSWORD '<请填写密码>';", quotePGIdentifier(u))
 	}
 }
 

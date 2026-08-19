@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,8 @@ import (
 )
 
 // runAssess 运行评估命令
-func runAssess(args []string) {
+// ctx 为 main 创建的根 context（支持信号取消）
+func runAssess(ctx context.Context, args []string) {
 	// 解析命令行参数
 	var configPath string
 	var outputPath string
@@ -57,7 +59,7 @@ func runAssess(args []string) {
 
 	// 测试 MySQL 连接
 	fmt.Println("测试 MySQL 连接...")
-	if err := mysql.TestConnection(&cfg.MySQL); err != nil {
+	if err := mysql.TestConnection(ctx, &cfg.MySQL); err != nil {
 		fmt.Printf("MySQL 连接测试失败：%v\n", err)
 		os.Exit(1)
 	}
@@ -65,21 +67,21 @@ func runAssess(args []string) {
 
 	// 测试 PostgreSQL 连接
 	fmt.Println("测试 PostgreSQL 连接...")
-	if err := pgconn.TestConnection(&cfg.PostgreSQL); err != nil {
+	if err := pgconn.TestConnection(ctx, &cfg.PostgreSQL); err != nil {
 		fmt.Printf("PostgreSQL 连接测试失败：%v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("✓ PostgreSQL 连接成功")
 
 	// 创建数据库连接
-	mysqlConn, err := mysql.NewConnection(&cfg.MySQL)
+	mysqlConn, err := mysql.NewConnection(ctx, &cfg.MySQL)
 	if err != nil {
 		fmt.Printf("创建 MySQL 连接失败：%v\n", err)
 		os.Exit(1)
 	}
 	defer mysqlConn.Close()
 
-	postgresConn, err := pgconn.NewConnection(&cfg.PostgreSQL)
+	postgresConn, err := pgconn.NewConnection(ctx, &cfg.PostgreSQL)
 	if err != nil {
 		fmt.Printf("创建 PostgreSQL 连接失败：%v\n", err)
 		os.Exit(1)
@@ -87,7 +89,7 @@ func runAssess(args []string) {
 	defer postgresConn.Close()
 
 	// 创建评估器（使用现有迁移逻辑进行评估）
-	assess, err := assessor.NewMigrationAssessor(mysqlConn, postgresConn, cfg)
+	assess, err := assessor.NewMigrationAssessor(ctx, mysqlConn, postgresConn, cfg)
 	if err != nil {
 		fmt.Printf("创建评估器失败：%v\n", err)
 		os.Exit(1)
@@ -97,6 +99,11 @@ func runAssess(args []string) {
 	fmt.Println()
 	report, err := assess.Run()
 	if err != nil {
+		// 区分用户取消与真正的评估失败
+		if ctx.Err() != nil {
+			fmt.Printf("\n评估已被用户取消，已安全停止：%v\n", err)
+			os.Exit(exitCodeCancelled)
+		}
 		fmt.Printf("评估失败：%v\n", err)
 		os.Exit(1)
 	}

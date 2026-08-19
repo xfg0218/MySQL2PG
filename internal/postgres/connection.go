@@ -43,6 +43,16 @@ func (p *PostgreSQLVersionInfo) IsVersionGreaterOrEqual(major, minor int) bool {
 type Connection struct {
 	pool   *pgxpool.Pool
 	config *config.PostgreSQLConfig
+	ctx    context.Context
+}
+
+// context 返回连接持有的根 context
+// 未通过 NewConnection 构造时回退为 context.Background()，保证 nil 安全
+func (c *Connection) context() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // GetPgConnectionParams 获取 PostgreSQL 连接参数（导出方法）
@@ -137,6 +147,12 @@ func makeTypedDest(colType string) typedDest {
 	}
 	if colType != "" {
 		lower := strings.ToLower(colType)
+		// BIGINT UNSIGNED 最大值 18446744073709551615 超出 int64 范围，
+		// 必须用 NullString 透传（NullInt64 在 Scan 阶段会因 strconv 越界而失败），
+		// 目标列为 NUMERIC(20,0)，文本协议可正确接收十进制字符串
+		if strings.Contains(lower, "bigint") && strings.Contains(lower, "unsigned") {
+			return typedDest{value: new(sql.NullString)}
+		}
 		if strings.Contains(lower, "tinyint") || strings.Contains(lower, "smallint") ||
 			strings.Contains(lower, "mediumint") || strings.Contains(lower, "int") ||
 			strings.Contains(lower, "bigint") || strings.Contains(lower, "year") ||
@@ -241,8 +257,8 @@ func getTypedValue(dest *typedDest) interface{} {
 }
 
 // NewConnection 创建新的 PostgreSQL 连接
-func NewConnection(config *config.PostgreSQLConfig) (*Connection, error) {
-	ctx := context.Background()
+// ctx 为根 context（通常来自 signal.NotifyContext），取消后所有进行中的操作会被中断
+func NewConnection(ctx context.Context, config *config.PostgreSQLConfig) (*Connection, error) {
 
 	// 构建基础连接字符串
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
@@ -276,6 +292,14 @@ func NewConnection(config *config.PostgreSQLConfig) (*Connection, error) {
 	// 设置连接池大小
 	poolConfig.MaxConns = int32(config.MaxConns) // 使用配置文件中的最大连接数
 
+	// 固定会话时区为 UTC：MySQL TIMESTAMP 列映射为 TIMESTAMPTZ，读取端已固定 UTC
+	// （MySQL 会话时区固定为 UTC）；写入端不带显式时区偏移的值按会话 TimeZone 解释，
+	// 因此写入端也必须是 UTC，才能保证 instant 语义正确
+	poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, "SET TimeZone = 'UTC'")
+		return err
+	}
+
 	// 创建连接池
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -290,6 +314,7 @@ func NewConnection(config *config.PostgreSQLConfig) (*Connection, error) {
 	return &Connection{
 		pool:   pool,
 		config: config,
+		ctx:    ctx,
 	}, nil
 }
 
@@ -311,7 +336,7 @@ func (c *Connection) BeginTransaction(ctx context.Context) (pgx.Tx, error) {
 
 // ExecuteDDL 执行 DDL 语句
 func (c *Connection) ExecuteDDL(ddl string, originalMysqlDDL ...string) error {
-	ctx := context.Background()
+	ctx := c.context()
 	execDDL := sanitizeDDLForExecution(ddl)
 	_, err := c.pool.Exec(ctx, execDDL)
 	if err != nil {
@@ -326,7 +351,7 @@ func (c *Connection) ExecuteDDL(ddl string, originalMysqlDDL ...string) error {
 // ExecuteDDLWithTransaction 在事务中执行 DDL 语句
 func (c *Connection) ExecuteDDLWithTransaction(tx pgx.Tx, ddl string) error {
 	execDDL := sanitizeDDLForExecution(ddl)
-	_, err := tx.Exec(context.Background(), execDDL)
+	_, err := tx.Exec(c.context(), execDDL)
 	return err
 }
 
@@ -336,7 +361,7 @@ func sanitizeDDLForExecution(ddl string) string {
 
 // InsertData 插入数据
 func (c *Connection) InsertData(tableName string, columns []string, rows *sql.Rows) error {
-	ctx := context.Background()
+	ctx := c.context()
 
 	// 构建占位符模板
 	placeholders := make([]string, len(columns))
@@ -382,7 +407,7 @@ func (c *Connection) InsertData(tableName string, columns []string, rows *sql.Ro
 
 // InsertDataWithTransaction 在事务中插入数据
 func (c *Connection) InsertDataWithTransaction(tx pgx.Tx, tableName string, columns []string, rows *sql.Rows) error {
-	ctx := context.Background()
+	ctx := c.context()
 
 	// 构建占位符模板
 	placeholders := make([]string, len(columns))
@@ -428,7 +453,7 @@ func (c *Connection) InsertDataWithTransaction(tx pgx.Tx, tableName string, colu
 
 // BatchInsertDataWithTransaction 在事务中批量插入数据
 func (c *Connection) BatchInsertDataWithTransaction(tx pgx.Tx, tableName string, columns []string, batchSize int, rows *sql.Rows) error {
-	ctx := context.Background()
+	ctx := c.context()
 
 	// 构建列名字符串
 	var quotedColumns []string
@@ -564,7 +589,7 @@ func (c *Connection) executeBatchInsert(tx pgx.Tx, ctx context.Context, tableNam
 
 // GetVersion 获取 PostgreSQL 版本信息
 func (c *Connection) GetVersion() (string, error) {
-	ctx := context.Background()
+	ctx := c.context()
 	var version string
 	err := c.pool.QueryRow(ctx, "SELECT version()").Scan(&version)
 	if err != nil {
@@ -612,9 +637,10 @@ func ParsePostgreSQLVersion(version string) *PostgreSQLVersionInfo {
 }
 
 // TestConnection 测试 PostgreSQL 连接
-func TestConnection(config *config.PostgreSQLConfig) error {
+// ctx 用于取消控制（如信号取消）
+func TestConnection(ctx context.Context, config *config.PostgreSQLConfig) error {
 	// 测试连接时不使用压缩
-	conn, err := NewConnection(config)
+	conn, err := NewConnection(ctx, config)
 	if err != nil {
 		return fmt.Errorf("PostgreSQL 连接测试失败：%w", err)
 	}
@@ -625,7 +651,7 @@ func TestConnection(config *config.PostgreSQLConfig) error {
 
 // TableExists 检查表是否存在
 func (c *Connection) TableExists(tableName string) (bool, error) {
-	ctx := context.Background()
+	ctx := c.context()
 	query := `
 		SELECT EXISTS (
 			SELECT 1
@@ -644,7 +670,7 @@ func (c *Connection) TableExists(tableName string) (bool, error) {
 
 // GrantTablePrivileges 授予表权限
 func (c *Connection) GrantTablePrivileges(user, tableName string, privileges []string) error {
-	ctx := context.Background()
+	ctx := c.context()
 
 	// 构建权限字符串
 	privilegesStr := strings.Join(privileges, ", ")
@@ -662,7 +688,7 @@ func (c *Connection) GrantTablePrivileges(user, tableName string, privileges []s
 
 // GetTablePrivileges 获取表的权限信息
 func (c *Connection) GetTablePrivileges(tableName string) ([]map[string]string, error) {
-	ctx := context.Background()
+	ctx := c.context()
 
 	query := `
 		SELECT
@@ -701,7 +727,7 @@ func (c *Connection) GetTablePrivileges(tableName string) ([]map[string]string, 
 
 // GetTableRowCount 获取表的行数
 func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
-	ctx := context.Background()
+	ctx := c.context()
 	query := fmt.Sprintf("SELECT COUNT(*) FROM \"%s\"", tableName)
 
 	var count int64
@@ -711,6 +737,33 @@ func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 	}
 
 	return count, nil
+}
+
+// SyncAutoIncrementSequence 回填自增列（SERIAL/BIGSERIAL）关联的序列
+// 使下一次隐式插入获得正确的下一个值。
+// nextValueLowerBound 为序列下一值的下限（MySQL 表级 AUTO_INCREMENT 起始值，未知时传 0），
+// 实际设置的下一值为 GREATEST(表内当前最大值+1, nextValueLowerBound)。
+// 返回 (false, nil) 表示目标列未关联序列（如既有表非 SERIAL 建表），调用方应告警并继续。
+func (c *Connection) SyncAutoIncrementSequence(tableName, columnName string, nextValueLowerBound int64) (bool, error) {
+	ctx := c.context()
+	tbl := pgQuoteIdentifier(tableName)
+	col := pgQuoteIdentifier(columnName)
+	query := fmt.Sprintf(
+		`SELECT setval(pg_get_serial_sequence('%s', '%s'), GREATEST(COALESCE((SELECT MAX(%s) FROM %s), 0) + 1, %d), false)`,
+		strings.ReplaceAll(tbl, "'", "''"),
+		strings.ReplaceAll(col, "'", "''"),
+		col, tbl, nextValueLowerBound)
+
+	var next *int64
+	if err := c.pool.QueryRow(ctx, query).Scan(&next); err != nil {
+		return false, fmt.Errorf("回填表 %s 列 %s 序列失败：%w", tableName, columnName, err)
+	}
+	return next != nil, nil
+}
+
+// pgQuoteIdentifier 用双引号包裹 PostgreSQL 标识符，并转义其中的双引号
+func pgQuoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 func getColumnTypeByName(columnName string, columnTypes map[string]string) string {
@@ -738,6 +791,56 @@ func isGeometryLikeType(columnType string) bool {
 	return strings.Contains(t, "point") || strings.Contains(t, "geometry")
 }
 
+// isBitType 判断是否为 MySQL BIT 位字段类型
+func isBitType(columnType string) bool {
+	return strings.Contains(strings.ToLower(columnType), "bit")
+}
+
+// parseMySQLBitValue 将 MySQL BIT 列的大端序二进制值解析为十进制数字符串
+// BIT(n) 本质是无符号整数（0 ~ 2^n-1，n<=64），超过 int64 范围的值
+// 以字符串形式透传给 NUMERIC(20,0) 目标列
+func parseMySQLBitValue(data []byte) (string, bool) {
+	if len(data) == 0 || len(data) > 8 {
+		return "", false
+	}
+	var v uint64
+	for _, b := range data {
+		v = v<<8 | uint64(b)
+	}
+	return strconv.FormatUint(v, 10), true
+}
+
+// isTimeOnlyType 判断是否为 MySQL TIME 类型（排除 DATETIME/TIMESTAMP）
+func isTimeOnlyType(columnType string) bool {
+	t := strings.ToLower(columnType)
+	return strings.Contains(t, "time") && !strings.Contains(t, "datetime") && !strings.Contains(t, "timestamp")
+}
+
+// isValidPGTime 判断 MySQL TIME 值是否在 PostgreSQL TIME 范围（00:00:00 ~ 24:00:00）内
+// MySQL TIME 范围为 -838:59:59 ~ 838:59:59，负值和超过 24 小时的值在 PostgreSQL 中无法表示
+func isValidPGTime(val string) bool {
+	if val == "" || val[0] == '-' {
+		return false
+	}
+	idx := strings.IndexByte(val, ':')
+	if idx <= 0 {
+		// 非标准格式交由 PostgreSQL 判断
+		return true
+	}
+	hours, err := strconv.Atoi(val[:idx])
+	if err != nil {
+		return true
+	}
+	if hours > 24 {
+		return false
+	}
+	// PostgreSQL TIME 最大值为 24:00:00，24 小时仅允许全零分秒
+	if hours == 24 && strings.TrimRight(val[idx+1:], "0:.") != "" {
+		return false
+	}
+	return true
+}
+
 func convertBatchColumnValue(columnName string, value interface{}, columnTypes map[string]string) interface{} {
 	switch val := value.(type) {
 	case []byte:
@@ -750,6 +853,13 @@ func convertBatchColumnValue(columnName string, value interface{}, columnTypes m
 		if isBinaryLikeType(columnType) {
 			return val
 		}
+		// BIT 位字段：大端序二进制值转十进制数（目标列为 BIGINT/NUMERIC(20,0)）
+		if isBitType(columnType) {
+			if s, ok := parseMySQLBitValue(val); ok {
+				return s
+			}
+			return nil
+		}
 		// 零日期检测：使用 bytes.Equal 避免 string() 分配
 		if bytes.Equal(val, zeroDateTimeBytes1) || bytes.Equal(val, zeroDateTimeBytes2) {
 			return nil
@@ -760,6 +870,11 @@ func convertBatchColumnValue(columnName string, value interface{}, columnTypes m
 	case string:
 		// 零日期检测
 		if val == "0000-00-00 00:00:00" || val == "0000-00-00" {
+			return nil
+		}
+		// TIME 超范围检测：MySQL TIME 可为负值或超过 24 小时，超出 PostgreSQL
+		// TIME 范围的值转 NULL（与零日期处理策略一致）
+		if isTimeOnlyType(getColumnTypeByName(columnName, columnTypes)) && !isValidPGTime(val) {
 			return nil
 		}
 		return val
@@ -806,8 +921,11 @@ func resolveCopyColumnsAndPrimaryKey(columns []string, primaryKey string, lowerc
 	return copyColumns, resolvedPrimaryKey
 }
 
-func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKey string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, error) {
-	totalRows, lastValue, compositeLastValues, err := c.BatchInsertDataWithCompositeKeys(tx, tableName, columns, columnTypes, batchSize, []string{primaryKey}, lowercaseColumns, rows)
+// BatchInsertDataWithTransactionAndGetLastValue 批量插入数据并返回最后处理的主键值
+// ctx 用于取消控制：数据同步热路径传入脱离根取消信号的批次 context，
+// 保证取消时进行中的批次能完整执行完毕
+func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(ctx context.Context, tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKey string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, error) {
+	totalRows, lastValue, compositeLastValues, err := c.BatchInsertDataWithCompositeKeys(ctx, tx, tableName, columns, columnTypes, batchSize, []string{primaryKey}, lowercaseColumns, rows)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -820,8 +938,8 @@ func (c *Connection) BatchInsertDataWithTransactionAndGetLastValue(tx pgx.Tx, ta
 
 // BatchInsertDataWithCompositeKeys 批量插入数据并支持复合主键
 // 返回值：(总行数, 单主键最后值, 复合主键最后值列表, 错误)
-func (c *Connection) BatchInsertDataWithCompositeKeys(tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKeys []string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, []interface{}, error) {
-	ctx := context.Background()
+// ctx 用于取消控制，语义同 BatchInsertDataWithTransactionAndGetLastValue
+func (c *Connection) BatchInsertDataWithCompositeKeys(ctx context.Context, tx pgx.Tx, tableName string, columns []string, columnTypes map[string]string, batchSize int, primaryKeys []string, lowercaseColumns bool, rows *sql.Rows) (int, interface{}, []interface{}, error) {
 
 	// 准备批量插入
 	var rowCount int
@@ -1015,7 +1133,7 @@ func (c *Connection) GetCharset() (string, error) {
 		WHERE datname = $1
 	`
 	var charset string
-	err := c.pool.QueryRow(context.Background(), query, c.config.Database).Scan(&charset)
+	err := c.pool.QueryRow(c.context(), query, c.config.Database).Scan(&charset)
 	if err != nil {
 		return "", fmt.Errorf("获取 PostgreSQL 字符集失败：%w", err)
 	}

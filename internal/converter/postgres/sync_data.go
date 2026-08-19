@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yourusername/mysql2pg/internal/config"
@@ -39,7 +40,9 @@ type progressUpdate struct {
 }
 
 // SyncTableData 同步表数据（主协调函数）
-func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), updateProgress func(), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}, progressChan chan progressUpdate) error {
+// ctx 为根 context（通常来自 signal.NotifyContext）：取消后停止派发新表，
+// 已派发表的进行中批次会完整提交后再退出
+func SyncTableData(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), updateProgress func(), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}, progressChan chan progressUpdate) error {
 	// 启动专用进度消费者 goroutine
 	progressDone := make(chan struct{})
 	go func() {
@@ -57,26 +60,36 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 	// 创建错误通道来捕获goroutine中的错误
 	errorChan := make(chan error, len(tables))
 
+	// 已派发的表数量（取消时用于输出进度）
+	dispatched := 0
 	for _, table := range tables {
-		semaphore <- struct{}{}
-		wg.Add(1)
+		// 取消检查：取消后不再派发新表，等待进行中的批次提交完成
+		select {
+		case <-ctx.Done():
+			log("收到取消信号，停止派发剩余 %d 个表的同步任务，等待进行中的批次提交后退出", len(tables)-dispatched)
+		case semaphore <- struct{}{}:
+			wg.Add(1)
+			dispatched++
 
-		go func(table mysql.TableInfo) {
-			defer func() {
-				<-semaphore
-				updateProgress()
-				wg.Done()
-			}()
+			go func(table mysql.TableInfo) {
+				defer func() {
+					<-semaphore
+					updateProgress()
+					wg.Done()
+				}()
 
-			// 执行单表同步
-			err := syncSingleTable(mysqlConn, postgresConn, config, table, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, progressChan)
-			if err != nil {
-				select {
-				case errorChan <- err:
-				default:
+				// 执行单表同步
+				err := syncSingleTable(ctx, mysqlConn, postgresConn, config, table, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, progressChan)
+				if err != nil {
+					select {
+					case errorChan <- err:
+					default:
+					}
 				}
-			}
-		}(table)
+			}(table)
+			continue
+		}
+		break
 	}
 
 	// 等待所有goroutine完成
@@ -95,6 +108,11 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 		errs = append(errs, err)
 	}
 
+	// 如果是取消导致的退出，返回取消错误（优先于批次错误聚合）
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("数据同步已被取消（已派发 %d/%d 个表，进行中的批次已完整提交）: %w", dispatched, len(tables), err)
+	}
+
 	// 如果有错误发生，返回聚合错误信息
 	if len(errs) > 0 {
 		// 构建聚合错误信息
@@ -111,7 +129,9 @@ func SyncTableData(mysqlConn *mysql.Connection, postgresConn *postgres.Connectio
 }
 
 // syncSingleTable 同步单个表的数据
-func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency, progressChan chan progressUpdate) error {
+// ctx 为根 context：仅用于取消检查与批次前置操作；
+// 进行中批次的 DB 操作使用脱离取消信号的批次 context（见 paginateAndInsert）
+func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, progressChan chan progressUpdate) error {
 	// 获取表列信息
 	columns, columnTypes, err := mysqlConn.GetTableColumnsWithTypes(table.Name)
 	if err != nil {
@@ -130,18 +150,23 @@ func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connect
 
 	// 如果表为空，处理空表逻辑
 	if totalRows == 0 {
-		return handleEmptyTable(postgresConn, config, table.Name, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables)
+		return handleEmptyTable(postgresConn, config, table.Name, table.DDL, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables)
+	}
+
+	// 取消检查：开始实际写入前若已取消则直接退出
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("同步表 %s 已取消: %w", table.Name, err)
 	}
 
 	// 清空表数据（根据配置）
 	if config.Conversion.Options.TruncateBeforeSync {
-		if err := truncateTable(postgresConn, table.Name, logError); err != nil {
+		if err := truncateTable(ctx, postgresConn, table.Name, logError); err != nil {
 			return fmt.Errorf("同步表 %s 失败: %w", table.Name, err)
 		}
 	}
 
 	// 分页插入数据
-	processedRows, err := paginateAndInsert(mysqlConn, postgresConn, config, table, columns, columnTypes, totalRows, log, logError, mutex, progressChan)
+	processedRows, err := paginateAndInsert(ctx, mysqlConn, postgresConn, config, table, columns, columnTypes, totalRows, log, logError, mutex, progressChan)
 	if err != nil {
 		return err
 	}
@@ -152,15 +177,23 @@ func syncSingleTable(mysqlConn *mysql.Connection, postgresConn *postgres.Connect
 		return err
 	}
 
+	// 回填自增列序列：CopyFrom 显式写入 id 不推进 PG 序列，
+	// 必须在数据插入完成后执行（TRUNCATE 会将序列重置回初始值）
+	backfillAutoIncrementSequence(postgresConn, config, table.Name, table.DDL, log, logError)
+
 	// 显示同步成功信息
-	logSyncComplete(config, table.Name, processedRows, validationResult, log, logError, mutex, completedTasks, totalTasks)
+	logSyncComplete(config, table.Name, processedRows, validationResult, log, logError, completedTasks, totalTasks)
 
 	return nil
 }
 
 // handleEmptyTable 处理空表逻辑
-func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, tableName string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *int, totalTasks int, inconsistentTables *[]TableDataInconsistency) error {
+// mysqlDDL 用于解析表级 AUTO_INCREMENT=N：空表也可能带有业务故意设置的自增起始值
+func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, tableName, mysqlDDL string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency) error {
 	log("表 %s 没有数据，跳过同步", tableName)
+
+	// 回填自增列序列：空表也可能通过 AUTO_INCREMENT=N 指定了起始值
+	backfillAutoIncrementSequence(postgresConn, config, tableName, mysqlDDL, log, logError)
 
 	// 执行数据校验（如果启用）
 	var validationResult string
@@ -172,10 +205,8 @@ func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, 
 			return fmt.Errorf("同步表 %s 失败: %w", tableName, err)
 		}
 
-		if pgRowCount == totalRows {
-			validationResult = "数据一致"
-		} else {
-			validationResult = "数据不一致"
+		validationResult, err = evaluateRowCountValidation(tableName, totalRows, pgRowCount, config.Conversion.Options.TruncateBeforeSync)
+		if validationResult == "数据不一致" {
 			mutex.Lock()
 			*inconsistentTables = append(*inconsistentTables, TableDataInconsistency{
 				TableName:        tableName,
@@ -184,17 +215,20 @@ func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, 
 			})
 			mutex.Unlock()
 		}
+		if err != nil {
+			logError(err.Error())
+			return err
+		}
 	} else {
 		validationResult = "跳过验证"
 	}
 
 	// 显示同步成功信息
 	if config.Run.ShowConsoleLogs {
-		mutex.Lock()
-		overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
-		currentTask := *completedTasks + 1
+		completed := completedTasks.Load()
+		overallProgress := float64(completed) / float64(totalTasks) * 100
+		currentTask := completed + 1
 		fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 数据成功，共有 0 行数据，%s \n", overallProgress, currentTask, totalTasks, tableName, validationResult)
-		mutex.Unlock()
 	}
 
 	log("表 %s 同步完成，0 行数据，%s", tableName, validationResult)
@@ -202,9 +236,10 @@ func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, 
 }
 
 // truncateTable 清空目标表
-func truncateTable(postgresConn *postgres.Connection, tableName string, logError func(errMsg string, args ...interface{})) error {
+// ctx 用于取消控制
+func truncateTable(ctx context.Context, postgresConn *postgres.Connection, tableName string, logError func(errMsg string, args ...interface{})) error {
 	// 开始事务用于清空表
-	tx, err := postgresConn.BeginTransaction(context.Background())
+	tx, err := postgresConn.BeginTransaction(ctx)
 	if err != nil {
 		errMsg := fmt.Sprintf("开始事务失败: %v", err)
 		logError(errMsg)
@@ -212,15 +247,15 @@ func truncateTable(postgresConn *postgres.Connection, tableName string, logError
 	}
 
 	truncateQuery := fmt.Sprintf("TRUNCATE TABLE \"%s\"", tableName)
-	if _, err := tx.Exec(context.Background(), truncateQuery); err != nil {
+	if _, err := tx.Exec(ctx, truncateQuery); err != nil {
 		errMsg := fmt.Sprintf("清空表 %s 数据失败: %v", tableName, err)
 		logError(errMsg)
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		return fmt.Errorf("清空表失败: %w", err)
 	}
 
 	// 提交清空表的事务
-	if err := tx.Commit(context.Background()); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		errMsg := fmt.Sprintf("提交事务失败: %v", err)
 		logError(errMsg)
 		return fmt.Errorf("提交事务失败: %w", err)
@@ -237,8 +272,11 @@ type progressState struct {
 	totalRows     int64
 }
 
-// paginateAndInsert 分页查询并插入数据
-func paginateAndInsert(mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, columns []string, columnTypes map[string]string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, progressChan chan progressUpdate) (int64, error) {
+// paginateAndInsert 分页读取 MySQL 数据并批量插入 PostgreSQL
+// ctx 为根 context：每轮批次开始前检查取消信号，取消后不再开启新批次；
+// 已开启批次的 DB 操作使用 context.WithoutCancel 派生的批次 context，
+// 脱离取消信号，保证进行中的批次完整提交后再退出
+func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, columns []string, columnTypes map[string]string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, progressChan chan progressUpdate) (int64, error) {
 	// 获取批量大小配置
 	batchSize := int64(config.Conversion.Limits.MaxRowsPerBatch)
 	if batchSize <= 0 {
@@ -287,17 +325,26 @@ func paginateAndInsert(mysqlConn *mysql.Connection, postgresConn *postgres.Conne
 	}
 
 	for {
+		// 取消检查：开启新批次前若已取消则停止，进行中的批次不受影响（完整提交）
+		if err := ctx.Err(); err != nil {
+			return processedRows, fmt.Errorf("表 %s 同步已取消（已处理 %d 行）: %w", table.Name, processedRows, err)
+		}
+
+		// 批次 context：脱离根 context 的取消信号，
+		// 保证本轮已开启的批次（MySQL 分页查询 + PG 事务）能完整执行并提交
+		batchCtx := context.WithoutCancel(ctx)
+
 		var rows *sql.Rows
 		var currentBatchSize int
 		var err error
 
 		// 使用分页查询方法
 		if useCompositeKeyPagination {
-			rows, err = mysqlConn.GetTableDataWithCompositeKeyPagination(table.Name, columns, compositePrimaryKeys, compositeLastValues, int(batchSize))
+			rows, err = mysqlConn.GetTableDataWithCompositeKeyPagination(batchCtx, table.Name, columns, compositePrimaryKeys, compositeLastValues, int(batchSize))
 		} else if useKeyPagination {
-			rows, err = mysqlConn.GetTableDataWithPagination(table.Name, columns, primaryKey, lastValue, int(batchSize))
+			rows, err = mysqlConn.GetTableDataWithPagination(batchCtx, table.Name, columns, primaryKey, lastValue, int(batchSize))
 		} else {
-			rows, err = mysqlConn.GetTableData(table.Name, columns, int(processedRows), int(batchSize), orderBy)
+			rows, err = mysqlConn.GetTableData(batchCtx, table.Name, columns, int(processedRows), int(batchSize), orderBy)
 		}
 		if err != nil {
 			errMsg := fmt.Sprintf("分页获取表 %s 数据失败: %v", table.Name, err)
@@ -306,7 +353,7 @@ func paginateAndInsert(mysqlConn *mysql.Connection, postgresConn *postgres.Conne
 		}
 
 		// 为每个批次开始新事务
-		tx, err := postgresConn.BeginTransaction(context.Background())
+		tx, err := postgresConn.BeginTransaction(batchCtx)
 		if err != nil {
 			errMsg := fmt.Sprintf("开始事务失败: %v", err)
 			logError(errMsg)
@@ -316,21 +363,21 @@ func paginateAndInsert(mysqlConn *mysql.Connection, postgresConn *postgres.Conne
 
 		// 使用批量插入并获取实际处理的行数
 		if useCompositeKeyPagination && len(compositePrimaryKeys) > 1 {
-			currentBatchSize, lastValue, compositeLastValues, err = postgresConn.BatchInsertDataWithCompositeKeys(tx, table.Name, columns, columnTypes, batchInsertSize, compositePrimaryKeys, config.Conversion.Options.LowercaseColumns, rows)
+			currentBatchSize, lastValue, compositeLastValues, err = postgresConn.BatchInsertDataWithCompositeKeys(batchCtx, tx, table.Name, columns, columnTypes, batchInsertSize, compositePrimaryKeys, config.Conversion.Options.LowercaseColumns, rows)
 		} else {
-			currentBatchSize, lastValue, err = postgresConn.BatchInsertDataWithTransactionAndGetLastValue(tx, table.Name, columns, columnTypes, batchInsertSize, primaryKey, config.Conversion.Options.LowercaseColumns, rows)
+			currentBatchSize, lastValue, err = postgresConn.BatchInsertDataWithTransactionAndGetLastValue(batchCtx, tx, table.Name, columns, columnTypes, batchInsertSize, primaryKey, config.Conversion.Options.LowercaseColumns, rows)
 		}
 		rows.Close()
 
 		if err != nil {
 			errMsg := fmt.Sprintf("插入表 %s 数据失败: %v", table.Name, err)
 			logError(errMsg)
-			tx.Rollback(context.Background())
+			tx.Rollback(batchCtx)
 			return 0, fmt.Errorf("同步表 %s 失败: %w", table.Name, err)
 		}
 
 		// 提交当前批次的事务
-		if err := tx.Commit(context.Background()); err != nil {
+		if err := tx.Commit(batchCtx); err != nil {
 			errMsg := fmt.Sprintf("提交事务失败: %v", err)
 			logError(errMsg)
 			return 0, fmt.Errorf("同步表 %s 失败: %w", table.Name, err)
@@ -517,10 +564,8 @@ func validateData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection
 			return "", fmt.Errorf("同步表 %s 失败: %w", tableName, err)
 		}
 
-		if pgRowCount == finalMySQLRowCount {
-			validationResult = "数据一致"
-		} else {
-			validationResult = "数据不一致"
+		validationResult, err = evaluateRowCountValidation(tableName, finalMySQLRowCount, pgRowCount, config.Conversion.Options.TruncateBeforeSync)
+		if validationResult == "数据不一致" {
 			mutex.Lock()
 			*inconsistentTables = append(*inconsistentTables, TableDataInconsistency{
 				TableName:        tableName,
@@ -529,6 +574,10 @@ func validateData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection
 			})
 			mutex.Unlock()
 		}
+		if err != nil {
+			logError(err.Error())
+			return validationResult, err
+		}
 	} else {
 		validationResult = "跳过验证"
 	}
@@ -536,15 +585,28 @@ func validateData(mysqlConn *mysql.Connection, postgresConn *postgres.Connection
 	return validationResult, nil
 }
 
+// evaluateRowCountValidation 评估行数校验结果
+// truncateBeforeSync=true 且行数不一致时返回错误（数据被清空后同步仍不一致，
+// 属于真实的数据丢失/损坏，必须终止迁移）；truncate=false 时不一致仅记录不阻断
+// （追加模式下目标表原有数据会导致行数天然不相等）
+func evaluateRowCountValidation(tableName string, mysqlCount, pgCount int64, truncateBeforeSync bool) (string, error) {
+	if mysqlCount == pgCount {
+		return "数据一致", nil
+	}
+	if truncateBeforeSync {
+		return "数据不一致", fmt.Errorf("表 %s 数据校验不一致: MySQL %d 行, PostgreSQL %d 行 (truncate_before_sync=true，终止迁移)", tableName, mysqlCount, pgCount)
+	}
+	return "数据不一致", nil
+}
+
 // logSyncComplete 记录同步完成信息
-func logSyncComplete(config *config.Config, tableName string, processedRows int64, validationResult string, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *int, totalTasks int) {
+func logSyncComplete(config *config.Config, tableName string, processedRows int64, validationResult string, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), completedTasks *atomic.Int64, totalTasks int) {
 	// 显示同步成功信息（根据配置决定是否在控制台显示）
 	if config.Run.ShowConsoleLogs {
-		mutex.Lock()
-		overallProgress := float64(*completedTasks) / float64(totalTasks) * 100
-		currentTask := *completedTasks + 1
+		completed := completedTasks.Load()
+		overallProgress := float64(completed) / float64(totalTasks) * 100
+		currentTask := completed + 1
 		fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 完成，%d 行数据，%s\n", overallProgress, currentTask, totalTasks, tableName, processedRows, validationResult)
-		mutex.Unlock()
 	}
 
 	// 记录同步完成信息

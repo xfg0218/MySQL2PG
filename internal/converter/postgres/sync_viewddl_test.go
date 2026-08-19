@@ -682,33 +682,33 @@ func TestConvertViewDDL_GroupConcatWithNestedCast(t *testing.T) {
 // TestConvertViewDDL_GroupConcatSimple 测试简单 GROUP_CONCAT 转换
 func TestConvertViewDDL_GroupConcatSimple(t *testing.T) {
 	tests := []struct {
-		name         string
-		input        string
+		name          string
+		input         string
 		expectedLower string
 	}{
 		{
-			name:         "basic",
-			input:        "SELECT GROUP_CONCAT(col) FROM t",
+			name:          "basic",
+			input:         "SELECT GROUP_CONCAT(col) FROM t",
 			expectedLower: "string_agg(cast(col as text), ',')",
 		},
 		{
-			name:         "with_separator",
-			input:        "SELECT GROUP_CONCAT(col SEPARATOR ', ') FROM t",
+			name:          "with_separator",
+			input:         "SELECT GROUP_CONCAT(col SEPARATOR ', ') FROM t",
 			expectedLower: "string_agg(cast(col as text), ', ')",
 		},
 		{
-			name:         "with_distinct",
-			input:        "SELECT GROUP_CONCAT(DISTINCT col) FROM t",
+			name:          "with_distinct",
+			input:         "SELECT GROUP_CONCAT(DISTINCT col) FROM t",
 			expectedLower: "string_agg(distinct cast(col as text), ',')",
 		},
 		{
-			name:         "with_order_by",
-			input:        "SELECT GROUP_CONCAT(col ORDER BY col ASC) FROM t",
+			name:          "with_order_by",
+			input:         "SELECT GROUP_CONCAT(col ORDER BY col ASC) FROM t",
 			expectedLower: "string_agg(cast(col as text), ',') order by",
 		},
 		{
-			name:         "nested_cast",
-			input:        "SELECT GROUP_CONCAT(CAST(col AS CHAR) SEPARATOR ';') FROM t",
+			name:          "nested_cast",
+			input:         "SELECT GROUP_CONCAT(CAST(col AS CHAR) SEPARATOR ';') FROM t",
 			expectedLower: "string_agg(cast(cast(col as text) as text), ';')",
 		},
 	}
@@ -764,5 +764,128 @@ FROM case_10_numbers`
 	}
 	if strings.Contains(lowerDDL, "mod(quantity,") && !strings.Contains(lowerDDL, "mod(quantity::numeric,") {
 		t.Errorf("MOD(quantity, 10) 仍为 MySQL 格式，未添加 ::NUMERIC：%s", ddl)
+	}
+}
+
+// Test_normalizeCastTypeForPG 测试 normalizeCastTypeForPG 的所有类型映射
+func Test_normalizeCastTypeForPG(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// 整数类型
+		{"signed", "SIGNED", "BIGINT"},
+		{"unsigned", "UNSIGNED", "BIGINT"},
+		{"signed integer", "SIGNED INTEGER", "BIGINT"},
+		{"unsigned integer", "UNSIGNED INTEGER", "BIGINT"},
+		{"year", "YEAR", "INTEGER"},
+
+		// 日期时间类型
+		{"datetime", "DATETIME", "TIMESTAMP"},
+		{"datetime with precision", "DATETIME(6)", "TIMESTAMP(6)"},
+		{"date", "DATE", "DATE"},
+		{"time", "TIME", "TIME"},
+		{"time with precision", "TIME(3)", "TIME(3)"},
+
+		// 字符串类型
+		{"char", "CHAR", "TEXT"},
+		{"char with length", "CHAR(20)", "TEXT"},
+		{"nchar", "NCHAR", "TEXT"},
+		{"nchar with length", "NCHAR(10)", "TEXT"},
+
+		// 二进制类型
+		{"binary", "BINARY", "BYTEA"},
+		{"binary with length", "BINARY(16)", "BYTEA"},
+		{"varbinary", "VARBINARY", "BYTEA"},
+		{"varbinary with length", "VARBINARY(255)", "BYTEA"},
+
+		// 浮点数类型
+		{"double", "DOUBLE", "DOUBLE PRECISION"},
+		{"float", "FLOAT", "REAL"},
+		{"float with precision", "FLOAT(10)", "REAL"},
+		{"real", "REAL", "DOUBLE PRECISION"},
+
+		// JSON 类型
+		{"json", "JSON", "JSONB"},
+
+		// DECIMAL 保留精度
+		{"decimal", "DECIMAL", "NUMERIC"},
+		{"decimal with precision", "DECIMAL(10,2)", "NUMERIC(10,2)"},
+
+		// 不需要转换的类型
+		{"integer passthrough", "INTEGER", "INTEGER"},
+		{"bigint passthrough", "BIGINT", "BIGINT"},
+		{"text passthrough", "TEXT", "TEXT"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeCastTypeForPG(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeCastTypeForPG(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestConvertViewDDL_CastAllTypes 测试视图中所有 MySQL CAST 类型的端到端转换
+func TestConvertViewDDL_CastAllTypes(t *testing.T) {
+	viewSQL := `SELECT
+    CAST(col1 AS BINARY) AS c_binary,
+    CAST(col2 AS BINARY(16)) AS c_binary_n,
+    CAST(col3 AS NCHAR) AS c_nchar,
+    CAST(col4 AS NCHAR(10)) AS c_nchar_n,
+    CAST(col5 AS DOUBLE) AS c_double,
+    CAST(col6 AS FLOAT) AS c_float,
+    CAST(col7 AS FLOAT(10)) AS c_float_n,
+    CAST(col8 AS REAL) AS c_real,
+    CAST(col9 AS JSON) AS c_json,
+    CAST(col10 AS YEAR) AS c_year,
+    CAST(col11 AS DATETIME(6)) AS c_datetime_n,
+    CAST(col12 AS SIGNED INTEGER) AS c_signed_int,
+    CAST(col13 AS UNSIGNED INTEGER) AS c_unsigned_int
+FROM test_table`
+
+	ddl, err := ConvertViewDDL("view_cast_all_types", viewSQL)
+	if err != nil {
+		t.Fatalf("ConvertViewDDL 返回错误：%v", err)
+	}
+
+	t.Logf("转换结果：%s", ddl)
+	lowerDDL := strings.ToLower(ddl)
+
+	// 验证所有类型转换
+	checks := []struct {
+		contains    string
+		description string
+	}{
+		{"as bytea", "BINARY → BYTEA"},
+		{"as double precision", "DOUBLE → DOUBLE PRECISION"},
+		{"as real", "FLOAT → REAL"},
+		{"as jsonb", "JSON → JSONB"},
+		{"as integer", "YEAR → INTEGER"},
+		{"as bigint", "SIGNED/UNSIGNED INTEGER → BIGINT"},
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(lowerDDL, check.contains) {
+			t.Errorf("%s 转换失败，未找到 %q：%s", check.description, check.contains, ddl)
+		}
+	}
+
+	// 验证 DATETIME(6) → TIMESTAMP(6)
+	if !strings.Contains(lowerDDL, "timestamp(6)") {
+		t.Errorf("DATETIME(6) 未转换为 TIMESTAMP(6)：%s", ddl)
+	}
+
+	// 验证不应存在的 MySQL 类型（排除列别名干扰，仅检查 CAST 目标类型）
+	notWant := []string{
+		"as binary)", "as nchar", "as float)", "as json)", "as year)", "as datetime",
+	}
+	for _, nw := range notWant {
+		if strings.Contains(lowerDDL, nw) {
+			t.Errorf("输出中仍包含 MySQL 类型 %q：%s", nw, ddl)
+		}
 	}
 }

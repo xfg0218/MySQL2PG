@@ -1,6 +1,7 @@
 package mpp
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -13,10 +14,20 @@ type IndexHandler struct {
 	Config         *Config
 	PostgresDB     *pgxpool.Pool
 	Schema         string // 当前使用的 schema
+	Ctx            context.Context
 	LogFunc        func(string, ...interface{})
 	ErrorFunc      func(string, ...interface{})
 	detectedDBType string
 	detectedOnce   sync.Once
+}
+
+// context 返回处理器持有的 context
+// 未设置时回退为 context.Background()，保证 nil 安全
+func (h *IndexHandler) context() context.Context {
+	if h.Ctx == nil {
+		return context.Background()
+	}
+	return h.Ctx
 }
 
 // HandleUniqueIndex 处理单个 UNIQUE INDEX
@@ -37,7 +48,7 @@ func (h *IndexHandler) HandleUniqueIndex(index mysql.IndexInfo, lowercaseColumns
 		uniqueColumns := h.collectUniqueColumns(index, lowercaseColumns)
 
 		// 调整分布键
-		adjusted, err := AdjustDistributionKey(h.PostgresDB, index.Table, h.Schema, uniqueColumns, lowercaseColumns, h.LogFunc)
+		adjusted, err := AdjustDistributionKey(h.context(), h.PostgresDB, index.Table, h.Schema, uniqueColumns, lowercaseColumns, h.LogFunc)
 		if err != nil {
 			h.ErrorFunc("调整表 %s 分布键失败：%v（将直接创建 UNIQUE 索引）", index.Table, err)
 			// 分布键调整失败不影响 UNIQUE INDEX 创建，继续执行
@@ -63,7 +74,7 @@ func (h *IndexHandler) detectDBType() string {
 		}
 
 		// 否则自动检测（DetectDatabaseType 内部已包含版本号检测 + 扩展检查）
-		h.detectedDBType = DetectDatabaseType(h.PostgresDB)
+		h.detectedDBType = DetectDatabaseType(h.context(), h.PostgresDB)
 		h.LogFunc("自动检测到 MPP 数据库类型: %s", h.detectedDBType)
 	})
 	return h.detectedDBType

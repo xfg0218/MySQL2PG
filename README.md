@@ -69,7 +69,7 @@ Start
  │     └─ Support 50+ function mappings (e.g., NOW() → CURRENT_TIMESTAMP, IFNULL() → COALESCE())
  │
  ├─▶ [Step 7] Convert users (users: true)
- │     └─ MySQL Users → PostgreSQL Roles (preserve password hashes)
+ │     └─ MySQL Users → PostgreSQL Roles (passwords are not migrated: hash formats are incompatible; a reset list with ALTER USER templates is output after migration)
  │
  ├─▶ [Step 8] Convert table privileges (table_privileges: true)
  │     └─ GRANT SELECT ON table → GRANT USAGE, SELECT ON table
@@ -89,7 +89,7 @@ Start
 - **MySQL Support**: Fully compatible with MySQL 5.7+ and MySQL 9.0+
 - **PostgreSQL Support**: Fully compatible with PostgreSQL 12+ to PostgreSQL 18+
 - **View Conversion**: 42 views 100% convertible, supporting all MySQL 5.7+ view syntax
-- **Function Conversion**: 113 functions core syntax 100% convertible, supporting complex stored procedure syntax
+- **Function Conversion**: 113 functions core syntax 100% convertible, supporting complex stored procedure syntax. Functions relying on user-variable row numbering (@row_index-style idioms) or complex cursor control flow should be reviewed manually after conversion.
 
 ### 🚀 High-Performance Design
 
@@ -99,6 +99,7 @@ Start
 - **Lock-free Progress Aggregation**: Channel-based progress reporting eliminates mutex contention, achieving 51x faster progress updates (9155ns → 178ns) with 96% less memory.
 - **Connection Pool Management**: Supports custom connection pool settings for MySQL and PostgreSQL, with max connections up to 100+.
 - **Real-time Progress Monitoring**: Displays conversion progress in real-time, updating once per second, keeping users informed of the status.
+- **Safe Cancellation (Ctrl-C / SIGTERM)**: Context is threaded through the entire pipeline. On a cancel signal, no new tasks are dispatched; in-flight batches are allowed to commit fully before a safe exit (exit code 130), avoiding orphaned transactions caused by `kill -9`.
 
 ### 🎯 Precise Conversion Capability
 
@@ -111,7 +112,7 @@ Start
 ### ✅ Data Integrity Assurance
 
 - **Million-level Data Support**: Supports conversion of millions of records with 100% data integrity retention.
-- **Multi-dimensional Data Validation**: Automatically validates data consistency after synchronization, with 100% accuracy, supporting batch and incremental validation.
+- **Row-Count Data Validation**: Automatically compares MySQL/PostgreSQL row counts after synchronization. With `truncate_before_sync=true`, a validation mismatch aborts the migration. Batch validation supported.
 - **Data Inconsistency Detection**: Automatically tallies tables with mismatched row counts and provides a detailed list of inconsistent tables.
 - **Flexible Sync Strategies**: Supports full synchronization and incremental synchronization (preserving existing data), configurable to truncate tables before sync.
 
@@ -130,7 +131,7 @@ Start
 - **Clear Example Output**: Provides example outputs for various scenarios to help users understand how the tool works.
 - **Comprehensive Error Handling**: Provides detailed error information when errors occur, facilitating troubleshooting.
 - **Integration Test Suite**: 84 test cases covering all configuration options and core features (`scripts/integrationtests/run_integration_tests.sh`).
-- **Test Data Generator**: 10 test rows for all 167 tables (`scripts/mysql/insert_data.sql`) covering basic types, business scenarios, and edge cases.
+- **Test Data Generator**: 10 test rows for all 167 original tables (`scripts/mysql/insert_data.sql`) covering basic types, business scenarios, and edge cases. `create_table.sql` defines 193 tables in total — the extra 25 (case_169~case_193) are type-length sweep tables for conversion coverage (DDL only, no test data).
 
 ## Important Function Details
 
@@ -147,9 +148,10 @@ Start
 
 - **Description**: Verifies data consistency between MySQL and PostgreSQL after data synchronization to ensure migration integrity.
 - **Configuration**: `validate_data: true` - Enable data validation function.
-- **Method**: Compares the row counts of two tables.
+- **Method**: Compares the row counts of two tables (row-count level; cannot detect content changes that keep row counts equal).
 - **Logic**: If data validation fails, the tool decides whether to interrupt execution based on the `truncate_before_sync` setting.
 - **Use Case**: Ensuring migration integrity, especially during critical data migrations in production environments.
+- **Note**: Validation is row-count based. Concurrent writes to the source during migration can cause row-count drift (false inconsistency reports); stop source writes during synchronization.
 
 ### truncate\_before\_sync Option
 
@@ -337,8 +339,8 @@ Supports conversion of 40+ MySQL field types to PostgreSQL compatible types, wit
 | varchar, varchar(255), etc.  | VARCHAR            | All varchar variants kept as VARCHAR, preserving length |
 | text, longtext, etc.         | TEXT               | All text variants to TEXT                               |
 | blob, longblob, binary, etc. | BYTEA              | All binary types to BYTEA                               |
-| datetime, datetime(6)        | TIMESTAMP          | datetime to TIMESTAMP, preserving precision             |
-| timestamp, timestamp(6)      | TIMESTAMP          | timestamp kept as TIMESTAMP, preserving precision       |
+| datetime, datetime(6)        | TIMESTAMP          | datetime to TIMESTAMP (naive time), preserving precision |
+| timestamp, timestamp(6)      | TIMESTAMPTZ        | MySQL TIMESTAMP is stored as UTC (timezone-aware), mapped to TIMESTAMPTZ; sessions are pinned to UTC during migration so instants never shift |
 | date                         | DATE               | date kept as DATE                                       |
 | time                         | TIME               | time kept as TIME, preserving precision                 |
 | year                         | INTEGER            | year to INTEGER                                         |
@@ -356,6 +358,14 @@ Supports conversion of 40+ MySQL field types to PostgreSQL compatible types, wit
 | geometrycollection           | GEOMETRYCOLLECTION | geometrycollection kept as GEOMETRYCOLLECTION           |
 | bigint AUTO\_INCREMENT       | BIGSERIAL          | Auto-increment bigint to BIGSERIAL                      |
 | int AUTO\_INCREMENT          | SERIAL             | Auto-increment int to SERIAL                            |
+| tinyint unsigned             | SMALLINT           | unsigned range 0~255 fits SMALLINT                      |
+| smallint unsigned            | INTEGER            | unsigned range 0~65535 exceeds SMALLINT, promoted       |
+| mediumint unsigned           | INTEGER            | unsigned range 0~16777215 fits INTEGER                  |
+| int unsigned                 | BIGINT             | unsigned range 0~4294967295 exceeds INTEGER, promoted   |
+| bigint unsigned              | NUMERIC(20,0)      | unsigned range exceeds BIGINT, lossless promotion       |
+| decimal/float/double unsigned | NUMERIC/REAL/DOUBLE PRECISION + CHECK (col >= 0) | PG has no unsigned numerics; non-negative constraint expressed as CHECK (deprecated since MySQL 8.0.17) |
+| bit(n) (n ≤ 63)              | BIGINT             | BIT is essentially an unsigned integer (0 ~ 2^n-1)      |
+| bit(64)                      | NUMERIC(20,0)      | BIT(64) max value exceeds BIGINT                        |
 
 ### 2. Data Conversion
 
@@ -397,6 +407,7 @@ View conversion accuracy reaches 98%, supporting batch conversion (10 per batch)
 - Supports 50+ common MySQL functions to PostgreSQL equivalents.
 - Function conversion accuracy > 95%.
 - Supports batch conversion (5 per batch).
+- Known limitation: functions relying on user-variable row numbering (@row_index-style) or complex cursor control flow should be reviewed manually after conversion.
 
 ### 5. Index Conversion
 
@@ -418,8 +429,8 @@ View conversion accuracy reaches 98%, supporting batch conversion (10 per batch)
 
 ### 8. Data Validation
 
-- Verifies MySQL and PostgreSQL data consistency, 100% accuracy.
-- Supports batch validation.
+- Compares MySQL and PostgreSQL row counts (row-count level validation).
+- With `truncate_before_sync=true`, a validation mismatch aborts the migration with an error.
 - Automatically tallies mismatched tables.
 
 ### 9. Concurrent Conversion
@@ -950,7 +961,7 @@ bash scripts/integrationtests/run_integration_tests.sh
 
 ### 7. How to Insert Test Data?
 
-The project provides test data for all 167 tables:
+The project provides test data for all 167 original tables (case_01~case_167). The 25 type-length sweep tables (case_169~case_193) are DDL-only and need no data:
 
 ```bash
 # Create tables first

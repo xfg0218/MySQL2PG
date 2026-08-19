@@ -738,41 +738,42 @@ func TestFunctionConverter_handleUserVariables(t *testing.T) {
 
 // TestFunctionConverter_applySpecificPatches 测试特定补丁应用
 func TestFunctionConverter_applySpecificPatches(t *testing.T) {
-	converter := &FunctionConverter{}
-	
 	tests := []struct {
-		name     string
-		funcName string
-		input    string
-		check    func(string) bool
+		name  string
+		input string
+		check func(string) bool
 	}{
 		{
-			name:     "complex_join_function",
-			funcName: "complex_join_function",
-			input:    "if v_done then exit; else v_count := v_count + 1; -- 条件判断",
+			name:  "移除 DECLARE CONTINUE HANDLER",
+			input: "DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;",
 			check: func(s string) bool {
-				return strings.Contains(s, "if v_done then exit;") && 
-				       strings.Contains(s, "else") &&
-				       strings.Contains(s, "v_count := v_count + 1")
+				return !strings.Contains(s, "HANDLER")
 			},
 		},
 		{
-			name:     "comprehensive_reporting",
-			funcName: "comprehensive_reporting",
-			input:    "SET v_row_index = -1;",
+			name:  "移除 DECLARE EXIT HANDLER",
+			input: "DECLARE EXIT HANDLER FOR NOT FOUND BEGIN END;",
 			check: func(s string) bool {
-				return !strings.Contains(s, "SET v_row_index = -1;")
+				return !strings.Contains(s, "HANDLER")
+			},
+		},
+		{
+			name:  "其他内容不受影响",
+			input: "if v_done then exit; else v_count := v_count + 1; end if;",
+			check: func(s string) bool {
+				return s == "if v_done then exit; else v_count := v_count + 1; end if;"
 			},
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter.mysqlFunc = mysql.FunctionInfo{Name: tt.funcName}
+			converter := &FunctionConverter{}
+			converter.mysqlFunc = mysql.FunctionInfo{Name: "any_function"}
 			converter.body = tt.input
 			converter.applySpecificPatches()
 			if !tt.check(converter.body) {
-				t.Errorf("applySpecificPatches(%q) check failed, got: %q", tt.name, converter.body)
+				t.Errorf("applySpecificPatches(%q) check failed, got: %q", tt.input, converter.body)
 			}
 		})
 	}
@@ -1757,71 +1758,54 @@ func TestFunctionConverter_convertBuiltinFunctions(t *testing.T) {
 	}
 }
 
-// ==================== TDD: 提高 applySpecificPatches 覆盖率 ====================
+// ==================== 防回归：禁止按函数名的定制补丁 ====================
 
-// TestFunctionConverter_applySpecificPatches_EdgeCases 测试特殊补丁应用的边界情况
-func TestFunctionConverter_applySpecificPatches_EdgeCases(t *testing.T) {
-	converter := &FunctionConverter{}
-	
+// TestFunctionConverter_NoNameBasedPatches 防回归守卫：
+// 历史上 applySpecificPatches 曾按函数名（complex_join_function、
+// comprehensive_reporting）硬编码定制补丁，会把针对个别函数的改写强加给
+// 所有同名函数（issue-09）。该测试断言：即使函数名恰好命中这些历史名字，
+// 函数体也只经过通用补丁，不会被按名定制改写。
+func TestFunctionConverter_NoNameBasedPatches(t *testing.T) {
 	tests := []struct {
 		name     string
 		funcName string
 		input    string
-		check    func(string) bool
 	}{
 		{
-			name:     "not_complex_join_function",
-			funcName: "some_other_function",
-			input:    "if v_done then exit;",
-			check: func(s string) bool {
-				// 非 complex_join_function 不应该被修改
-				return s == "if v_done then exit;"
-			},
-		},
-		{
-			name:     "not_comprehensive_reporting",
-			funcName: "some_other_function",
-			input:    "SET v_row_index = -1;",
-			check: func(s string) bool {
-				// 非 comprehensive_reporting 不应该被修改
-				return s == "SET v_row_index = -1;"
-			},
-		},
-		{
-			name:     "complex_join_with_return",
+			name:     "complex_join_function 的 return 语句不被改写",
 			funcName: "complex_join_function",
 			input:    "close cur; return update_count;",
-			check: func(s string) bool {
-				return strings.Contains(s, "close cur;") && 
-				       strings.Contains(s, "return v_result;")
-			},
 		},
 		{
-			name:     "comprehensive_reporting_row_number",
+			name:     "complex_join_function 的 END LOOP 不被插入 END IF",
+			funcName: "complex_join_function",
+			input:    "fetch cur into v; end loop;",
+		},
+		{
+			name:     "comprehensive_reporting 的行号赋值不被改写",
 			funcName: "comprehensive_reporting",
 			input:    "v_row_index := v_row_index + 1",
-			check: func(s string) bool {
-				return strings.Contains(s, "ROW_NUMBER() OVER (ORDER BY amount) - 1")
-			},
 		},
-
 		{
-			name:     "comprehensive_reporting_set_index",
+			name:     "comprehensive_reporting 的 set 语句不被移除",
 			funcName: "comprehensive_reporting",
 			input:    "set v_row_index = -1;",
-			check: func(s string) bool {
-				return !strings.Contains(s, "set v_row_index = -1;")
-			},
+		},
+		{
+			name:     "名字含历史补丁子串的函数同样不被定制改写",
+			funcName: "my_comprehensive_reporting_v2",
+			input:    "v_row_index := v_row_index + 1",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			converter := &FunctionConverter{}
 			converter.mysqlFunc = mysql.FunctionInfo{Name: tt.funcName}
 			converter.body = tt.input
 			converter.applySpecificPatches()
-			if !tt.check(converter.body) {
-				t.Errorf("applySpecificPatches(%q) check failed, got: %q", tt.name, converter.body)
+			if converter.body != tt.input {
+				t.Errorf("函数体被按名定制改写：输入 %q, 输出 %q（应保持原样，只允许通用补丁）", tt.input, converter.body)
 			}
 		})
 	}

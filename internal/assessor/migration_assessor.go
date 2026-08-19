@@ -20,10 +20,21 @@ type MigrationAssessor struct {
 	mysqlVersion    *mysql.MySQLVersionInfo
 	postgresVersion *pgconn.PostgreSQLVersionInfo
 	conversionMgr   *postgres.Manager
+	ctx             context.Context
+}
+
+// context 返回评估器持有的根 context
+// 未通过 NewMigrationAssessor 设置时回退为 context.Background()，保证 nil 安全
+func (a *MigrationAssessor) context() context.Context {
+	if a.ctx == nil {
+		return context.Background()
+	}
+	return a.ctx
 }
 
 // NewMigrationAssessor 创建迁移评估器
-func NewMigrationAssessor(mysqlConn *mysql.Connection, postgresConn *pgconn.Connection, cfg *config.Config) (*MigrationAssessor, error) {
+// ctx 为根 context（通常来自 signal.NotifyContext），用于取消控制
+func NewMigrationAssessor(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *pgconn.Connection, cfg *config.Config) (*MigrationAssessor, error) {
 	// 获取 MySQL 版本信息
 	mysqlVersion, _ := mysqlConn.GetVersionInfo()
 
@@ -37,6 +48,7 @@ func NewMigrationAssessor(mysqlConn *mysql.Connection, postgresConn *pgconn.Conn
 		report:          &AssessmentReport{},
 		mysqlVersion:    mysqlVersion,
 		postgresVersion: pgVersion,
+		ctx:             ctx,
 	}, nil
 }
 
@@ -141,7 +153,7 @@ func (a *MigrationAssessor) collectDatabaseInfo() error {
 	for _, table := range tables {
 		rowCount, _ := a.mysqlConn.GetTableRowCount(table.Name)
 		// 获取表 DDL 并计算行数
-		ddl, _ := a.mysqlConn.GetTableDDL(context.Background(), table.Name)
+		ddl, _ := a.mysqlConn.GetTableDDL(a.context(), table.Name)
 		ddlRows := len(strings.Split(strings.TrimSpace(ddl), "\n"))
 
 		a.report.Tables = append(a.report.Tables, TableDetail{
@@ -262,7 +274,7 @@ func (a *MigrationAssessor) assessTablesWithMigrationLogic() {
 		table := &a.report.Tables[i]
 
 		// 获取表的 DDL
-		ddl, err := a.mysqlConn.GetTableDDL(context.Background(), table.Name)
+		ddl, err := a.mysqlConn.GetTableDDL(a.context(), table.Name)
 		if err != nil {
 			table.Risks = append(table.Risks, Risk{
 				Level:       RiskLevelHigh,
