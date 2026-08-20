@@ -1412,6 +1412,14 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		// 为每个列添加注释
 		m.addColumnComments(table, pgResult.ColumnNames)
 
+		// P1-02：应用 MySQL CHECK 约束（建表后以独立 ALTER 追加，失败仅告警不阻断）
+		for _, checkDDL := range pgResult.CheckConstraints {
+			if err := m.postgresConn.ExecuteDDL(checkDDL, table.DDL); err != nil {
+				m.RecordConversionWarning("CHECK 约束", table.Name,
+					fmt.Sprintf("应用 CHECK 约束失败（%s）: %v", checkDDL, err))
+			}
+		}
+
 		// 按 MySQL 表级 AUTO_INCREMENT=N 设置序列初值
 		// 覆盖 data:false 仅结构迁移的场景（数据阶段的回填以表内最大值为准）
 		m.backfillInitialSequence(table)
