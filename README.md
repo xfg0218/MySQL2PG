@@ -54,10 +54,11 @@ Start
  │
  ├─▶ [Step 4] Sync data (data: true)
  │     ├─ If truncate_before_sync=true → Truncate target tables
- │     ├─ Batch read MySQL data (max_rows_per_batch)
+ │     ├─ Batch read MySQL data (max_rows_per_batch, auto-scaled down for wide tables)
  │     ├─ Batch insert into PostgreSQL (batch_insert_size)
- │     ├─ Concurrency controlled by concurrency parameter
- │     └─ Automatically disable foreign key constraints and indexes for performance
+ │     └─ Concurrency controlled by concurrency parameter
+ │        (no FK/index disabling: FKs are not migrated yet — see roadmap;
+ │         secondary indexes are created after data sync)
  │
  ├─▶ [Step 5] Convert indexes (indexes: true)
  │     ├─ If MPP enabled (Greenplum):
@@ -78,7 +79,6 @@ Start
  │
  └─▶ [Final Step] Data validation & Completion (validate_data: true)
        ├─ Query row counts for MySQL and PostgreSQL tables
-       ├─ Re-enable previously disabled foreign key constraints and indexes
        ├─ If truncate_before_sync=false → Log inconsistent tables, continue execution
        ├─ Output conversion statistics report and performance metrics
        └─ Generate inconsistent table list (if any)

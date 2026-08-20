@@ -300,16 +300,18 @@ Step 6: Convert functions (functions: true)
   └─ Execute CREATE FUNCTION statements in PostgreSQL
 
 Step 7: Convert users (users: true)
-  └─ MySQL Users → PostgreSQL Roles (preserve password hashes)
+  └─ MySQL Users → PostgreSQL Roles (passwords are not migrated: hash formats
+     are incompatible; a reset list with ALTER USER templates is output)
 
 Step 8: Convert table privileges (table_privileges: true)
   └─ GRANT statements converted to PostgreSQL equivalents
 
 Final Step: Data validation & Completion (validate_data: true)
   ├─ Compare row counts: MySQL vs PostgreSQL
-  ├─ Re-enable foreign key constraints and indexes
   ├─ Report inconsistent tables (if truncate_before_sync=false, continues)
   └─ Output conversion statistics and performance metrics
+  (no FK/index disabling happens during sync: FKs are not migrated yet and
+   secondary indexes are created after data sync)
 ```
 
 ## HTML Report Structure

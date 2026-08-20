@@ -55,10 +55,11 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │
  ├─▶ [Step 4] 同步数据 (data: true)
  │     ├─ 若 truncate_before_sync=true → 清空目标表
- │     ├─ 分批读取 MySQL 数据（max_rows_per_batch）
+ │     ├─ 分批读取 MySQL 数据（max_rows_per_batch，宽表按估算行宽自适应下调）
  │     ├─ 批量插入 PostgreSQL（batch_insert_size）
- │     ├─ 并发线程数由 concurrency 控制
- │     └─ 自动禁用外键约束和索引提高性能
+ │     └─ 并发线程数由 concurrency 控制
+ │        （无外键/索引禁用动作：外键尚未迁移——见路线图；
+ │         二级索引在数据同步之后创建）
  │
  ├─▶ [Step 5] 转换索引 (indexes: true)
  │     ├─ 若 MPP 启用（Greenplum）:
@@ -79,7 +80,6 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │
  └─▶ [Final Step] 数据校验与完成 (validate_data: true)
        ├─ 查询 MySQL 和 PostgreSQL 表行数
-       ├─ 重新启用之前禁用的外键约束和索引
        ├─ 若 truncate_before_sync=false → 记录不一致表，继续执行
        ├─ 输出转换统计报告和性能指标
        └─ 生成不一致表清单（如有）

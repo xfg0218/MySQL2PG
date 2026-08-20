@@ -62,11 +62,12 @@ func parseGrantStatement(grant string) (*parsedGrant, error) {
 	}
 
 	object := strings.TrimSpace(m[2])
-	object = strings.ReplaceAll(object, "`", "")
-	object = strings.ReplaceAll(object, "\"", "")
-	parts := strings.Split(object, ".")
+	parts, err := splitGrantObject(object)
+	if err != nil {
+		return nil, err
+	}
 	switch {
-	case object == "*.*" || object == "*":
+	case len(parts) == 2 && parts[0] == "*" && parts[1] == "*":
 		pg.Level = "global"
 	case len(parts) == 2 && parts[1] == "*":
 		pg.Level = "database"
@@ -75,6 +76,8 @@ func parseGrantStatement(grant string) (*parsedGrant, error) {
 		pg.Level = "table"
 		pg.Database = parts[0]
 		pg.Table = parts[1]
+	case len(parts) == 1 && parts[0] == "*":
+		pg.Level = "global"
 	case len(parts) == 1 && parts[0] != "":
 		pg.Level = "table"
 		pg.Table = parts[0]
@@ -82,6 +85,47 @@ func parseGrantStatement(grant string) (*parsedGrant, error) {
 		pg.Level = "global"
 	}
 	return pg, nil
+}
+
+// splitGrantObject 按点号拆分 GRANT 对象部分，引号/反引号感知（P2-09）：
+// 标识符内的点号（如 `my.db`.`t` 或转义反引号 “ `a“b` “）不作为分隔符。
+// 旧的"剥掉所有引号再 Split"做法在表名/库名含点号或转义反引号时解析错位
+func splitGrantObject(object string) ([]string, error) {
+	var parts []string
+	var cur strings.Builder
+	i := 0
+	for i < len(object) {
+		ch := object[i]
+		switch ch {
+		case '`', '"':
+			quote := ch
+			i++
+			for i < len(object) {
+				if object[i] == quote {
+					if i+1 < len(object) && object[i+1] == quote {
+						cur.WriteByte(quote) // 双写转义
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				cur.WriteByte(object[i])
+				i++
+			}
+		case '.':
+			parts = append(parts, cur.String())
+			cur.Reset()
+			i++
+		case ' ', '\t':
+			i++
+		default:
+			cur.WriteByte(ch)
+			i++
+		}
+	}
+	parts = append(parts, cur.String())
+	return parts, nil
 }
 
 // databaseLevelGrantDDLs 生成 MySQL 全局级/库级权限对应的 PG DDL（P1-09）
