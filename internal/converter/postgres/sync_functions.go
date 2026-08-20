@@ -480,8 +480,15 @@ func (c *FunctionConverter) extractBody() error {
 // 强加给所有同名（或名字含该子串）的函数，产生不可解释的输出。
 // 无法通用转换的语法应在迁移报告中提示人工复核，而非静默定制改写。
 func (c *FunctionConverter) applySpecificPatches() {
-	// 通用补丁：移除 MySQL 特有的 Handler 语句
-	c.body = reHandlerSpecific.ReplaceAllString(c.body, "")
+	// P1-14：DECLARE HANDLER 处理：
+	// FOR NOT FOUND 的语义已由 FETCH 转换覆盖（FETCH 转换生成 IF NOT FOUND THEN done := true），删除声明即可；
+	// 其他 HANDLER（SQLEXCEPTION 等）无法转换，以注释保留原文避免 PG 语法错误，并由迁移报告告警
+	c.body = reHandler.ReplaceAllStringFunc(c.body, func(m string) string {
+		if strings.Contains(strings.ToLower(m), "not found") {
+			return ""
+		}
+		return "-- [mysql2pg] MySQL HANDLER 无法自动转换，原文: " + strings.TrimSpace(m)
+	})
 }
 
 // convertDataTypes 转换基本数据类型
@@ -712,24 +719,56 @@ func (c *FunctionConverter) processGroupConcat(body string) string {
 
 		content := body[j+1 : paramEnd]
 
-		// 解析 SEPARATOR（字面量之外的关键字才算）
+		// 解析 DISTINCT / ORDER BY / SEPARATOR（仅字面量之外的关键字才算，P1-15）
 		separator := "', '" // 默认分隔符
-		expr := content
+		hasDistinct := false
+		orderBy := ""
 
+		distIdx := findKeywordOutsideLiterals(content, "DISTINCT", 0)
+		orderIdx := findKeywordOutsideLiterals(content, "ORDER BY", 0)
 		sepIdx := findKeywordOutsideLiterals(content, "SEPARATOR", 0)
+
+		// 表达式为最早一个结构性关键字之前的部分
+		cutIdx := len(content)
+		for _, idx := range []int{distIdx, orderIdx, sepIdx} {
+			if idx != -1 && idx < cutIdx {
+				cutIdx = idx
+			}
+		}
+		expr := strings.TrimSpace(content[:cutIdx])
+
+		if distIdx != -1 {
+			hasDistinct = true
+		}
+		if orderIdx != -1 {
+			orderEnd := len(content)
+			if sepIdx != -1 && sepIdx > orderIdx {
+				orderEnd = sepIdx
+			}
+			orderBy = strings.TrimSpace(content[orderIdx+len("ORDER BY") : orderEnd])
+		}
 		if sepIdx != -1 {
-			expr = strings.TrimSpace(content[:sepIdx])
 			sepVal := strings.TrimSpace(content[sepIdx+len("SEPARATOR"):])
-			// 清理引号
 			if len(sepVal) >= 2 && ((sepVal[0] == '\'' && sepVal[len(sepVal)-1] == '\'') || (sepVal[0] == '"' && sepVal[len(sepVal)-1] == '"')) {
 				separator = sepVal
-			} else {
+			} else if sepVal != "" {
 				separator = "'" + sepVal + "'"
 			}
 		}
 
-		// 替换
-		newExpr := fmt.Sprintf("STRING_AGG((%s)::text, %s)", expr, separator)
+		// 组装 PG string_agg 表达式：STRING_AGG([DISTINCT ] expr, sep [ORDER BY ...])
+		var agg strings.Builder
+		agg.WriteString("STRING_AGG(")
+		if hasDistinct {
+			agg.WriteString("DISTINCT ")
+		}
+		agg.WriteString(fmt.Sprintf("(%s)::text, %s", expr, separator))
+		if orderBy != "" {
+			agg.WriteString(" ORDER BY " + orderBy)
+		}
+		agg.WriteString(")")
+		newExpr := agg.String()
+
 		body = body[:startIdx] + newExpr + body[paramEnd+1:]
 		searchFrom = startIdx + len(newExpr)
 	}

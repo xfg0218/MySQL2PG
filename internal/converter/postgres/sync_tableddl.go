@@ -228,6 +228,12 @@ type ConvertTableDDLResult struct {
 	ColumnNames    map[string]string // 键：原始列名，值：转换后的列名（带双引号格式）
 	ColumnComments map[string]string // 键：原始列名，值：列注释
 	PartitionDDLs  []string
+	// Warnings 记录转换中发生的语义降级/丢弃说明（P1-20），
+	// 由调用方汇入迁移报告的转换降级清单
+	Warnings []string
+	// CheckConstraints 记录 MySQL CHECK 约束对应的 PG ALTER TABLE ADD CHECK 语句（P1-02），
+	// 由调用方在建表成功后执行
+	CheckConstraints []string
 }
 
 // parseTableInfo 解析表名和是否为临时表
@@ -773,29 +779,10 @@ func toLowerOutsideQuotes(input string) string {
 	return builder.String()
 }
 
-// convertMySQLDateFormatToPostgres 将MySQL日期格式转换为PostgreSQL日期格式
+// convertMySQLDateFormatToPostgres 生成列管道使用的日期格式转换：返回不带引号的格式串
+// P1-12：内部复用统一实现 convertMySQLDateFormatToPG（sync_sql_literals.go）
 func convertMySQLDateFormatToPostgres(mysqlFormat string) string {
-	replacements := []struct {
-		mysql string
-		pg    string
-	}{
-		{"%Y", "YYYY"},
-		{"%m", "MM"},
-		{"%d", "DD"},
-		{"%H", "HH24"},
-		{"%h", "HH12"},
-		{"%I", "HH12"},
-		{"%i", "MI"},
-		{"%s", "SS"},
-		{"%f", "US"},
-	}
-
-	converted := mysqlFormat
-	for _, replacement := range replacements {
-		converted = strings.ReplaceAll(converted, replacement.mysql, replacement.pg)
-	}
-
-	return converted
+	return strings.Trim(convertMySQLDateFormatToPG(mysqlFormat), "'")
 }
 
 // convertGeneratedFunctionsToPostgres 将生成列中的MySQL函数转换为PostgreSQL表达式
@@ -1037,13 +1024,138 @@ func isUnsignedDecimalLikeColumn(columnLine string) bool {
 	return reDecimalUnsignedColumn.MatchString(columnLine)
 }
 
+// reCheckIfnull CHECK 表达式中的 IFNULL 函数
+var reCheckIfnull = regexp.MustCompile(`(?i)\bIFNULL\s*\(`)
+
+// parseCheckConstraint 解析 MySQL CHECK 约束行，生成 PG ALTER TABLE ADD CONSTRAINT CHECK DDL（P1-02）
+// 支持两种形式：CONSTRAINT `name` CHECK (expr) 与 CHECK (expr)
+// 以独立 ALTER 语句形式执行（建表后追加），失败时仅告警不阻断建表
+func parseCheckConstraint(line string, tableName string, lowercaseColumns bool) (string, bool) {
+	upper := strings.ToUpper(line)
+	checkIdx := strings.Index(upper, "CHECK")
+	if checkIdx == -1 {
+		return "", false
+	}
+
+	// 提取约束名（如有）
+	var constraintName string
+	prefix := strings.TrimSpace(line[:checkIdx])
+	if prefix != "" {
+		if !strings.HasPrefix(strings.ToUpper(prefix), "CONSTRAINT") {
+			return "", false // 前缀不是 CONSTRAINT，不是合法的 CHECK 约束行
+		}
+		constraintName = strings.Trim(strings.TrimSpace(prefix[len("CONSTRAINT"):]), "`\" ")
+	}
+
+	// 定位 CHECK 表达式括号范围（引号感知的括号匹配）
+	relOpen := strings.Index(line[checkIdx:], "(")
+	if relOpen == -1 {
+		return "", false
+	}
+	openIdx := checkIdx + relOpen
+	endIdx := findMatchingParen(line, openIdx)
+	if endIdx == -1 {
+		return "", false
+	}
+
+	expr := convertCheckExpression(line[openIdx+1:endIdx], lowercaseColumns)
+	quotedTable := quotePGIdentifier(tableName)
+	if constraintName != "" {
+		if lowercaseColumns {
+			constraintName = strings.ToLower(constraintName)
+		}
+		return fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s);", quotedTable, quotePGIdentifier(constraintName), expr), true
+	}
+	return fmt.Sprintf("ALTER TABLE %s ADD CHECK (%s);", quotedTable, expr), true
+}
+
+// reCheckBacktickIdent CHECK 表达式中的反引号标识符
+var reCheckBacktickIdent = regexp.MustCompile("`([^`]+)`")
+
+// reCheckQuotedIdent CHECK 表达式中的双引号标识符（入口已将反引号替换为双引号）
+var reCheckQuotedIdent = regexp.MustCompile(`"([^"]+)"`)
+
+// convertCheckExpression 转换 CHECK 表达式：反引号标识符转双引号、
+// 双引号标识符按配置小写化（与建表列名保持一致）、IFNULL→COALESCE
+func convertCheckExpression(expr string, lowercaseColumns bool) string {
+	expr = reCheckBacktickIdent.ReplaceAllStringFunc(expr, func(m string) string {
+		name := m[1 : len(m)-1]
+		if lowercaseColumns {
+			name = strings.ToLower(name)
+		}
+		return quotePGIdentifier(name)
+	})
+	if lowercaseColumns {
+		expr = reCheckQuotedIdent.ReplaceAllStringFunc(expr, func(m string) string {
+			return quotePGIdentifier(strings.ToLower(m[1 : len(m)-1]))
+		})
+	}
+	return reCheckIfnull.ReplaceAllString(expr, "COALESCE(")
+}
+
+// reDefaultExpr MySQL 8.0 表达式默认值 DEFAULT (expr)
+var reDefaultExpr = regexp.MustCompile(`(?i)\bDEFAULT\s*\(`)
+
+// reUnsupportedDefaultExpr 表达式默认值中无法转换的 MySQL 专有语法
+var reUnsupportedDefaultExpr = regexp.MustCompile(`(?i)\b(IF|ISNULL|CONCAT|DATE_FORMAT|STR_TO_DATE|YEAR|MONTH|DAY)\s*\(|@`)
+
+// reDefaultUUID/ reDefaultNow 可映射的默认值函数
+var reDefaultUUID = regexp.MustCompile(`(?i)\bUUID\s*\(\s*\)`)
+var reDefaultNow = regexp.MustCompile(`(?i)\b(NOW|CURRENT_TIMESTAMP|LOCALTIME|LOCALTIMESTAMP)\s*\(\s*\)`)
+var reDefaultCurDate = regexp.MustCompile(`(?i)\b(CURDATE|CURRENT_DATE)\s*\(\s*\)?`)
+
+// convertExpressionDefault 处理 MySQL 8.0 表达式默认值 DEFAULT (expr)（P1-04）
+// 可转换时保留 DEFAULT (PG 形式)；不可转换时剥离默认值并返回告警说明
+func convertExpressionDefault(line string, lowercaseColumns bool) (string, string) {
+	loc := reDefaultExpr.FindStringIndex(line)
+	if loc == nil {
+		return line, ""
+	}
+	relOpen := strings.Index(line[loc[0]:], "(")
+	if relOpen == -1 {
+		return line, ""
+	}
+	openIdx := loc[0] + relOpen
+	endIdx := findMatchingParen(line, openIdx)
+	if endIdx == -1 {
+		return line, ""
+	}
+
+	expr := line[openIdx+1 : endIdx]
+	prefix := strings.TrimSpace(line[:loc[0]])
+	suffix := strings.TrimSpace(line[endIdx+1:])
+
+	if reUnsupportedDefaultExpr.MatchString(expr) {
+		rest := strings.TrimSpace(prefix + " " + suffix)
+		return rest, fmt.Sprintf("表达式默认值 DEFAULT (%s) 含不可转换的 MySQL 语法，已剥离该默认值", expr)
+	}
+
+	converted := convertCheckExpression(expr, lowercaseColumns)
+	converted = reDefaultUUID.ReplaceAllString(converted, "gen_random_uuid()")
+	converted = reDefaultNow.ReplaceAllString(converted, "CURRENT_TIMESTAMP")
+	converted = reDefaultCurDate.ReplaceAllString(converted, "CURRENT_DATE")
+
+	rest := prefix + " DEFAULT (" + converted + ")"
+	if suffix != "" {
+		rest += " " + suffix
+	}
+	return rest, ""
+}
+
+// reSpatialType 空间类型列（P1-05 告警检测）
+var reSpatialType = regexp.MustCompile(`(?i)\b(geometrycollection|geometry|linestring|multilinestring|multipoint|multipolygon|point|polygon)\b`)
+
 // processColumnDefinition 处理列定义，提取列名、类型定义和注释
-func processColumnDefinition(line string, lowercaseColumns bool) (columnName string, typeDefinition string, columnComment string, isConstraint bool, isIncompleteType bool, err error) {
+// 返回值 defaultWarning 非空表示表达式默认值被剥离（P1-04），由调用方记入转换警告
+func processColumnDefinition(line string, lowercaseColumns bool) (columnName string, typeDefinition string, columnComment string, isConstraint bool, isIncompleteType bool, defaultWarning string, err error) {
 	line = strings.ReplaceAll(line, " ON UPDATE CURRENT_TIMESTAMP", "")
 	// 先提升无符号整数类型，再剥离残留的 unsigned/zerofill 修饰
 	line = promoteUnsignedTypes(line)
 	line = strings.ReplaceAll(line, " unsigned", "")
 	line = strings.ReplaceAll(line, " UNSIGNED", "")
+
+	// P1-04：处理 MySQL 8.0 表达式默认值 DEFAULT (expr)
+	line, defaultWarning = convertExpressionDefault(line, lowercaseColumns)
 
 	// 批量清理字符集和Collate
 	replacements := []string{
@@ -1366,6 +1478,15 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 	columnNames := make(map[string]string)
 	generatedExpressionMap := make(map[string]string)
 
+	// P1-02：CHECK 约束收集为独立 ALTER 语句；warnings 收集语义降级/丢弃说明（P1-20）
+	var checkConstraints []string
+	var warnings []string
+
+	// P1-05：空间类型列检测（PG 需 PostGIS 扩展，未安装时建表失败，提前告警）
+	if reSpatialType.MatchString(mysqlDDL) {
+		warnings = append(warnings, "表包含空间类型列（GEOMETRY 系）：PostgreSQL 需安装 PostGIS 扩展，否则建表失败")
+	}
+
 	var incompleteTypeDef bool
 	var partialTypeDef string
 	var partialColumnName string
@@ -1397,6 +1518,15 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 		}
 
 		upperTrimmedLine := strings.ToUpper(trimmedLine)
+		// P1-02：CHECK 约束解析为独立的 ALTER TABLE ADD CONSTRAINT CHECK 语句
+		// （外键约束仍然跳过，见分级清单 P1-01 后续排期）
+		if strings.Contains(upperTrimmedLine, "CHECK") && !strings.Contains(upperTrimmedLine, "FOREIGN KEY") &&
+			(strings.HasPrefix(strings.TrimSpace(upperTrimmedLine), "CONSTRAINT") || strings.HasPrefix(strings.TrimSpace(upperTrimmedLine), "CHECK")) {
+			if ddl, ok := parseCheckConstraint(trimmedLine, tableName, lowercaseColumns); ok {
+				checkConstraints = append(checkConstraints, ddl)
+			}
+			continue
+		}
 		if strings.HasPrefix(strings.TrimSpace(upperTrimmedLine), "CONSTRAINT ") {
 			continue
 		}
@@ -1457,7 +1587,10 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 		// DECIMAL 系 UNSIGNED 需在转换后补 CHECK (col >= 0)（PG 无无符号类型）
 		isUnsignedDecimalLike := isUnsignedDecimalLikeColumn(trimmedLine)
 
-		columnName, typeDefinition, columnComment, isConstraint, isIncompleteType, err := processColumnDefinition(trimmedLine, lowercaseColumns)
+		columnName, typeDefinition, columnComment, isConstraint, isIncompleteType, defaultWarning, err := processColumnDefinition(trimmedLine, lowercaseColumns)
+		if defaultWarning != "" {
+			warnings = append(warnings, fmt.Sprintf("列 %s: %s", columnName, defaultWarning))
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1649,11 +1782,13 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 	}
 
 	return &ConvertTableDDLResult{
-		DDL:            finalDDL,
-		TableComment:   tableComment,
-		ColumnNames:    columnNamesMap,
-		ColumnComments: columnCommentsMap,
-		PartitionDDLs:  partitionDDLs,
+		DDL:              finalDDL,
+		TableComment:     tableComment,
+		ColumnNames:      columnNamesMap,
+		ColumnComments:   columnCommentsMap,
+		PartitionDDLs:    partitionDDLs,
+		Warnings:         warnings,
+		CheckConstraints: checkConstraints,
 	}, nil
 }
 

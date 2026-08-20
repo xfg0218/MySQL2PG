@@ -10,6 +10,7 @@ mysql:
   max_idle_conns: 50         # 连接池配置的最大空闲连接数，从20提升到50
   conn_max_lifetime: 3600    # 连接池配置的最大生命周期（秒）
   connection_params: charset=utf8mb4&parseTime=false&interpolateParams=true&readTimeout=60s&writeTimeout=60s&timeout=30s # MySQL连接参数
+  consistent_snapshot: false # 数据读取使用一致性快照（源库并发写入时保证读到一致数据；要求 REPEATABLE READ 隔离级别）
 
 # PostgreSQL连接配置
 postgresql:

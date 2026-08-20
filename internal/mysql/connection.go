@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	gmysql "github.com/go-sql-driver/mysql"
@@ -83,6 +84,53 @@ type Connection struct {
 	db     *sql.DB
 	config *config.MySQLConfig
 	ctx    context.Context
+
+	// P1-07：一致性快照事务（consistent_snapshot 配置开启时使用），
+	// 开启后数据读取查询均通过该事务执行，保证源库并发写入时读到一致快照
+	snapshotMu sync.Mutex
+	snapshotTx *sql.Tx
+}
+
+// BeginConsistentSnapshot 开启一致性快照事务（P1-07）
+// 要求 MySQL 事务隔离级别为 REPEATABLE READ（InnoDB 默认）；
+// 开启后数据读取类查询（QueryTableRows/GetTableData*/GetTableRowCount）均通过该事务执行
+func (c *Connection) BeginConsistentSnapshot(ctx context.Context) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开始快照事务失败: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "START TRANSACTION WITH CONSISTENT SNAPSHOT"); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("开启一致性快照失败: %w", err)
+	}
+	c.snapshotMu.Lock()
+	c.snapshotTx = tx
+	c.snapshotMu.Unlock()
+	return nil
+}
+
+// EndConsistentSnapshot 结束一致性快照事务（只读事务，直接回滚释放连接）
+func (c *Connection) EndConsistentSnapshot() {
+	c.snapshotMu.Lock()
+	tx := c.snapshotTx
+	c.snapshotTx = nil
+	c.snapshotMu.Unlock()
+	if tx != nil {
+		tx.Rollback()
+	}
+}
+
+// querier 返回当前查询执行器：优先快照事务（P1-07），否则连接池
+func (c *Connection) querier() interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+} {
+	c.snapshotMu.Lock()
+	defer c.snapshotMu.Unlock()
+	if c.snapshotTx != nil {
+		return c.snapshotTx
+	}
+	return c.db
 }
 
 // context 返回连接持有的根 context
@@ -220,11 +268,28 @@ func (c *Connection) GetTableData(ctx context.Context, tableName string, columns
 	}
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
-	rows, err := c.db.QueryContext(ctx, query)
+	rows, err := c.querier().QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败: %w", err)
 	}
 
+	return rows, nil
+}
+
+// QueryTableRows 流式读取表全部数据（P1-06：无主键表的流式读取入口，
+// 单次查询 + 迭代分批读取，替代 O(n²) 的 OFFSET 分页）
+// 注意：go-sql-driver 会在客户端缓冲整个结果集，仅适用于中小表（调用方按行数阈值控制）
+func (c *Connection) QueryTableRows(ctx context.Context, tableName string, columns []string) (*sql.Rows, error) {
+	var quotedColumns []string
+	for _, col := range columns {
+		quotedColumns = append(quotedColumns, fmt.Sprintf("`%s`", col))
+	}
+	query := fmt.Sprintf("SELECT %s FROM `%s`", strings.Join(quotedColumns, ", "), tableName)
+
+	rows, err := c.querier().QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("流式读取表数据失败: %w", err)
+	}
 	return rows, nil
 }
 
@@ -250,7 +315,7 @@ func (c *Connection) GetTableDataWithPagination(ctx context.Context, tableName s
 			columnsStr, tableName, primaryKey, limit)
 	}
 
-	rows, err := c.db.QueryContext(ctx, query, args...)
+	rows, err := c.querier().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败: %w", err)
 	}
@@ -291,7 +356,7 @@ func (c *Connection) GetTableDataWithCompositeKeyPagination(ctx context.Context,
 			columnsStr, tableName, primaryKeyStr, limit)
 	}
 
-	rows, err := c.db.QueryContext(ctx, query, args...)
+	rows, err := c.querier().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败：%w", err)
 	}
@@ -378,10 +443,10 @@ func (c *Connection) EstimateRowSize(tableName string) (int64, error) {
 	return avgRowLength, nil
 }
 
-// GetTableRowCount 获取表的行数
+// GetTableRowCount 获取表的行数（开启一致性快照时读取快照视图，P1-07）
 func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 	var count int64
-	err := c.db.QueryRowContext(c.context(), fmt.Sprintf("SELECT COUNT(*) FROM `%s`", tableName)).Scan(&count)
+	err := c.querier().QueryRowContext(c.context(), fmt.Sprintf("SELECT COUNT(*) FROM `%s`", tableName)).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("获取表行数失败: %w", err)
 	}

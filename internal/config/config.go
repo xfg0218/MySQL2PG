@@ -23,16 +23,17 @@ type Config struct {
 
 // MySQLConfig MySQL连接配置
 type MySQLConfig struct {
-	Host             string        `mapstructure:"host"`
-	Port             int           `mapstructure:"port"`
-	Username         string        `mapstructure:"username"`
-	Password         string        `mapstructure:"password"`
-	Database         string        `mapstructure:"database"`
-	TestOnly         bool          `mapstructure:"test_only"`
-	MaxOpenConns     int           `mapstructure:"max_open_conns"`    // 最大打开连接数
-	MaxIdleConns     int           `mapstructure:"max_idle_conns"`    // 最大空闲连接数
-	ConnMaxLifetime  time.Duration `mapstructure:"conn_max_lifetime"` // 连接最大生命周期（秒）
-	ConnectionParams string        `mapstructure:"connection_params"` // MySQL连接参数
+	Host               string        `mapstructure:"host"`
+	Port               int           `mapstructure:"port"`
+	Username           string        `mapstructure:"username"`
+	Password           string        `mapstructure:"password"`
+	Database           string        `mapstructure:"database"`
+	TestOnly           bool          `mapstructure:"test_only"`
+	MaxOpenConns       int           `mapstructure:"max_open_conns"`      // 最大打开连接数
+	MaxIdleConns       int           `mapstructure:"max_idle_conns"`      // 最大空闲连接数
+	ConnMaxLifetime    time.Duration `mapstructure:"conn_max_lifetime"`   // 连接最大生命周期（秒）
+	ConnectionParams   string        `mapstructure:"connection_params"`   // MySQL连接参数
+	ConsistentSnapshot bool          `mapstructure:"consistent_snapshot"` // 数据读取使用一致性快照（P1-07，默认 false）
 }
 
 type PostgreSQLConfig struct {
@@ -80,9 +81,9 @@ type OptionsConfig struct {
 	TruncateBeforeSync bool     `mapstructure:"truncate_before_sync"`   // 同步前是否清空表数据
 
 	// 视图排除列表
-	SkipUseViewList bool       `mapstructure:"exclude_use_view_list"` // 是否使用视图排除列表
-	SkipViewList    []string   `mapstructure:"exclude_view_list"`     // 要跳过的视图列表（原始配置）
-	SkipViewSet     StringSet  `mapstructure:"-"`                     // 要跳过的视图集合（转换后，内部使用）
+	SkipUseViewList bool      `mapstructure:"exclude_use_view_list"` // 是否使用视图排除列表
+	SkipViewList    []string  `mapstructure:"exclude_view_list"`     // 要跳过的视图列表（原始配置）
+	SkipViewSet     StringSet `mapstructure:"-"`                     // 要跳过的视图集合（转换后，内部使用）
 
 	// 函数排除列表
 	SkipUseFunctionList bool      `mapstructure:"exclude_use_function_list"` // 是否使用函数排除列表

@@ -68,6 +68,8 @@ type Manager struct {
 	inconsistentTables []TableDataInconsistency
 	// 存储源库设置了密码、迁移后需要人工重置密码的用户（密码哈希格式不兼容，不可迁移，issue-10）
 	passwordResetUsers []string
+	// 存储转换过程中的语义降级/丢弃警告（P1-20）
+	conversionWarnings []ConversionWarning
 	// 存储表名到列名映射的映射
 	tableColumnNamesMap map[string]map[string]string // 键：表名，值：(键：原始列名，值：转换后的列名)
 	// 评估模式：只评估不写入
@@ -233,12 +235,16 @@ func (m *Manager) Run() error {
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n2. 同步表数据...")
 			}
+			// P1-07：按配置开启一致性快照，保证源库并发写入时读到一致数据
+			m.beginSnapshotIfEnabled()
 			// 记录数据同步开始时间
 			startTime := time.Now()
 			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
 			if err := m.syncTableData(filteredTables, semaphore); err != nil {
+				m.mysqlConn.EndConsistentSnapshot()
 				return err
 			}
+			m.mysqlConn.EndConsistentSnapshot()
 			// 记录数据同步结束时间并添加到转换统计中
 			endTime := time.Now()
 			m.conversionStats = append(m.conversionStats, ConversionStageStat{
@@ -271,7 +277,7 @@ func (m *Manager) Run() error {
 			m.totalTasks = len(filteredIndexes)
 			var wg sync.WaitGroup
 			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
-			errorChan := make(chan error, 1)
+			errorChan := make(chan error, len(filteredIndexes)+8)
 
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n4. 转换表索引...")
@@ -290,10 +296,7 @@ func (m *Manager) Run() error {
 				go func(batch []mysql.IndexInfo) {
 					defer wg.Done()
 					if err := m.convertIndexes(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -307,10 +310,8 @@ func (m *Manager) Run() error {
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -319,6 +320,9 @@ func (m *Manager) Run() error {
 
 		// 显示需人工重置密码的用户清单（密码不可迁移，issue-10）
 		m.displayPasswordResetUsers()
+
+		// 显示转换降级/丢弃清单（P1-20）
+		m.displayConversionWarnings()
 
 		// 生成汇总表格
 		m.generateSummaryTable()
@@ -347,6 +351,9 @@ func (m *Manager) Run() error {
 
 	// 显示需人工重置密码的用户清单（密码不可迁移，issue-10）
 	m.displayPasswordResetUsers()
+
+	// 显示转换降级/丢弃清单（P1-20）
+	m.displayConversionWarnings()
 
 	m.Log("转换完成!")
 	return nil
@@ -481,12 +488,53 @@ func (m *Manager) getCurrentStage(baseStage int) int {
 	return baseStage + len(m.conversionStats)
 }
 
+// beginSnapshotIfEnabled 按配置开启 MySQL 一致性快照（P1-07）
+// 开启后数据阶段的所有读取基于同一快照，源库并发写入不会导致漏行/行数漂移；
+// 开启失败仅告警并回退普通读取，不阻断迁移
+func (m *Manager) beginSnapshotIfEnabled() {
+	if !m.config.MySQL.ConsistentSnapshot {
+		return
+	}
+	if err := m.mysqlConn.BeginConsistentSnapshot(m.context()); err != nil {
+		m.logError(fmt.Sprintf("开启一致性快照失败，回退为普通读取: %v", err))
+		return
+	}
+	m.Log("已开启一致性快照（consistent_snapshot=true），数据读取不受源库并发写入影响")
+}
+
+// drainErrors 非阻塞地排空错误通道并聚合全部错误（P1-16）
+// 修复此前容量 1 通道 + select/default 丢弃导致每阶段只保留第一个错误的问题
+func drainErrors(errorChan chan error) error {
+	var errs []error
+	for {
+		select {
+		case err := <-errorChan:
+			errs = append(errs, err)
+			continue
+		default:
+		}
+		break
+	}
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	}
+	msgs := make([]string, 0, len(errs))
+	for _, e := range errs {
+		msgs = append(msgs, e.Error())
+	}
+	return fmt.Errorf("共 %d 个错误:\n  - %s", len(errs), strings.Join(msgs, "\n  - "))
+}
+
 // executeConversion 执行完整的转换流程
 // 按照配置的顺序执行表DDL、数据、索引、函数、视图、用户和权限的转换
 func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, views []mysql.ViewInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) error {
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
-	errorChan := make(chan error, 1)
+	// 容量覆盖全部可能的批次 goroutine 数量，配合 drainErrors 聚合全部错误（P1-16）
+	errorChan := make(chan error, len(tables)*2+len(views)+len(indexes)+len(functions)+len(users)+len(tablePrivileges)+16)
 
 	// 如果启用了表列表功能，过滤出指定的表
 	var filteredTables []mysql.TableInfo
@@ -549,10 +597,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.TableInfo) {
 					defer wg.Done()
 					if err := m.convertTables(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -566,10 +611,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -594,10 +637,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.ViewInfo) {
 					defer wg.Done()
 					if err := m.convertViews(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -611,10 +651,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -625,6 +663,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				fmt.Printf("│  🚀 Stage %d/%d: 同步表数据 (%d tables)                        │\n", m.getCurrentStage(2), m.getStageCount(), len(filteredTables))
 				fmt.Println("└─────────────────────────────────────────────────────────────────┘")
 			}
+			// P1-07：按配置开启一致性快照，保证源库并发写入时读到一致数据
+			m.beginSnapshotIfEnabled()
 			// 记录开始时间
 			startTime := time.Now()
 			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
@@ -639,14 +679,12 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.TableInfo) {
 					defer wg.Done()
 					if err := m.syncTableData(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
 			wg.Wait() // 等待表数据同步完成
+			m.mysqlConn.EndConsistentSnapshot()
 			// 记录结束时间和对象数量
 			m.conversionStats = append(m.conversionStats, ConversionStageStat{
 				StageName:   "同步表数据",
@@ -663,10 +701,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 		}
 
 		// 检查是否有错误
-		select {
-		case err := <-errorChan:
+		if err := drainErrors(errorChan); err != nil {
 			return err
-		default:
 		}
 
 		// 3. 然后执行索引同步
@@ -690,10 +726,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.IndexInfo) {
 					defer wg.Done()
 					if err := m.convertIndexes(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -707,10 +740,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -736,10 +767,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					go func(batch []mysql.FunctionInfo) {
 						defer wg.Done()
 						if err := m.convertFunctions(batch, semaphore); err != nil {
-							select {
-							case errorChan <- err:
-							default:
-							}
+							errorChan <- err
 						}
 					}(batch)
 				}
@@ -753,10 +781,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				})
 
 				// 检查是否有错误
-				select {
-				case err := <-errorChan:
+				if err := drainErrors(errorChan); err != nil {
 					return err
-				default:
 				}
 			} else {
 				// 当functions: true但没有函数时，添加日志提示
@@ -791,10 +817,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					go func(batch []mysql.UserInfo) {
 						defer wg.Done()
 						if err := m.convertUsers(batch, semaphore); err != nil {
-							select {
-							case errorChan <- err:
-							default:
-							}
+							errorChan <- err
 						}
 					}(batch)
 				}
@@ -808,10 +831,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				})
 
 				// 检查是否有错误
-				select {
-				case err := <-errorChan:
+				if err := drainErrors(errorChan); err != nil {
 					return err
-				default:
 				}
 			} else {
 				// 当users: true但没有用户时，添加日志提示
@@ -845,10 +866,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					go func(batch []mysql.TableInfo) {
 						defer wg.Done()
 						if err := m.convertTablePrivileges(batch, semaphore); err != nil {
-							select {
-							case errorChan <- err:
-							default:
-							}
+							errorChan <- err
 						}
 					}(batch)
 				}
@@ -862,10 +880,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				})
 
 				// 检查是否有错误
-				select {
-				case err := <-errorChan:
+				if err := drainErrors(errorChan); err != nil {
 					return err
-				default:
 				}
 			}
 
@@ -879,10 +895,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					startTime := time.Now()
 					// 串行处理表权限转换，避免并发更新冲突
 					if err := m.convertTablePrivilegesNew(tablePrivileges, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 					// 记录结束时间和对象数量
 					m.conversionStats = append(m.conversionStats, ConversionStageStat{
@@ -893,10 +906,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					})
 
 					// 检查是否有错误
-					select {
-					case err := <-errorChan:
+					if err := drainErrors(errorChan); err != nil {
 						return err
-					default:
 					}
 				} else {
 					// 当table_privileges: true但没有表权限时，添加日志提示
@@ -933,10 +944,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.TableInfo) {
 					defer wg.Done()
 					if err := m.convertTables(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -950,10 +958,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -976,10 +982,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.TableInfo) {
 					defer wg.Done()
 					if err := m.syncTableData(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -993,10 +996,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -1019,10 +1020,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.ViewInfo) {
 					defer wg.Done()
 					if err := m.convertViews(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -1036,10 +1034,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -1062,10 +1058,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.IndexInfo) {
 					defer wg.Done()
 					if err := m.convertIndexes(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -1079,10 +1072,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -1106,10 +1097,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					go func(batch []mysql.FunctionInfo) {
 						defer wg.Done()
 						if err := m.convertFunctions(batch, semaphore); err != nil {
-							select {
-							case errorChan <- err:
-							default:
-							}
+							errorChan <- err
 						}
 					}(batch)
 				}
@@ -1123,10 +1111,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				})
 
 				// 检查是否有错误
-				select {
-				case err := <-errorChan:
+				if err := drainErrors(errorChan); err != nil {
 					return err
-				default:
 				}
 			} else {
 				// 当functions: true但没有函数时，添加日志提示
@@ -1158,10 +1144,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					go func(batch []mysql.UserInfo) {
 						defer wg.Done()
 						if err := m.convertUsers(batch, semaphore); err != nil {
-							select {
-							case errorChan <- err:
-							default:
-							}
+							errorChan <- err
 						}
 					}(batch)
 				}
@@ -1175,10 +1158,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				})
 
 				// 检查是否有错误
-				select {
-				case err := <-errorChan:
+				if err := drainErrors(errorChan); err != nil {
 					return err
-				default:
 				}
 			} else {
 				// 当users: true但没有用户时，添加日志提示
@@ -1209,10 +1190,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				go func(batch []mysql.TableInfo) {
 					defer wg.Done()
 					if err := m.convertTablePrivileges(batch, semaphore); err != nil {
-						select {
-						case errorChan <- err:
-						default:
-						}
+						errorChan <- err
 					}
 				}(batch)
 			}
@@ -1226,10 +1204,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			})
 
 			// 检查是否有错误
-			select {
-			case err := <-errorChan:
+			if err := drainErrors(errorChan); err != nil {
 				return err
-			default:
 			}
 		}
 
@@ -1242,10 +1218,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				startTime := time.Now()
 				// 串行处理表权限转换，避免并发更新冲突
 				if err := m.convertTablePrivilegesNew(tablePrivileges, semaphore); err != nil {
-					select {
-					case errorChan <- err:
-					default:
-					}
+					errorChan <- err
 				}
 				// 记录结束时间和对象数量
 				m.conversionStats = append(m.conversionStats, ConversionStageStat{
@@ -1256,10 +1229,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				})
 
 				// 检查是否有错误
-				select {
-				case err := <-errorChan:
+				if err := drainErrors(errorChan); err != nil {
 					return err
-				default:
 				}
 			} else {
 				// 当table_privileges: true但没有表权限时，添加日志提示
@@ -1378,6 +1349,11 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		m.tableColumnNamesMap[table.Name] = pgResult.ColumnNames
 		m.mutex.Unlock()
 
+		// 汇入 DDL 转换中的语义降级/丢弃警告（P1-20）
+		for _, w := range pgResult.Warnings {
+			m.RecordConversionWarning("表结构", table.Name, w)
+		}
+
 		// 先检查表是否存在
 		tableExists, err := m.postgresConn.TableExists(table.Name)
 		if err != nil {
@@ -1456,6 +1432,14 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 
 		// 为每个列添加注释
 		m.addColumnComments(table, pgResult.ColumnNames)
+
+		// P1-02：应用 MySQL CHECK 约束（建表后以独立 ALTER 追加，失败仅告警不阻断）
+		for _, checkDDL := range pgResult.CheckConstraints {
+			if err := m.postgresConn.ExecuteDDL(checkDDL, table.DDL); err != nil {
+				m.RecordConversionWarning("CHECK 约束", table.Name,
+					fmt.Sprintf("应用 CHECK 约束失败（%s）: %v", checkDDL, err))
+			}
+		}
 
 		// 按 MySQL 表级 AUTO_INCREMENT=N 设置序列初值
 		// 覆盖 data:false 仅结构迁移的场景（数据阶段的回填以表内最大值为准）
@@ -1608,6 +1592,12 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 			return err
 		}
 
+		// P1-14：DECLARE HANDLER 语义无法完整转换，报告提示人工复核
+		if strings.Contains(strings.ToUpper(function.DDL), "HANDLER") {
+			m.RecordConversionWarning("函数语法", function.Name,
+				"包含 DECLARE HANDLER 错误处理：NOT FOUND 语义已转为 IF NOT FOUND，其他 HANDLER 以注释保留，请人工复核")
+		}
+
 		// 更新进度
 		completed := m.completeTask()
 		progress := float64(completed) / float64(m.totalTasks) * 100
@@ -1725,13 +1715,23 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 
 		semaphore <- struct{}{}
 
-		pgDDLs, err := ConvertUserDDL(user)
+		// 目标库名来自配置，schema 由连接参数 search_path 解析（P1-08）
+		privilegeCtx := PrivilegeContext{
+			Database: m.config.PostgreSQL.Database,
+			Schema:   mpp.ParseSearchPath(m.postgresConn.GetPgConnectionParams()),
+		}
+		pgDDLs, warns, err := ConvertUserDDL(user, privilegeCtx)
 		if err != nil {
 			errMsg := fmt.Sprintf("转换用户 %s 失败: %v", user.Name, err)
 			m.logError(errMsg)
 			<-semaphore
 			m.updateProgress()
 			return err
+		}
+
+		// 汇入权限转换警告（无法映射的权限等，P1-20）
+		for _, w := range warns {
+			m.RecordConversionWarning("用户权限", user.Name, w)
 		}
 
 		// 执行每个DDL语句
@@ -2047,6 +2047,38 @@ func (m *Manager) displayInconsistentTables() {
 		m.Log("+------------------+----------------+------------------+")
 
 		m.Log("共发现 %d 个表数据校验不一致", len(m.inconsistentTables))
+	}
+}
+
+// RecordConversionWarning 记录一条转换降级/丢弃警告（线程安全，P1-20）
+func (m *Manager) RecordConversionWarning(category, object, detail string) {
+	m.mutex.Lock()
+	m.conversionWarnings = append(m.conversionWarnings, ConversionWarning{
+		Category: category,
+		Object:   object,
+		Detail:   detail,
+	})
+	m.mutex.Unlock()
+}
+
+// displayConversionWarnings 显示转换降级/丢弃清单（P1-20）
+func (m *Manager) displayConversionWarnings() {
+	m.mutex.Lock()
+	warnings := append([]ConversionWarning(nil), m.conversionWarnings...)
+	m.mutex.Unlock()
+	if len(warnings) == 0 {
+		return
+	}
+
+	if m.config.Run.ShowConsoleLogs {
+		fmt.Printf("\n以下 %d 项语义在转换中被降级或丢弃，请复核:\n", len(warnings))
+		for _, w := range warnings {
+			fmt.Printf("  - [%s] %s: %s\n", w.Category, w.Object, w.Detail)
+		}
+	}
+	m.Log("以下 %d 项语义在转换中被降级或丢弃，请复核:", len(warnings))
+	for _, w := range warnings {
+		m.Log("  - [%s] %s: %s", w.Category, w.Object, w.Detail)
 	}
 }
 

@@ -39,10 +39,10 @@ func TestQuotePGIdentifier(t *testing.T) {
 // 修复前：ConvertUserDDL 创建 "svc_app" 而 ConvertTablePrivilegeDDL GRANT 到 "svc.app"，
 // 导致 role does not exist 错误
 func TestUserPrivilegeRoleNameConsistency(t *testing.T) {
-	userDDLs, err := ConvertUserDDL(mysql.UserInfo{
+	userDDLs, _, err := ConvertUserDDL(mysql.UserInfo{
 		Name:   "svc.app@%",
-		Grants: []string{"GRANT SELECT ON test_db.t1 TO 'svc.app'@'%';"},
-	})
+		Grants: []string{"GRANT SELECT ON test_db.* TO 'svc.app'@'%';"},
+	}, PrivilegeContext{Database: "targetdb", Schema: "public"})
 	if err != nil {
 		t.Fatalf("ConvertUserDDL 返回错误：%v", err)
 	}
