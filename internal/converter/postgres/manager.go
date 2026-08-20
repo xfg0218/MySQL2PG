@@ -1597,6 +1597,11 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 			m.RecordConversionWarning("函数语法", function.Name,
 				"包含 DECLARE HANDLER 错误处理：NOT FOUND 语义已转为 IF NOT FOUND，其他 HANDLER 以注释保留，请人工复核")
 		}
+		// P2-16：SIGNAL/RESIGNAL 抛错语义转换提示（RESIGNAL 子串含 SIGNAL，一并覆盖）
+		if strings.Contains(strings.ToUpper(function.DDL), "SIGNAL") {
+			m.RecordConversionWarning("函数语法", function.Name,
+				"包含 SIGNAL/RESIGNAL 抛错语句：SIGNAL 已转为 RAISE EXCEPTION，RESIGNAL 转为 RAISE，错误处理语义请人工复核")
+		}
 
 		// 更新进度
 		completed := m.completeTask()

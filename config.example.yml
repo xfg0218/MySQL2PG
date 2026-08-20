@@ -63,8 +63,8 @@ conversion:
     max_functions_per_batch: 5  # 一次性转换function的个数限制
     max_indexes_per_batch: 20   # 一次性转换index的个数限制
     max_users_per_batch: 10     # 一次性转换用户的个数限制
-    max_rows_per_batch: 1000    # 一次性同步数据的行数限制
-    batch_insert_size: 1000     # 批量插入的大小
+    max_rows_per_batch: 50000   # 一次性同步数据的行数限制（宽表会按估算行宽自适应下调）
+    batch_insert_size: 50000    # 批量插入的大小（建议与 max_rows_per_batch 保持一致）
 
 # 运行配置
 run:

@@ -236,6 +236,9 @@ func (c *Config) ValidateConfig() error {
 	if c.Conversion.Limits.MaxRowsPerBatch <= 0 {
 		c.Conversion.Limits.MaxRowsPerBatch = 50000 // 默认值，与 BatchInsertSize 保持一致以减少网络往返
 	}
+	if c.Conversion.Limits.BatchInsertSize <= 0 {
+		c.Conversion.Limits.BatchInsertSize = 50000 // 默认值，与 MaxRowsPerBatch 对齐，避免读 50000 行却按 10000 行分块插入
+	}
 
 	// MPP 配置默认值
 	if c.Conversion.MPP.Database == "" {

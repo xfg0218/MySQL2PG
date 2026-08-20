@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,7 +41,92 @@ const (
 	// streamRowLimit 无主键表采用流式读取的行数上限（P1-06）：
 	// go-sql-driver 在客户端缓冲整个结果集，超过该阈值的表回退 OFFSET 分页以控制内存
 	streamRowLimit = 2000000
+	// maxBatchMemoryBytes 单批次行数据的估算内存预算（P2-07 自适应批大小）：
+	// 行宽×行数超过该预算时按比例下调批大小，防止宽表内存尖峰
+	maxBatchMemoryBytes = 64 * 1024 * 1024
 )
+
+// estimateRowWidth 按列类型估算单行字节宽度（P2-07），保守取大值：
+// 变长字符串按声明长度封顶（上限 512），大对象类型统一按 1024 计
+func estimateRowWidth(columnTypes map[string]string) int {
+	width := 0
+	for _, rawType := range columnTypes {
+		t := strings.ToLower(strings.TrimSpace(rawType))
+		switch {
+		case strings.HasPrefix(t, "tinyint"), strings.HasPrefix(t, "smallint"),
+			strings.HasPrefix(t, "mediumint"), strings.HasPrefix(t, "int"),
+			strings.HasPrefix(t, "bigint"), strings.HasPrefix(t, "year"),
+			strings.HasPrefix(t, "bit"), strings.HasPrefix(t, "bool"):
+			width += 8
+		case strings.HasPrefix(t, "decimal"), strings.HasPrefix(t, "numeric"),
+			strings.HasPrefix(t, "double"), strings.HasPrefix(t, "float"), strings.HasPrefix(t, "real"):
+			width += 16
+		// datetime/timestamp 必须先于 date 判断（前缀包含关系）
+		case strings.HasPrefix(t, "datetime"), strings.HasPrefix(t, "timestamp"), strings.HasPrefix(t, "time"):
+			width += 12
+		case strings.HasPrefix(t, "date"):
+			width += 4
+		case strings.HasPrefix(t, "char("), strings.HasPrefix(t, "varchar("),
+			strings.HasPrefix(t, "binary("), strings.HasPrefix(t, "varbinary("),
+			strings.HasPrefix(t, "enum"), strings.HasPrefix(t, "set"):
+			length := extractTypeLength(t)
+			if length <= 0 {
+				length = 64
+			}
+			if length > 512 {
+				length = 512
+			}
+			width += length
+		case strings.HasPrefix(t, "text"), strings.HasPrefix(t, "longtext"),
+			strings.HasPrefix(t, "mediumtext"), strings.HasPrefix(t, "tinytext"),
+			strings.HasPrefix(t, "blob"), strings.HasPrefix(t, "longblob"),
+			strings.HasPrefix(t, "mediumblob"), strings.HasPrefix(t, "tinyblob"),
+			strings.HasPrefix(t, "json"):
+			width += 1024
+		default:
+			width += 64
+		}
+	}
+	return width
+}
+
+// extractTypeLength 提取 type(n) 形式中的长度 n，无法解析返回 0
+func extractTypeLength(t string) int {
+	open := strings.IndexByte(t, '(')
+	close := strings.IndexByte(t, ')')
+	if open == -1 || close <= open {
+		return 0
+	}
+	numStr := t[open+1 : close]
+	if comma := strings.IndexByte(numStr, ','); comma != -1 {
+		numStr = numStr[:comma]
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(numStr))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// adaptiveBatchSizes 按估算行宽对批大小做内存预算封顶（P2-07）：
+// 行宽×行数 ≤ maxBatchMemoryBytes 时原样返回，否则按比例下调。
+// 返回调整后的（读取批大小, 插入批大小）
+func adaptiveBatchSizes(readBatch int64, insertBatch int, rowWidth int) (int64, int) {
+	if rowWidth <= 0 {
+		return readBatch, insertBatch
+	}
+	maxRows := int64(maxBatchMemoryBytes) / int64(rowWidth)
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	if readBatch > maxRows {
+		readBatch = maxRows
+	}
+	if insertBatch <= 0 || int64(insertBatch) > maxRows {
+		insertBatch = int(maxRows)
+	}
+	return readBatch, insertBatch
+}
 
 // progressUpdate 无锁进度更新类型
 type progressUpdate struct {
@@ -297,6 +383,18 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 	batchInsertSize := config.Conversion.Limits.BatchInsertSize
 	if batchInsertSize <= 0 {
 		batchInsertSize = defaultBatchInsertSize
+	}
+
+	// P2-07：按估算行宽做内存预算封顶，宽表自动下调批大小，
+	// 普通表行宽估算值远低于预算时保持配置值不变
+	rowWidth := estimateRowWidth(columnTypes)
+	adjustedBatchSize, adjustedInsertSize := adaptiveBatchSizes(batchSize, batchInsertSize, rowWidth)
+	if adjustedBatchSize != batchSize {
+		log("表 %s 估算行宽较大（约 %d 字节/行），读取批大小自适应调整 %d -> %d", table.Name, rowWidth, batchSize, adjustedBatchSize)
+		batchSize = adjustedBatchSize
+	}
+	if adjustedInsertSize != batchInsertSize {
+		batchInsertSize = adjustedInsertSize
 	}
 
 	// 尝试使用基于主键的分页
