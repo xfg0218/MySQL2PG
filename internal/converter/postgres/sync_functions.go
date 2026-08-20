@@ -712,24 +712,56 @@ func (c *FunctionConverter) processGroupConcat(body string) string {
 
 		content := body[j+1 : paramEnd]
 
-		// 解析 SEPARATOR（字面量之外的关键字才算）
+		// 解析 DISTINCT / ORDER BY / SEPARATOR（仅字面量之外的关键字才算，P1-15）
 		separator := "', '" // 默认分隔符
-		expr := content
+		hasDistinct := false
+		orderBy := ""
 
+		distIdx := findKeywordOutsideLiterals(content, "DISTINCT", 0)
+		orderIdx := findKeywordOutsideLiterals(content, "ORDER BY", 0)
 		sepIdx := findKeywordOutsideLiterals(content, "SEPARATOR", 0)
+
+		// 表达式为最早一个结构性关键字之前的部分
+		cutIdx := len(content)
+		for _, idx := range []int{distIdx, orderIdx, sepIdx} {
+			if idx != -1 && idx < cutIdx {
+				cutIdx = idx
+			}
+		}
+		expr := strings.TrimSpace(content[:cutIdx])
+
+		if distIdx != -1 {
+			hasDistinct = true
+		}
+		if orderIdx != -1 {
+			orderEnd := len(content)
+			if sepIdx != -1 && sepIdx > orderIdx {
+				orderEnd = sepIdx
+			}
+			orderBy = strings.TrimSpace(content[orderIdx+len("ORDER BY") : orderEnd])
+		}
 		if sepIdx != -1 {
-			expr = strings.TrimSpace(content[:sepIdx])
 			sepVal := strings.TrimSpace(content[sepIdx+len("SEPARATOR"):])
-			// 清理引号
 			if len(sepVal) >= 2 && ((sepVal[0] == '\'' && sepVal[len(sepVal)-1] == '\'') || (sepVal[0] == '"' && sepVal[len(sepVal)-1] == '"')) {
 				separator = sepVal
-			} else {
+			} else if sepVal != "" {
 				separator = "'" + sepVal + "'"
 			}
 		}
 
-		// 替换
-		newExpr := fmt.Sprintf("STRING_AGG((%s)::text, %s)", expr, separator)
+		// 组装 PG string_agg 表达式：STRING_AGG([DISTINCT ] expr, sep [ORDER BY ...])
+		var agg strings.Builder
+		agg.WriteString("STRING_AGG(")
+		if hasDistinct {
+			agg.WriteString("DISTINCT ")
+		}
+		agg.WriteString(fmt.Sprintf("(%s)::text, %s", expr, separator))
+		if orderBy != "" {
+			agg.WriteString(" ORDER BY " + orderBy)
+		}
+		agg.WriteString(")")
+		newExpr := agg.String()
+
 		body = body[:startIdx] + newExpr + body[paramEnd+1:]
 		searchFrom = startIdx + len(newExpr)
 	}

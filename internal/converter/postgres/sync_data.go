@@ -21,6 +21,14 @@ type TableDataInconsistency struct {
 	PostgresRowCount int64
 }
 
+// ConversionWarning 记录转换过程中的语义降级/丢弃事件（P1-20）
+// 任何无法完整迁移而被降级或丢弃的语义都应在此留痕，供迁移报告展示与用户复核
+type ConversionWarning struct {
+	Category string // 类别：CHECK 约束 / 表达式默认值 / 空间类型 / 函数语法 等
+	Object   string // 对象名（表/视图/函数）
+	Detail   string // 具体说明
+}
+
 // 常量和配置
 const (
 	defaultBatchSize       = 10000

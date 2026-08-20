@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strings"
 
 	"github.com/yourusername/mysql2pg/internal/mysql"
@@ -65,12 +66,12 @@ func ConvertIndexDDL(tableName string, index mysql.IndexInfo, lowercaseColumns b
 	lowercaseIndexName := strings.ToLower(fmt.Sprintf("%s_%s", index.Table, index.Name))
 
 	// 截断索引名以符合PostgreSQL的长度限制（63字节）
+	// P1-17：截断后拼接原名哈希后缀，避免仅尾部不同的长索引名截断后撞名
+	// （撞名会导致第二个索引被 IF NOT EXISTS 静默跳过）
 	if len(lowercaseIndexName) > 63 {
-		// 保留唯一的后缀（通常包含列名信息）和表名的一部分
-		// 简单的截断策略
-		lowercaseIndexName = lowercaseIndexName[:63]
-		// 确保截断后不会以特殊字符结尾
-		lowercaseIndexName = strings.TrimRight(lowercaseIndexName, "_")
+		sum := fnv.New32a()
+		sum.Write([]byte(lowercaseIndexName))
+		lowercaseIndexName = fmt.Sprintf("%s_%08x", lowercaseIndexName[:54], sum.Sum32())
 	}
 
 	// 为表名和索引名添加双引号，以处理特殊字符和关键字

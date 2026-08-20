@@ -228,6 +228,9 @@ type ConvertTableDDLResult struct {
 	ColumnNames    map[string]string // 键：原始列名，值：转换后的列名（带双引号格式）
 	ColumnComments map[string]string // 键：原始列名，值：列注释
 	PartitionDDLs  []string
+	// Warnings 记录转换中发生的语义降级/丢弃说明（P1-20），
+	// 由调用方汇入迁移报告的转换降级清单
+	Warnings []string
 }
 
 // parseTableInfo 解析表名和是否为临时表
