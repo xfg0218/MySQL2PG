@@ -1660,7 +1660,10 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		}
 		// ========== MPP 处理结束 ==========
 
-		pgDDL, err := ConvertIndexDDL(index.Table, index, m.config.Conversion.Options.LowercaseColumns, columnNamesMap)
+		pgDDL, indexWarnings, err := ConvertIndexDDL(index, m.config.Conversion.Options.LowercaseColumns, columnNamesMap)
+		for _, w := range indexWarnings {
+			m.RecordConversionWarning("索引", index.Table, fmt.Sprintf("%s: %s", index.Name, w))
+		}
 		if err != nil {
 			errMsg := fmt.Sprintf("转换索引 %s 失败: %v", lowercaseIndexName, err)
 			m.logError(errMsg)
@@ -1669,7 +1672,7 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 			return err
 		}
 
-		// 如果没有生成DDL语句（比如只包含pri_key的索引），则跳过
+		// 如果没有生成DDL语句（比如只包含pri_key的索引、被跳过的函数/SPATIAL索引），则跳过
 		if pgDDL == "" {
 			<-semaphore
 			m.updateProgress()

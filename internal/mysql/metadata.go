@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,12 @@ type IndexInfo struct {
 	Table    string
 	Columns  []string
 	IsUnique bool
+	// P2-19/P2-01：索引属性细节（来自 information_schema.statistics）。
+	// ColumnSubParts/ColumnDescs 与 Columns 按下标一一对应
+	IndexType      string  // BTREE/HASH/FULLTEXT/SPATIAL（大写，空表示未知）
+	ColumnSubParts []int64 // 各列前缀长度，0 表示无前缀
+	ColumnDescs    []bool  // 各列是否降序（collation = 'D'）
+	IsFunctional   bool    // 含函数索引部件（MySQL 8.0，column_name 为 NULL）
 }
 
 // FunctionInfo 函数信息
@@ -392,14 +399,55 @@ func (c *Connection) getTableColumns(tableName string) ([]ColumnInfo, error) {
 	return columns, nil
 }
 
+// appendIndexRow 将 information_schema.statistics 的一行索引信息追加到 indexMap（P2-19）：
+// 采集前缀长度（sub_part）、排序方向（collation）与索引类型（index_type）；
+// column_name 为 NULL 的行是 MySQL 8.0 函数索引部件，仅做标记（P2-01：
+// 此前直接 Scan 到 string 会报错，导致含函数索引的库在元数据阶段整体中止）
+func appendIndexRow(indexMap map[string]*IndexInfo, key, tableName, indexName string,
+	nonUnique int, columnName, collation, indexType sql.NullString, subPart sql.NullInt64) {
+	info, exists := indexMap[key]
+	if !exists {
+		info = &IndexInfo{
+			Name:     indexName,
+			Table:    tableName,
+			IsUnique: nonUnique == 0,
+		}
+		indexMap[key] = info
+	}
+	if indexType.Valid && info.IndexType == "" {
+		info.IndexType = strings.ToUpper(indexType.String)
+	}
+	if !columnName.Valid {
+		info.IsFunctional = true
+		return
+	}
+	info.Columns = append(info.Columns, columnName.String)
+	var sp int64
+	if subPart.Valid {
+		sp = subPart.Int64
+	}
+	info.ColumnSubParts = append(info.ColumnSubParts, sp)
+	info.ColumnDescs = append(info.ColumnDescs, collation.Valid && strings.ToUpper(collation.String) == "D")
+}
+
+// sortIndexes 按表名、索引名稳定排序（map 遍历顺序不确定，避免索引创建顺序漂移）
+func sortIndexes(indexes []IndexInfo) {
+	sort.Slice(indexes, func(i, j int) bool {
+		if indexes[i].Table != indexes[j].Table {
+			return indexes[i].Table < indexes[j].Table
+		}
+		return indexes[i].Name < indexes[j].Name
+	})
+}
+
 // getTableIndexes 获取表的索引信息
 func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	// 使用information_schema.statistics查询索引信息，兼容MySQL 5.7和MySQL 8.0
-	// 只查询需要的字段：table_name, index_name, non_unique, column_name, seq_in_index
 	query := `
-		SELECT table_name, index_name, non_unique, column_name, seq_in_index 
-		FROM information_schema.statistics 
-		WHERE table_schema = ? AND table_name = ? 
+		SELECT table_name, index_name, non_unique, column_name, seq_in_index,
+		       sub_part, collation, index_type
+		FROM information_schema.statistics
+		WHERE table_schema = ? AND table_name = ?
 		ORDER BY index_name, seq_in_index
 	`
 	rows, err := c.db.QueryContext(c.context(), query, c.config.Database, tableName)
@@ -412,23 +460,18 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	indexMap := make(map[string]*IndexInfo)
 
 	for rows.Next() {
-		var tableName, indexName, columnName string
+		var tableName, indexName string
 		var nonUnique int
-		var seqInIndex sql.NullString
+		var seqInIndex, columnName, collation, indexType sql.NullString
+		var subPart sql.NullInt64
 
-		if err := rows.Scan(&tableName, &indexName, &nonUnique, &columnName, &seqInIndex); err != nil {
+		if err := rows.Scan(&tableName, &indexName, &nonUnique, &columnName, &seqInIndex,
+			&subPart, &collation, &indexType); err != nil {
 			return nil, err
 		}
 
-		if _, exists := indexMap[indexName]; !exists {
-			indexMap[indexName] = &IndexInfo{
-				Name:     indexName,
-				Table:    tableName,
-				IsUnique: nonUnique == 0,
-			}
-		}
-
-		indexMap[indexName].Columns = append(indexMap[indexName].Columns, columnName)
+		appendIndexRow(indexMap, indexName, tableName, indexName,
+			nonUnique, columnName, collation, indexType, subPart)
 	}
 
 	// 将map转换为slice
@@ -436,6 +479,7 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 	for _, idx := range indexMap {
 		indexes = append(indexes, *idx)
 	}
+	sortIndexes(indexes)
 
 	return indexes, nil
 }
@@ -444,7 +488,8 @@ func (c *Connection) getTableIndexes(tableName string) ([]IndexInfo, error) {
 func (c *Connection) GetAllIndexes() ([]IndexInfo, error) {
 	// 使用 information_schema.statistics 查询所有索引信息
 	query := `
-		SELECT table_name, index_name, non_unique, column_name, seq_in_index
+		SELECT table_name, index_name, non_unique, column_name, seq_in_index,
+		       sub_part, collation, index_type
 		FROM information_schema.statistics
 		WHERE table_schema = ?
 		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
@@ -460,24 +505,18 @@ func (c *Connection) GetAllIndexes() ([]IndexInfo, error) {
 	indexMap := make(map[string]*IndexInfo)
 
 	for rows.Next() {
-		var tableName, indexName, columnName string
+		var tableName, indexName string
 		var nonUnique int
-		var seqInIndex sql.NullString
+		var seqInIndex, columnName, collation, indexType sql.NullString
+		var subPart sql.NullInt64
 
-		if err := rows.Scan(&tableName, &indexName, &nonUnique, &columnName, &seqInIndex); err != nil {
+		if err := rows.Scan(&tableName, &indexName, &nonUnique, &columnName, &seqInIndex,
+			&subPart, &collation, &indexType); err != nil {
 			return nil, fmt.Errorf("扫描索引信息失败：%w", err)
 		}
 
-		key := tableName + "." + indexName
-		if _, exists := indexMap[key]; !exists {
-			indexMap[key] = &IndexInfo{
-				Name:     indexName,
-				Table:    tableName,
-				IsUnique: nonUnique == 0,
-			}
-		}
-
-		indexMap[key].Columns = append(indexMap[key].Columns, columnName)
+		appendIndexRow(indexMap, tableName+"."+indexName, tableName, indexName,
+			nonUnique, columnName, collation, indexType, subPart)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -489,6 +528,7 @@ func (c *Connection) GetAllIndexes() ([]IndexInfo, error) {
 	for _, idx := range indexMap {
 		indexes = append(indexes, *idx)
 	}
+	sortIndexes(indexes)
 
 	return indexes, nil
 }
