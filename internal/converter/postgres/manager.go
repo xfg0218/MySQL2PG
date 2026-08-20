@@ -1592,6 +1592,12 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 			return err
 		}
 
+		// P1-14：DECLARE HANDLER 语义无法完整转换，报告提示人工复核
+		if strings.Contains(strings.ToUpper(function.DDL), "HANDLER") {
+			m.RecordConversionWarning("函数语法", function.Name,
+				"包含 DECLARE HANDLER 错误处理：NOT FOUND 语义已转为 IF NOT FOUND，其他 HANDLER 以注释保留，请人工复核")
+		}
+
 		// 更新进度
 		completed := m.completeTask()
 		progress := float64(completed) / float64(m.totalTasks) * 100

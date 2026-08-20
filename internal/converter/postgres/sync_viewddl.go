@@ -496,8 +496,23 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 	processed = replaceJSONMergePatchCompatible(processed)
 	processed = replaceJSONMergePreserveCompatible(processed)
 
+	// DATE_FORMAT / STR_TO_DATE 需读取格式字面量，在遮蔽区之外全局执行（P1-13）
+	processed = reDATE_FORMAT.ReplaceAllStringFunc(processed, func(m string) string {
+		match := reDATE_FORMAT.FindStringSubmatch(m)
+		if len(match) < 3 {
+			return m
+		}
+		return fmt.Sprintf("to_char(%s, %s)", strings.TrimSpace(match[1]), convertMySQLDateFormatToPG(strings.TrimSpace(match[2])))
+	})
+	processed = reSTR_TO_DATE.ReplaceAllString(processed, "to_date($1, $2)")
+
+	// 字面量遮蔽区（P1-13）：以下词级函数转换在遮蔽文本上执行，
+	// 字符串字面量内容（如 'database()'、'year('）不会被误替换；
+	// 需读取字面量内容的 JSON 系列与 DATE_FORMAT/STR_TO_DATE 已在本区之前全局执行
+	litMaskTail := newLiteralMask()
+	masked := litMaskTail.mask(processed)
 	// MySQL INSERT(str, pos, len, newstr) -> PostgreSQL OVERLAY(str PLACING newstr FROM pos FOR len)
-	processed = reINSERT.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reINSERT.ReplaceAllStringFunc(masked, func(m string) string {
 		// 去掉函数名和括号，只保留参数部分，找到第一个'('和最后一个')'的位置
 		openParen := strings.Index(m, "(")
 		closeParen := strings.LastIndex(m, ")")
@@ -524,43 +539,43 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return fmt.Sprintf("OVERLAY(%s PLACING %s FROM %s FOR %s)", str, newstr, pos, len)
 	})
 
-	if processed == "" {
+	if masked == "" {
 		return "", fmt.Errorf("failed to convert JSON functions in view definition for view '%s'", viewName)
 	}
 
 	// 加密函数转换
-	processed = reMD5.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reMD5.ReplaceAllStringFunc(masked, func(m string) string {
 		// 提取参数部分
 		params := m[4 : len(m)-1] // 去掉 "md5(" 和 ")"
 		return fmt.Sprintf("md5(%s)", params)
 	})
-	processed = reSHA1.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reSHA1.ReplaceAllStringFunc(masked, func(m string) string {
 		// 提取参数部分
 		params := m[5 : len(m)-1] // 去掉 "sha1(" 和 ")"
 		return fmt.Sprintf("sha1(%s)", params)
 	})
-	processed = reSHA2.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reSHA2.ReplaceAllStringFunc(masked, func(m string) string {
 		// 提取参数部分
 		params := m[5 : len(m)-1] // 去掉 "sha2(" 和 ")"
 		return fmt.Sprintf("sha2(%s)", params)
 	})
-	if processed == "" {
+	if masked == "" {
 		return "", fmt.Errorf("failed to convert encryption functions in view definition for view '%s'", viewName)
 	}
 
 	// UUID函数转换
-	processed = reUUID.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reUUID.ReplaceAllStringFunc(masked, func(m string) string {
 		return "uuid_generate_v4()"
 	})
-	processed = reUUID_SHORT.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reUUID_SHORT.ReplaceAllStringFunc(masked, func(m string) string {
 		return "(extract(epoch from now()) * 1000000)::bigint"
 	})
-	if processed == "" {
+	if masked == "" {
 		return "", fmt.Errorf("failed to convert UUID functions in view definition for view '%s'", viewName)
 	}
 
 	// 网络函数转换
-	processed = reINET_ATON.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reINET_ATON.ReplaceAllStringFunc(masked, func(m string) string {
 		// 安全提取参数，找到左括号的位置
 		parenIndex := strings.Index(m, "(")
 		if parenIndex == -1 {
@@ -573,7 +588,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		sb.WriteString(" AS inet) - CAST('0.0.0.0' AS inet))::bigint")
 		return sb.String()
 	})
-	processed = reINET_NTOA.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reINET_NTOA.ReplaceAllStringFunc(masked, func(m string) string {
 		// 安全提取参数，找到左括号的位置
 		parenIndex := strings.Index(m, "(")
 		if parenIndex == -1 {
@@ -586,12 +601,12 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		sb.WriteString("::bigint) AS text)")
 		return sb.String()
 	})
-	if processed == "" {
+	if masked == "" {
 		return "", fmt.Errorf("failed to convert network functions in view definition for view '%s'", viewName)
 	}
 
 	// 时间函数转换
-	processed = reUNIX_TIMESTAMP.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reUNIX_TIMESTAMP.ReplaceAllStringFunc(masked, func(m string) string {
 		// 提取参数部分
 		args := m[15 : len(m)-1] // 去掉 "UNIX_TIMESTAMP(" 和 ")"
 		args = strings.TrimSpace(args)
@@ -602,7 +617,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return "extract(epoch from " + args + ")"
 	})
 	// FROM_UNIXTIME(expr) -> to_timestamp(expr)
-	processed = reFROM_UNIXTIME.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reFROM_UNIXTIME.ReplaceAllStringFunc(masked, func(m string) string {
 		// 提取参数部分
 		args := m[14 : len(m)-1] // 去掉 "FROM_UNIXTIME(" 和 ")"
 		args = strings.TrimSpace(args)
@@ -612,35 +627,27 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		// FROM_UNIXTIME(expr) -> to_timestamp(expr)
 		return "to_timestamp(" + args + ")"
 	})
-	processed = reYEAR_FUNC.ReplaceAllString(processed, "extract(year from $1)::int")
-	processed = reMONTH_FUNC.ReplaceAllString(processed, "extract(month from $1)::int")
-	processed = reDAY_FUNC.ReplaceAllString(processed, "extract(day from $1)::int")
-	processed = reHOUR_FUNC.ReplaceAllString(processed, "extract(hour from $1)::int")
-	processed = reMINUTE_FUNC.ReplaceAllString(processed, "extract(minute from $1)::int")
-	processed = reSECOND_FUNC.ReplaceAllString(processed, "extract(second from $1)::int")
+	masked = reYEAR_FUNC.ReplaceAllString(masked, "extract(year from $1)::int")
+	masked = reMONTH_FUNC.ReplaceAllString(masked, "extract(month from $1)::int")
+	masked = reDAY_FUNC.ReplaceAllString(masked, "extract(day from $1)::int")
+	masked = reHOUR_FUNC.ReplaceAllString(masked, "extract(hour from $1)::int")
+	masked = reMINUTE_FUNC.ReplaceAllString(masked, "extract(minute from $1)::int")
+	masked = reSECOND_FUNC.ReplaceAllString(masked, "extract(second from $1)::int")
 	// 新增日期时间函数转换
-	processed = reYEARWEEK.ReplaceAllString(processed, "(extract(year from $1)::int * 100 + extract(week from $1)::int)")
-	processed = reDAYNAME.ReplaceAllString(processed, "to_char($1, 'Day')")
-	processed = reMONTHNAME.ReplaceAllString(processed, "to_char($1, 'Month')")
-	processed = reQUARTER.ReplaceAllString(processed, "extract(quarter from $1)::int")
-	processed = reWEEK.ReplaceAllString(processed, "extract(week from $1)::int")
-	processed = reDATE_FORMAT.ReplaceAllStringFunc(processed, func(m string) string {
-		match := reDATE_FORMAT.FindStringSubmatch(m)
-		if len(match) < 3 {
-			return m
-		}
-		return fmt.Sprintf("to_char(%s, %s)", strings.TrimSpace(match[1]), convertMySQLDateFormatToPG(strings.TrimSpace(match[2])))
-	})
-	processed = reSTR_TO_DATE.ReplaceAllString(processed, "to_date($1, $2)")
-	processed = reDATEDIFF.ReplaceAllString(processed, "date_part('day', $1 - $2)")
-	processed = reTIMEDIFF.ReplaceAllString(processed, "($1 - $2)")
-	if processed == "" {
+	masked = reYEARWEEK.ReplaceAllString(masked, "(extract(year from $1)::int * 100 + extract(week from $1)::int)")
+	masked = reDAYNAME.ReplaceAllString(masked, "to_char($1, 'Day')")
+	masked = reMONTHNAME.ReplaceAllString(masked, "to_char($1, 'Month')")
+	masked = reQUARTER.ReplaceAllString(masked, "extract(quarter from $1)::int")
+	masked = reWEEK.ReplaceAllString(masked, "extract(week from $1)::int")
+	masked = reDATEDIFF.ReplaceAllString(masked, "date_part('day', $1 - $2)")
+	masked = reTIMEDIFF.ReplaceAllString(masked, "($1 - $2)")
+	if masked == "" {
 		return "", fmt.Errorf("failed to convert basic time functions in view definition for view '%s'", viewName)
 	}
 
 	// 数值函数转换 - ROUND 和 MOD
 	// MySQL: ROUND(column, n) -> PostgreSQL: ROUND(column::NUMERIC, n)
-	processed = reROUND.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reROUND.ReplaceAllStringFunc(masked, func(m string) string {
 		match := reROUND.FindStringSubmatch(m)
 		if len(match) < 3 {
 			return m
@@ -650,7 +657,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		return fmt.Sprintf("ROUND(%s::NUMERIC, %s)", column, precision)
 	})
 	// MySQL: MOD(column, n) -> PostgreSQL: MOD(column::NUMERIC, n)
-	processed = reMOD.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reMOD.ReplaceAllStringFunc(masked, func(m string) string {
 		match := reMOD.FindStringSubmatch(m)
 		if len(match) < 3 {
 			return m
@@ -659,12 +666,12 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		divisor := strings.TrimSpace(match[2])
 		return fmt.Sprintf("MOD(%s::NUMERIC, %s)", column, divisor)
 	})
-	if processed == "" {
+	if masked == "" {
 		return "", fmt.Errorf("failed to convert ROUND/MOD functions in view definition for view '%s'", viewName)
 	}
 
 	// 时间函数转换 - DATE_ADD/DATE_SUB
-	processed = reDATE_ADD.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reDATE_ADD.ReplaceAllStringFunc(masked, func(m string) string {
 		match := reDATE_ADD.FindStringSubmatch(m)
 		if len(match) < 3 {
 			return m
@@ -680,7 +687,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		unit := normalizeIntervalUnit(strings.TrimSpace(parts[1]))
 		return fmt.Sprintf("(%s + ((%s) * interval '1 %s'))", datePart, num, unit)
 	})
-	processed = reDATE_SUB.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reDATE_SUB.ReplaceAllStringFunc(masked, func(m string) string {
 		match := reDATE_SUB.FindStringSubmatch(m)
 		if len(match) < 3 {
 			return m
@@ -696,12 +703,12 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		unit := normalizeIntervalUnit(strings.TrimSpace(parts[1]))
 		return fmt.Sprintf("(%s - ((%s) * interval '1 %s'))", datePart, num, unit)
 	})
-	if processed == "" {
+	if masked == "" {
 		return "", fmt.Errorf("failed to process DATE_ADD/DATE_SUB functions in view definition for view '%s'", viewName)
 	}
 
 	// ADDDATE/SUBDATE -> + / -
-	processed = reADDDATE.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reADDDATE.ReplaceAllStringFunc(masked, func(m string) string {
 		// 匹配 ADDDATE(date, days) -> date + days * interval '1 day'
 		parts := strings.SplitN(m[8:len(m)-1], ",", 2)
 		if len(parts) < 2 {
@@ -716,7 +723,7 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		sb.WriteString("::interval '1 day'")
 		return sb.String()
 	})
-	processed = reSUBDATE.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reSUBDATE.ReplaceAllStringFunc(masked, func(m string) string {
 		// 匹配 SUBDATE(date, days) -> date - days * interval '1 day'
 		parts := strings.SplitN(m[8:len(m)-1], ",", 2)
 		if len(parts) < 2 {
@@ -731,55 +738,55 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		sb.WriteString("::interval '1 day'")
 		return sb.String()
 	})
-	if processed == "" {
+	if masked == "" {
 		return "", fmt.Errorf("failed to process ADDDATE/SUBDATE functions in view definition for view '%s'", viewName)
 	}
 
 	// 使用更精确的方式处理ADDTIME和SUBTIME函数，避免影响其他表达式
-	processed = reADDTIME.ReplaceAllString(processed, "($1 + $2)")
-	processed = reSUBTIME.ReplaceAllString(processed, "($1 - $2)")
-	if processed == "" {
+	masked = reADDTIME.ReplaceAllString(masked, "($1 + $2)")
+	masked = reSUBTIME.ReplaceAllString(masked, "($1 - $2)")
+	if masked == "" {
 		return "", fmt.Errorf("failed to process ADDTIME/SUBTIME functions in view definition for view '%s'", viewName)
 	}
 
 	// 系统函数转换
-	processed = reLAST_INSERT_ID.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reLAST_INSERT_ID.ReplaceAllStringFunc(masked, func(m string) string {
 		return "lastval()"
 	})
-	processed = reCONNECTION_ID.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reCONNECTION_ID.ReplaceAllStringFunc(masked, func(m string) string {
 		return "pg_backend_pid()"
 	})
-	processed = reCURRENT_USER.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reCURRENT_USER.ReplaceAllStringFunc(masked, func(m string) string {
 		return "current_user"
 	})
-	processed = reSESSION_USER.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reSESSION_USER.ReplaceAllStringFunc(masked, func(m string) string {
 		return "session_user"
 	})
-	processed = reSYSTEM_USER.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reSYSTEM_USER.ReplaceAllStringFunc(masked, func(m string) string {
 		return "system_user"
 	})
-	processed = reSCHEMA.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reSCHEMA.ReplaceAllStringFunc(masked, func(m string) string {
 		return "current_schema"
 	})
-	processed = reDATABASE.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reDATABASE.ReplaceAllStringFunc(masked, func(m string) string {
 		return "current_database()"
 	})
-	processed = reUSER.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reUSER.ReplaceAllStringFunc(masked, func(m string) string {
 		return "current_user"
 	})
-	processed = reVERSION.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reVERSION.ReplaceAllStringFunc(masked, func(m string) string {
 		return "version()"
 	})
 	// 转换 RAND 函数 (MySQL) 为 random() (PostgreSQL)
 	// 处理 RAND() 和 RAND(seed) 两种情况
 	// PostgreSQL的random()不支持种子参数，所以直接替换整个函数调用
-	processed = reRAND.ReplaceAllString(processed, "random()")
-	if processed == "" {
+	masked = reRAND.ReplaceAllString(masked, "random()")
+	if masked == "" {
 		return "", fmt.Errorf("failed to convert system functions in view definition for view '%s'", viewName)
 	}
 
 	// 处理 interval 语法 (如 now() + interval 1 day → now() + interval '1 day')
-	processed = reInterval.ReplaceAllStringFunc(processed, func(m string) string {
+	masked = reInterval.ReplaceAllStringFunc(masked, func(m string) string {
 		// 提取捕获组
 		matches := reInterval.FindStringSubmatch(m)
 		if len(matches) != 5 {
@@ -815,9 +822,11 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 		sb.WriteString("'")
 		return sb.String()
 	})
-	if processed == "" {
+	if masked == "" {
 		return "", fmt.Errorf("failed to process interval syntax in view definition for view '%s'", viewName)
 	}
+	// 恢复字面量（P1-13）
+	processed = litMaskTail.unmask(masked)
 
 	processed = strings.TrimSpace(processed)
 	if processed == "" {
@@ -1102,29 +1111,6 @@ func normalizeCastTypeForPG(t string) string {
 	default:
 		return normalized
 	}
-}
-
-func convertMySQLDateFormatToPG(raw string) string {
-	format := strings.TrimSpace(raw)
-	if len(format) >= 2 && ((format[0] == '\'' && format[len(format)-1] == '\'') || (format[0] == '"' && format[len(format)-1] == '"')) {
-		format = format[1 : len(format)-1]
-	}
-	replacer := strings.NewReplacer(
-		"%Y", "YYYY",
-		"%y", "YY",
-		"%m", "MM",
-		"%c", "FMMM",
-		"%d", "DD",
-		"%e", "FMDD",
-		"%H", "HH24",
-		"%h", "HH12",
-		"%I", "HH12",
-		"%i", "MI",
-		"%s", "SS",
-		"%S", "SS",
-	)
-	format = replacer.Replace(format)
-	return "'" + format + "'"
 }
 
 // convertMySQLOrderByToPG 将 MySQL ORDER BY 子句转换为 PostgreSQL 格式

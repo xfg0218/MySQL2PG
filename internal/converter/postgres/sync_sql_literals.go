@@ -195,6 +195,46 @@ func findKeywordOutsideLiterals(sql, keyword string, from int) int {
 	return -1
 }
 
+// mysqlDateFormatReplacer MySQL 日期格式说明符 → PostgreSQL to_char 格式映射表
+// P1-12 统一实现：strings.NewReplacer 单趟替换，替换结果不会被再次扫描，各说明符互不干扰
+var mysqlDateFormatReplacer = strings.NewReplacer(
+	"%Y", "YYYY", // 4 位年份
+	"%y", "YY",
+	"%m", "MM", // 月（补零）
+	"%c", "FMMM",
+	"%d", "DD", // 日（补零）
+	"%e", "FMDD",
+	"%H", "HH24", // 小时 00-23
+	"%k", "FMHH24",
+	"%h", "HH12", // 小时 01-12
+	"%I", "HH12",
+	"%l", "FMHH12",
+	"%i", "MI", // 分钟
+	"%s", "SS", // 秒
+	"%S", "SS",
+	"%f", "US", // 微秒
+	"%p", "AM", // AM/PM
+	"%r", "HH12:MI:SS AM", // 12 小时制时间
+	"%T", "HH24:MI:SS", // 24 小时制时间
+	"%j", "DDD", // 一年中的第几天
+	"%a", "Dy", // 星期缩写
+	"%W", "Day", // 星期全称
+	"%b", "Mon", // 月份缩写
+	"%M", "Month", // 月份全称
+	"%D", "FMDD", // MySQL 的"日+序数后缀"在 PG 无等价物，近似为日
+	"%%", "%", // 字面百分号
+)
+
+// convertMySQLDateFormatToPG 将 MySQL 日期格式说明符转换为 PostgreSQL to_char 格式，
+// 返回带单引号的格式串（P1-12：唯一实现，视图/生成列/函数管道共用）
+func convertMySQLDateFormatToPG(raw string) string {
+	format := strings.TrimSpace(raw)
+	if len(format) >= 2 && ((format[0] == '\'' && format[len(format)-1] == '\'') || (format[0] == '"' && format[len(format)-1] == '"')) {
+		format = format[1 : len(format)-1]
+	}
+	return "'" + mysqlDateFormatReplacer.Replace(format) + "'"
+}
+
 // literalPlaceholderPrefix 字面量占位符前缀（全小写、无空白/括号/引号，
 // 可安全穿过空白压缩、小写化与函数名替换等变换）
 const literalPlaceholderPrefix = "__m2pg_lit_"

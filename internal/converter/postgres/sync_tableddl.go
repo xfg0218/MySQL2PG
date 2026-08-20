@@ -779,29 +779,10 @@ func toLowerOutsideQuotes(input string) string {
 	return builder.String()
 }
 
-// convertMySQLDateFormatToPostgres 将MySQL日期格式转换为PostgreSQL日期格式
+// convertMySQLDateFormatToPostgres 生成列管道使用的日期格式转换：返回不带引号的格式串
+// P1-12：内部复用统一实现 convertMySQLDateFormatToPG（sync_sql_literals.go）
 func convertMySQLDateFormatToPostgres(mysqlFormat string) string {
-	replacements := []struct {
-		mysql string
-		pg    string
-	}{
-		{"%Y", "YYYY"},
-		{"%m", "MM"},
-		{"%d", "DD"},
-		{"%H", "HH24"},
-		{"%h", "HH12"},
-		{"%I", "HH12"},
-		{"%i", "MI"},
-		{"%s", "SS"},
-		{"%f", "US"},
-	}
-
-	converted := mysqlFormat
-	for _, replacement := range replacements {
-		converted = strings.ReplaceAll(converted, replacement.mysql, replacement.pg)
-	}
-
-	return converted
+	return strings.Trim(convertMySQLDateFormatToPG(mysqlFormat), "'")
 }
 
 // convertGeneratedFunctionsToPostgres 将生成列中的MySQL函数转换为PostgreSQL表达式
