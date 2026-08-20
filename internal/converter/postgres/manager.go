@@ -1680,13 +1680,23 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 
 		semaphore <- struct{}{}
 
-		pgDDLs, err := ConvertUserDDL(user)
+		// 目标库名来自配置，schema 由连接参数 search_path 解析（P1-08）
+		privilegeCtx := PrivilegeContext{
+			Database: m.config.PostgreSQL.Database,
+			Schema:   mpp.ParseSearchPath(m.postgresConn.GetPgConnectionParams()),
+		}
+		pgDDLs, warns, err := ConvertUserDDL(user, privilegeCtx)
 		if err != nil {
 			errMsg := fmt.Sprintf("转换用户 %s 失败: %v", user.Name, err)
 			m.logError(errMsg)
 			<-semaphore
 			m.updateProgress()
 			return err
+		}
+
+		// 汇入权限转换警告（无法映射的权限等，P1-20）
+		for _, w := range warns {
+			m.RecordConversionWarning("用户权限", user.Name, w)
 		}
 
 		// 执行每个DDL语句
