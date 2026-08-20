@@ -29,8 +29,9 @@ var (
 	reCurrentTimestampExtract = regexp.MustCompile(`current_timestamp\((\d+)\)`)
 
 	// 类型映射相关正则
-	reTinyInt1       = regexp.MustCompile(`(?i)\btinyint\(1\)\b`)
-	reJsonLength     = regexp.MustCompile(`(?i)\bjson\((\d+)\)\b`)
+	// tinyint(1) 是 MySQL 的布尔惯例；结尾不能带 \b（`)` 后跟非单词字符时无单词边界，
+	// 模式将永不匹配，P2-03 修复前的旧模式即因此失效）
+	reTinyInt1       = regexp.MustCompile(`(?i)\btinyint\(1\)`)
 	reJsonWithLength = regexp.MustCompile(`(?i)json\(\d+\)`)
 
 	// 无符号类型提升相关正则：MySQL 无符号整数需提升为能容纳完整无符号范围的 PG 类型
@@ -144,19 +145,6 @@ var typeMappingOrder = []string{
 	"geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection",
 	// 特殊类型
 	"enum", "set",
-}
-
-// 定义需要保留精度的类型模式
-var typePatterns = map[string]*regexp.Regexp{
-	"decimal":   regexp.MustCompile(`(?i)\bdecimal\((\d+)(?:,(\d+))?\)\b`),
-	"numeric":   regexp.MustCompile(`(?i)\bnumeric\((\d+)(?:,(\d+))?\)\b`),
-	"datetime":  regexp.MustCompile(`(?i)\bdatetime\((\d+)\)\b`),
-	"timestamp": regexp.MustCompile(`(?i)\btimestamp\((\d+)\)\b`),
-	"char":      regexp.MustCompile(`(?i)\bchar\((\d+)\)\b`),
-	"varchar":   regexp.MustCompile(`(?i)\bvarchar\((\d+)\)\b`),
-	"double":    regexp.MustCompile(`(?i)\bdouble\((\d+)(?:,(\d+))?\)\b`),
-	"float":     regexp.MustCompile(`(?i)\bfloat\((\d+)(?:,(\d+))?\)\b`),
-	"time":      regexp.MustCompile(`(?i)\btime\((\d+)\)\b`),
 }
 
 // 类型映射表
@@ -940,64 +928,6 @@ func cleanTableLevelSettings(columnsDefinition string) string {
 	return columnsDefinition
 }
 
-// convertDataType 将MySQL数据类型转换为PostgreSQL数据类型
-func convertDataType(mysqlType string) (postgresType string, isAutoIncrement bool, err error) {
-	postgresType = mysqlType
-	isAutoIncrement = false
-
-	if strings.Contains(strings.ToLower(mysqlType), "auto_increment") {
-		isAutoIncrement = true
-		mysqlType = strings.ReplaceAll(strings.ToLower(mysqlType), "auto_increment", "")
-		mysqlType = strings.TrimSpace(mysqlType)
-	}
-
-	if reTinyInt1.MatchString(mysqlType) {
-		postgresType = "BOOLEAN"
-		return postgresType, isAutoIncrement, nil
-	}
-
-	if reJsonLength.MatchString(mysqlType) {
-		postgresType = "JSON"
-		return postgresType, isAutoIncrement, nil
-	}
-
-	mysqlType = reTypeMb3Direct.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reTypeMb3Any.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reTypeMb3Generic.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reMb3Suffix.ReplaceAllString(mysqlType, "")
-
-	mysqlType = reCharsetFull.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reCharsetSimple.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reCollate.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reComplexCharset.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reComplexCharsetSpecific.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reComplexCharsetVarchar.ReplaceAllString(mysqlType, "$1")
-
-	mysqlType = reMb4Suffix.ReplaceAllString(mysqlType, "$1")
-	mysqlType = strings.TrimSpace(mysqlType)
-
-	for _, mysqlTypeKey := range typeMappingOrder {
-		if strings.Contains(strings.ToLower(mysqlType), strings.ToLower(mysqlTypeKey)) {
-			if pattern, exists := typePatterns[strings.ToLower(mysqlTypeKey)]; exists && pattern.MatchString(mysqlType) {
-				postgresType = mysqlType
-			} else {
-				postgresType = typeMap[mysqlTypeKey]
-			}
-			break
-		}
-	}
-
-	if isAutoIncrement {
-		if postgresType == "BIGINT" {
-			postgresType = "BIGSERIAL"
-		} else {
-			postgresType = "SERIAL"
-		}
-	}
-
-	return postgresType, isAutoIncrement, nil
-}
-
 // promoteUnsignedTypes 将 MySQL 无符号整数类型提升为能容纳完整无符号范围的等价类型，
 // 替换结果仍走标准类型映射链（bigint -> BIGINT、numeric(20,0) -> NUMERIC(20,0) 等）
 // bigint unsigned（0~18446744073709551615）超出 BIGINT 上限，提升为 numeric(20,0)
@@ -1353,51 +1283,10 @@ func cleanTypeDefinition(typeDefinition string) string {
 			continue
 		}
 
-		if pattern, ok := typePatterns[mysqlType]; ok {
-			lowerTypeDef = pattern.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
-				match := pattern.FindStringSubmatch(m)
-				if len(match) >= 2 {
-					switch mysqlType {
-					case "decimal", "numeric":
-						if len(match) == 3 && match[2] != "" {
-							return fmt.Sprintf("%s(%s,%s)", strings.ToUpper(mysqlType), match[1], match[2])
-						}
-						return fmt.Sprintf("%s(%s)", strings.ToUpper(mysqlType), match[1])
-					case "datetime":
-						return fmt.Sprintf("TIMESTAMP(%s)", match[1])
-					case "timestamp":
-						return fmt.Sprintf("TIMESTAMPTZ(%s)", match[1])
-					case "time":
-						return fmt.Sprintf("TIME(%s)", match[1])
-					case "char":
-						return fmt.Sprintf("CHAR(%s)", match[1])
-					case "varchar":
-						return fmt.Sprintf("VARCHAR(%s)", match[1])
-					case "double":
-						if len(match) == 3 && match[2] != "" {
-							return fmt.Sprintf("DOUBLE PRECISION(%s,%s)", match[1], match[2])
-						}
-						return fmt.Sprintf("DOUBLE PRECISION(%s)", match[1])
-					case "float":
-						if len(match) == 3 && match[2] != "" {
-							return fmt.Sprintf("REAL(%s,%s)", match[1], match[2])
-						}
-						return fmt.Sprintf("REAL(%s)", match[1])
-					default:
-						return pgType
-					}
-				}
-				return pgType
-			})
-		}
-
-		// 使用预编译的正则进行替换
+		// 基本类型关键字替换只替换类型名本身，括号内的精度参数原样保留，
+		// 由 typeMappingOrder 后的兜底正则清理残留（如 double(10,2) 的 (10,2)）
 		if re, ok := basicTypeRegexes[mysqlType]; ok {
 			lowerTypeDef = re.ReplaceAllString(lowerTypeDef, pgType)
-		}
-
-		if mysqlType == "json" {
-			lowerTypeDef = reJsonLength.ReplaceAllString(lowerTypeDef, "JSON")
 		}
 	}
 
@@ -1457,7 +1346,9 @@ func cleanTypeDefinition(typeDefinition string) string {
 
 // ConvertTableDDL 转换MySQL表DDL到PostgreSQL
 func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumns ...string) (*ConvertTableDDLResult, error) {
-	mysqlDDL = strings.ReplaceAll(mysqlDDL, "`", "\"")
+	// P2-04：仅转换字符串字面量之外的反引号标识符，
+	// 字面量内的反引号（如 COMMENT 'a`b'、enum('x`y')）原样保留
+	mysqlDDL = replaceBackticksOutsideLiterals(mysqlDDL)
 
 	columnNamesMap := make(map[string]string)
 	columnCommentsMap := make(map[string]string)

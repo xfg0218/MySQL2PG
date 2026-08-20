@@ -36,6 +36,8 @@ conversion:
     users: true       # 转换用户
     table_privileges: true # 转换用户在表上的权限
     lowercase_columns: true     # 控制表字段是否需要转小写，true为转小写（默认值），false保持与MySQL字段一致
+                                # 注意：视图 DDL 中的标识符（含视图名）始终整体转小写，
+                                # 与本选项无关，字符串字面量内容不受影响（P2-13 约定）
     skip_existing_tables: true  # 如果表在PostgreSQL中已存在，true 为跳过，false 为创建
     validate_data: true         # 同步数据后验证数据一致性
     truncate_before_sync: false  # 同步前是否清空表数据

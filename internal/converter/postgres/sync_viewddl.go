@@ -862,6 +862,10 @@ func ConvertViewDDL(viewName string, viewDefinition string) (string, error) {
 }
 
 // lowerSQLPreservingSingleQuotedLiterals 将 SQL 在单引号字面量外转为小写。
+//
+// 约定（P2-13）：视图管道产出的 DDL 中，单引号字面量以外的所有文本
+// （含 SQL 关键字、双引号标识符、视图名）统一转为小写，与 lowercase_columns
+// 配置无关。依赖混合大小写标识符的视图需人工复核。
 func lowerSQLPreservingSingleQuotedLiterals(sql string) string {
 	if sql == "" {
 		return ""

@@ -40,7 +40,7 @@ Start
  │
  ├─▶ [Step 2] Convert table structures (tableddl: true)
  │     ├─ Intelligent field type mapping (e.g., tinyint(1) → BOOLEAN)
- │     ├─ lowercase_columns/lowercase_tables controls field/table name casing
+ │     ├─ lowercase_columns controls field name casing
  │     ├─ Extract primary key columns for MPP distribution key
  │     ├─ If MPP enabled (conversion.mpp.enabled=true):
  │     │   └─ Add DISTRIBUTED BY (pk_col1, pk_col2, ...) clause
@@ -48,7 +48,9 @@ Start
  │
  ├─▶ [Step 3] Convert views (views: true)
  │     ├─ If exclude_use_view_list=true → Filter out views in exclude_view_list
- │     └─ Convert MySQL view definitions to PostgreSQL compatible syntax
+ │     ├─ Convert MySQL view definitions to PostgreSQL compatible syntax
+ │     └─ Note: identifiers in view definitions (including the view name) are
+ │        always lowercased; string literal content is preserved (P2-13 convention)
  │
  ├─▶ [Step 4] Sync data (data: true)
  │     ├─ If truncate_before_sync=true → Truncate target tables

@@ -49,7 +49,9 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │
  ├─▶ [Step 3] 转换视图 (view: true)
  │     ├─ 若 exclude_use_view_list=true → 跳过 exclude_view_list 中的视图
- │     └─ MySQL 视图定义转换为 PostgreSQL 兼容语法
+ │     ├─ MySQL 视图定义转换为 PostgreSQL 兼容语法
+ │     └─ 注意：视图定义中的标识符（含视图名）统一转为小写，
+ │        字符串字面量内容不受影响（P2-13 约定）
  │
  ├─▶ [Step 4] 同步数据 (data: true)
  │     ├─ 若 truncate_before_sync=true → 清空目标表
