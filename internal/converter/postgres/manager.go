@@ -235,12 +235,16 @@ func (m *Manager) Run() error {
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n2. 同步表数据...")
 			}
+			// P1-07：按配置开启一致性快照，保证源库并发写入时读到一致数据
+			m.beginSnapshotIfEnabled()
 			// 记录数据同步开始时间
 			startTime := time.Now()
 			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
 			if err := m.syncTableData(filteredTables, semaphore); err != nil {
+				m.mysqlConn.EndConsistentSnapshot()
 				return err
 			}
+			m.mysqlConn.EndConsistentSnapshot()
 			// 记录数据同步结束时间并添加到转换统计中
 			endTime := time.Now()
 			m.conversionStats = append(m.conversionStats, ConversionStageStat{
@@ -484,6 +488,20 @@ func (m *Manager) getCurrentStage(baseStage int) int {
 	return baseStage + len(m.conversionStats)
 }
 
+// beginSnapshotIfEnabled 按配置开启 MySQL 一致性快照（P1-07）
+// 开启后数据阶段的所有读取基于同一快照，源库并发写入不会导致漏行/行数漂移；
+// 开启失败仅告警并回退普通读取，不阻断迁移
+func (m *Manager) beginSnapshotIfEnabled() {
+	if !m.config.MySQL.ConsistentSnapshot {
+		return
+	}
+	if err := m.mysqlConn.BeginConsistentSnapshot(m.context()); err != nil {
+		m.logError(fmt.Sprintf("开启一致性快照失败，回退为普通读取: %v", err))
+		return
+	}
+	m.Log("已开启一致性快照（consistent_snapshot=true），数据读取不受源库并发写入影响")
+}
+
 // drainErrors 非阻塞地排空错误通道并聚合全部错误（P1-16）
 // 修复此前容量 1 通道 + select/default 丢弃导致每阶段只保留第一个错误的问题
 func drainErrors(errorChan chan error) error {
@@ -645,6 +663,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				fmt.Printf("│  🚀 Stage %d/%d: 同步表数据 (%d tables)                        │\n", m.getCurrentStage(2), m.getStageCount(), len(filteredTables))
 				fmt.Println("└─────────────────────────────────────────────────────────────────┘")
 			}
+			// P1-07：按配置开启一致性快照，保证源库并发写入时读到一致数据
+			m.beginSnapshotIfEnabled()
 			// 记录开始时间
 			startTime := time.Now()
 			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
@@ -664,6 +684,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				}(batch)
 			}
 			wg.Wait() // 等待表数据同步完成
+			m.mysqlConn.EndConsistentSnapshot()
 			// 记录结束时间和对象数量
 			m.conversionStats = append(m.conversionStats, ConversionStageStat{
 				StageName:   "同步表数据",

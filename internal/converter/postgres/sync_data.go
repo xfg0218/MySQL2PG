@@ -37,6 +37,9 @@ const (
 	progressUpdateInterval = 500 * time.Millisecond
 	ansiClearLine          = "\033[2K"
 	ansiCarriageReturn     = "\r"
+	// streamRowLimit 无主键表采用流式读取的行数上限（P1-06）：
+	// go-sql-driver 在客户端缓冲整个结果集，超过该阈值的表回退 OFFSET 分页以控制内存
+	streamRowLimit = 2000000
 )
 
 // progressUpdate 无锁进度更新类型
@@ -323,6 +326,25 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 		log("表 %s 有复合主键 %v，将使用基于复合主键的分页（行构造函数）", table.Name, primaryKeys)
 	}
 
+	// P1-06：无主键表的读取策略
+	// 中小表采用流式读取（单次查询 + 迭代分批插入），消除 OFFSET 分页的 O(n²) 扫描；
+	// 大表仍用 OFFSET 分页（go-sql-driver 会缓冲整个结果集，流式读取受内存限制）
+	var useStreaming bool
+	var streamRows *sql.Rows
+	defer func() {
+		if streamRows != nil {
+			streamRows.Close()
+		}
+	}()
+	if !useKeyPagination {
+		if totalRows > 0 && totalRows <= streamRowLimit {
+			useStreaming = true
+			log("表 %s 无主键（%d 行），采用流式读取", table.Name, totalRows)
+		} else {
+			log("警告: 表 %s 无主键且行数较大（%d 行），采用 OFFSET 分页（复杂度 O(n²)，建议源表添加主键）", table.Name, totalRows)
+		}
+	}
+
 	// 同步数据
 	var processedRows int64
 
@@ -347,7 +369,18 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 		var err error
 
 		// 使用分页查询方法
-		if useCompositeKeyPagination {
+		if useStreaming {
+			// 流式读取：首次迭代发起单次全表查询，后续迭代复用同一 rows 迭代器
+			if streamRows == nil {
+				streamRows, err = mysqlConn.QueryTableRows(batchCtx, table.Name, columns)
+				if err != nil {
+					errMsg := fmt.Sprintf("流式获取表 %s 数据失败: %v", table.Name, err)
+					logError(errMsg)
+					return 0, fmt.Errorf("同步表 %s 失败: %w", table.Name, err)
+				}
+			}
+			rows = streamRows
+		} else if useCompositeKeyPagination {
 			rows, err = mysqlConn.GetTableDataWithCompositeKeyPagination(batchCtx, table.Name, columns, compositePrimaryKeys, compositeLastValues, int(batchSize))
 		} else if useKeyPagination {
 			rows, err = mysqlConn.GetTableDataWithPagination(batchCtx, table.Name, columns, primaryKey, lastValue, int(batchSize))
@@ -375,7 +408,10 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 		} else {
 			currentBatchSize, lastValue, err = postgresConn.BatchInsertDataWithTransactionAndGetLastValue(batchCtx, tx, table.Name, columns, columnTypes, batchInsertSize, primaryKey, config.Conversion.Options.LowercaseColumns, rows)
 		}
-		rows.Close()
+		// 流式读取的 rows 需跨批次复用，由 defer 统一关闭
+		if !useStreaming {
+			rows.Close()
+		}
 
 		if err != nil {
 			errMsg := fmt.Sprintf("插入表 %s 数据失败: %v", table.Name, err)
