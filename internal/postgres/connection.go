@@ -746,19 +746,29 @@ func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 // 返回 (false, nil) 表示目标列未关联序列（如既有表非 SERIAL 建表），调用方应告警并继续。
 func (c *Connection) SyncAutoIncrementSequence(tableName, columnName string, nextValueLowerBound int64) (bool, error) {
 	ctx := c.context()
-	tbl := pgQuoteIdentifier(tableName)
-	col := pgQuoteIdentifier(columnName)
-	query := fmt.Sprintf(
-		`SELECT setval(pg_get_serial_sequence('%s', '%s'), GREATEST(COALESCE((SELECT MAX(%s) FROM %s), 0) + 1, %d), false)`,
-		strings.ReplaceAll(tbl, "'", "''"),
-		strings.ReplaceAll(col, "'", "''"),
-		col, tbl, nextValueLowerBound)
+	query := buildSequenceBackfillQuery(tableName, columnName, nextValueLowerBound)
 
 	var next *int64
 	if err := c.pool.QueryRow(ctx, query).Scan(&next); err != nil {
 		return false, fmt.Errorf("回填表 %s 列 %s 序列失败：%w", tableName, columnName, err)
 	}
 	return next != nil, nil
+}
+
+// buildSequenceBackfillQuery 构造序列回填 SQL。
+// 注意 pg_get_serial_sequence(table, column) 两个文本参数的差异：
+// 表名参数 PG 按标识符规则解析（可带双引号），列名参数直接与
+// pg_attribute.attname 精确比较、不解析双引号——必须传裸列名，
+// 否则 PG 查找字面含引号的列名报 42703（column ""id"" does not exist）。
+// MAX()/FROM 位置仍使用双引号标识符以兼容特殊字符与大小写敏感列名。
+func buildSequenceBackfillQuery(tableName, columnName string, nextValueLowerBound int64) string {
+	tbl := pgQuoteIdentifier(tableName)
+	col := pgQuoteIdentifier(columnName)
+	return fmt.Sprintf(
+		`SELECT setval(pg_get_serial_sequence('%s', '%s'), GREATEST(COALESCE((SELECT MAX(%s) FROM %s), 0) + 1, %d), false)`,
+		strings.ReplaceAll(tbl, "'", "''"),
+		strings.ReplaceAll(columnName, "'", "''"),
+		col, tbl, nextValueLowerBound)
 }
 
 // pgQuoteIdentifier 用双引号包裹 PostgreSQL 标识符，并转义其中的双引号
