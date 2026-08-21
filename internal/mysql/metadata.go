@@ -758,7 +758,8 @@ func (c *Connection) GetUsers() ([]UserInfo, error) {
 		user != 'mysql.pfs_admin' AND user != 'mysql.pfs_admin_role' AND
 		user != 'mysql.pfs_role_admin' AND user != 'mysql.pfs_role_admin_role' AND
 		user != 'mysql.pfs_role_admin_role_role' AND
-		user != 'mysql.pfs_role_admin_role_role_role' AND user != 'mysql.pfsadmin'
+		user != 'mysql.pfs_role_admin_role_role_role' AND user != 'mysql.pfsadmin' AND
+		user != 'mysql.debian-sys-maint'
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("获取用户列表失败: %w", err)
