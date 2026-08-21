@@ -39,7 +39,7 @@ Start
  │     └─ If use_table_list=true → Only fetch tables in table_list
  │
  ├─▶ [Step 2] Convert table structures (tableddl: true)
- │     ├─ Intelligent field type mapping (e.g., tinyint(1) → BOOLEAN)
+ │     ├─ Intelligent field type mapping (e.g., tinyint(1) → SMALLINT, or BOOLEAN via tinyint1_as_boolean)
  │     ├─ lowercase_columns controls field name casing
  │     ├─ Extract primary key columns for MPP distribution key
  │     ├─ If MPP enabled (conversion.mpp.enabled=true):
@@ -332,7 +332,7 @@ Supports conversion of 40+ MySQL field types to PostgreSQL compatible types, wit
 | int, int(11), integer, etc.  | INTEGER            | All int variants to INTEGER                             |
 | mediumint, mediumint(9)      | INTEGER            | mediumint to INTEGER                                    |
 | smallint, smallint(6), etc.  | SMALLINT           | All smallint variants to SMALLINT                       |
-| tinyint(1)                   | BOOLEAN            | tinyint(1) to BOOLEAN                                   |
+| tinyint(1)                   | SMALLINT (default) / BOOLEAN | Default SMALLINT keeps integer semantics (views/functions using `col = 1` stay valid); set `tinyint1_as_boolean: true` for BOOLEAN |
 | tinyint, tinyint(4), etc.    | SMALLINT           | Other tinyint variants to SMALLINT                      |
 | decimal, numeric             | DECIMAL            | decimal kept as DECIMAL, preserving precision           |
 | double, double precision     | DOUBLE PRECISION   | double to DOUBLE PRECISION                              |

@@ -431,7 +431,9 @@ func (a *Assessor) assessObjects() {
 		if tableDDL, err := a.mysqlConn.GetTableDDL(a.context(), table.Name); err == nil {
 			ddl = tableDDL
 			// 尝试使用现有转换函数进行转换，评估兼容性
-			result, err := postgres.ConvertTableDDL(ddl, a.config.Conversion.Options.LowercaseColumns)
+			result, err := postgres.ConvertTableDDL(ddl, a.config.Conversion.Options.LowercaseColumns, postgres.ConvertTableDDLOptions{
+				TinyInt1AsBoolean: a.config.Conversion.Options.TinyInt1AsBoolean,
+			})
 			if err != nil {
 				// 转换失败，记录为高风险
 				table.Risks = append(table.Risks, Risk{

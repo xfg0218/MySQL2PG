@@ -1331,7 +1331,10 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 			distByCols = extractPrimaryKeyColumnsFromDDL(table.DDL)
 		}
 
-		pgResult, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns, distByCols...)
+		pgResult, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns, ConvertTableDDLOptions{
+			TinyInt1AsBoolean:    m.config.Conversion.Options.TinyInt1AsBoolean,
+			DistributedByColumns: distByCols,
+		})
 		if err != nil {
 			// 记录转换失败的 MySQL 表的部分转换结果
 			m.Log("转换表 %s，MySQL DDL: %s", table.Name, table.DDL)

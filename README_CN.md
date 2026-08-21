@@ -40,7 +40,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │     └─ 若 use_table_list=true → 仅获取 table_list 中的表
  │
  ├─▶ [Step 2] 转换表结构 (tableddl: true)
- │     ├─ 字段类型智能映射（如 tinyint(1) → BOOLEAN）
+ │     ├─ 字段类型智能映射（如 tinyint(1) → SMALLINT，可选 tinyint1_as_boolean 转 BOOLEAN）
  │     ├─ lowercase_columns 控制字段名大小写
  │     ├─ 提取主键列作为 MPP 分布键
  │     ├─ 若启用 MPP（conversion.mpp.enabled=true）:
@@ -293,7 +293,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 | int, int(11), int(4), int(2), int(5), int(10), int(20), int(255), int(32), int(8), int(60), int(3), int(25), int(22), integer | INTEGER | 所有int变体统一转换为INTEGER |
 | mediumint, mediumint(9) | INTEGER | mediumint转换为INTEGER |
 | smallint, smallint(6), smallint(1), smallinteger | SMALLINT | 所有smallint变体统一转换为SMALLINT |
-| tinyint(1) | BOOLEAN | tinyint(1)转换为BOOLEAN（布尔值） |
+| tinyint(1) | SMALLINT（默认）/ BOOLEAN | 默认转 SMALLINT 保留整数语义（视图/函数中 `col = 1` 等用法保持有效）；设置 `tinyint1_as_boolean: true` 转 BOOLEAN |
 | tinyint, tinyint(4), tinyint(255), tinyinteger | SMALLINT | 其他tinyint变体转换为SMALLINT |
 | decimal, decimal(10,0), decimal(10,2), numeric | DECIMAL | decimal保持为DECIMAL，保留精度 |
 | double, double precision | DOUBLE PRECISION | double转换为DOUBLE PRECISION |

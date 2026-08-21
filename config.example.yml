@@ -41,6 +41,9 @@ conversion:
     skip_existing_tables: true  # 如果表在PostgreSQL中已存在，true 为跳过，false 为创建
     validate_data: true         # 同步数据后验证数据一致性
     truncate_before_sync: false  # 同步前是否清空表数据
+    tinyint1_as_boolean: false  # tinyint(1) 映射策略：false（默认）→ SMALLINT，保留整数语义，
+                                # 兼容视图/函数中 `col = 1`、COALESCE(col, 0) 等用法；
+                                # true → BOOLEAN（布尔语义，需确保无布尔列与整数的比较/算术）
     use_table_list: false       # 是否使用指定的表列表进行数据同步，其他步骤不生效
     table_list: [table1]  # 指定要同步的表列表，当use_table_list为true时生效，格式为[table1,table2,...]
     exclude_use_table_list: false   # 是否使用跳过表列表，为true时不同步exclude_table_list中的表

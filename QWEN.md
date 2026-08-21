@@ -389,7 +389,7 @@ Report is a single self-contained HTML file with inline CSS and Google Fonts —
 | `int`, `int(11)`, `integer` | `INTEGER` | All int variants |
 | `mediumint`, `mediumint(9)` | `INTEGER` | |
 | `smallint`, `smallint(6)` | `SMALLINT` | All smallint variants |
-| `tinyint(1)` | `BOOLEAN` | Special case |
+| `tinyint(1)` | `SMALLINT`（默认）/ `BOOLEAN`（`tinyint1_as_boolean: true`） | 默认保留整数语义，兼容视图/函数中 `col = 1` 用法（PG 无 boolean = integer 运算符） |
 | `tinyint`, `tinyint(4)` | `SMALLINT` | Other tinyint variants |
 | `decimal`, `numeric` | `DECIMAL` | Preserves precision |
 | `double`, `double precision` | `DOUBLE PRECISION` | |

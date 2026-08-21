@@ -5,35 +5,50 @@ import (
 	"testing"
 )
 
-// TestCleanTypeDefinition_TinyInt1Boolean P2-03：tinyint(1) → BOOLEAN 映射恢复。
-// 旧正则 \btinyint\(1\)\b 因结尾 \b 在 `)` 后永不匹配，
-// tinyint(1) 静默落入 tinyint → SMALLINT 分支
-func TestCleanTypeDefinition_TinyInt1Boolean(t *testing.T) {
+// TestCleanTypeDefinition_TinyInt1Mapping tinyint(1) 映射策略（P2-03 + 42883 修复）：
+// 默认映射为 SMALLINT 保留整数语义（兼容视图/函数中 `col = 1` 等用法），
+// 显式开启 tinyInt1AsBoolean 时映射为 BOOLEAN。
+// 旧正则 \btinyint\(1\)\b 曾因结尾 \b 永不匹配导致映射静默失效
+func TestCleanTypeDefinition_TinyInt1Mapping(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		wantContain string
-		notContain  []string
+		name              string
+		input             string
+		wantAsBoolean     string // tinyInt1AsBoolean=true 时应包含
+		wantDefault       string // 默认（false）时应包含
+		notContainDefault []string
 	}{
-		{"tinyint(1) 转 BOOLEAN", "tinyint(1)", "BOOLEAN", []string{"SMALLINT"}},
-		{"大写 TINYINT(1) 转 BOOLEAN", "TINYINT(1) NOT NULL DEFAULT 1", "BOOLEAN", []string{"SMALLINT"}},
-		{"tinyint(1) unsigned 转 BOOLEAN", "tinyint(1) unsigned", "BOOLEAN", []string{"SMALLINT"}},
-		{"tinyint(4) 仍为 SMALLINT", "tinyint(4)", "SMALLINT", []string{"BOOLEAN"}},
-		{"tinyint(10) 仍为 SMALLINT", "tinyint(10)", "SMALLINT", []string{"BOOLEAN"}},
-		{"tinyint 无显示宽度仍为 SMALLINT", "tinyint", "SMALLINT", []string{"BOOLEAN"}},
+		{"tinyint(1)", "tinyint(1)", "BOOLEAN", "SMALLINT", []string{"BOOLEAN"}},
+		{"大写 TINYINT(1) 带修饰", "TINYINT(1) NOT NULL DEFAULT 1", "BOOLEAN", "SMALLINT", []string{"BOOLEAN"}},
+		{"tinyint(1) unsigned", "tinyint(1) unsigned", "BOOLEAN", "SMALLINT", []string{"BOOLEAN"}},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := cleanTypeDefinition(tt.input)
-			if !strings.Contains(got, tt.wantContain) {
-				t.Errorf("cleanTypeDefinition(%q) = %q，不含 %s", tt.input, got, tt.wantContain)
+		t.Run(tt.name+"（默认 SMALLINT）", func(t *testing.T) {
+			got := cleanTypeDefinition(tt.input, false)
+			if !strings.Contains(got, tt.wantDefault) {
+				t.Errorf("cleanTypeDefinition(%q, false) = %q，不含 %s", tt.input, got, tt.wantDefault)
 			}
-			for _, nc := range tt.notContain {
+			for _, nc := range tt.notContainDefault {
 				if strings.Contains(got, nc) {
-					t.Errorf("cleanTypeDefinition(%q) = %q，不应包含 %s", tt.input, got, nc)
+					t.Errorf("cleanTypeDefinition(%q, false) = %q，不应包含 %s", tt.input, got, nc)
 				}
 			}
 		})
+		t.Run(tt.name+"（开启 BOOLEAN）", func(t *testing.T) {
+			got := cleanTypeDefinition(tt.input, true)
+			if !strings.Contains(got, tt.wantAsBoolean) {
+				t.Errorf("cleanTypeDefinition(%q, true) = %q，不含 %s", tt.input, got, tt.wantAsBoolean)
+			}
+		})
+	}
+
+	// 其他 tinyint 变宽不受开关影响
+	for _, input := range []string{"tinyint(4)", "tinyint(10)", "tinyint"} {
+		for _, asBoolean := range []bool{false, true} {
+			got := cleanTypeDefinition(input, asBoolean)
+			if !strings.Contains(got, "SMALLINT") || strings.Contains(got, "BOOLEAN") {
+				t.Errorf("cleanTypeDefinition(%q, %v) = %q，应为 SMALLINT", input, asBoolean, got)
+			}
+		}
 	}
 }
 
@@ -58,11 +73,42 @@ func TestCleanTypeDefinition_PrecisionPreserved(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := cleanTypeDefinition(tt.input)
+			got := cleanTypeDefinition(tt.input, false)
 			if !strings.Contains(got, tt.want) {
 				t.Errorf("cleanTypeDefinition(%q) = %q，不含 %s", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestConvertTableDDL_TinyInt1Option tinyint(1) 映射开关的端到端行为：
+// 默认 SMALLINT（兼容视图/函数中 `col = 1` 的整数比较），开启后 BOOLEAN
+func TestConvertTableDDL_TinyInt1Option(t *testing.T) {
+	mysqlDDL := "CREATE TABLE `t_bool` (\n" +
+		"  `id` bigint NOT NULL,\n" +
+		"  `is_active` tinyint(1) DEFAULT 1,\n" +
+		"  PRIMARY KEY (`id`)\n" +
+		") ENGINE=InnoDB"
+
+	// 默认：SMALLINT，视图/函数中的 is_active = 1 保持整数比较语义
+	result, err := ConvertTableDDL(mysqlDDL, true)
+	if err != nil {
+		t.Fatalf("ConvertTableDDL 返回错误：%v", err)
+	}
+	if !strings.Contains(result.DDL, `"is_active" SMALLINT`) {
+		t.Errorf("默认应将 tinyint(1) 转为 SMALLINT：%s", result.DDL)
+	}
+	if strings.Contains(result.DDL, "BOOLEAN") {
+		t.Errorf("默认不应出现 BOOLEAN：%s", result.DDL)
+	}
+
+	// 显式开启：BOOLEAN
+	result, err = ConvertTableDDL(mysqlDDL, true, ConvertTableDDLOptions{TinyInt1AsBoolean: true})
+	if err != nil {
+		t.Fatalf("ConvertTableDDL 返回错误：%v", err)
+	}
+	if !strings.Contains(result.DDL, `"is_active" BOOLEAN`) {
+		t.Errorf("开启选项后应转为 BOOLEAN：%s", result.DDL)
 	}
 }
 

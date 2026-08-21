@@ -1314,8 +1314,9 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 	return
 }
 
-// cleanTypeDefinition 清理和规范化类型定义
-func cleanTypeDefinition(typeDefinition string) string {
+// cleanTypeDefinition 清理和规范化类型定义。
+// tinyInt1AsBoolean 控制 tinyint(1) 的映射目标（见 ConvertTableDDLOptions）
+func cleanTypeDefinition(typeDefinition string, tinyInt1AsBoolean bool) string {
 	if strings.Contains(strings.ToLower(typeDefinition), "generated always as") {
 		typeDefinition = reCharsetPrefix.ReplaceAllString(typeDefinition, "$1")
 		typeDefinition = convertGeneratedFunctionsToPostgres(typeDefinition)
@@ -1392,7 +1393,13 @@ func cleanTypeDefinition(typeDefinition string) string {
 		}
 
 		if mysqlType == "tinyint(1)" {
-			lowerTypeDef = reTinyInt1.ReplaceAllString(lowerTypeDef, pgType)
+			// 默认（false）：跳过 BOOLEAN 替换，tinyint(1) 由后续 tinyint 条目
+			// 映射为 SMALLINT，保留整数语义，兼容视图/函数中 `col = 1` 等整数
+			// 比较（PG 无 boolean = integer 运算符，会报 42883）；
+			// 仅当显式开启 tinyint1_as_boolean 时替换为 BOOLEAN
+			if tinyInt1AsBoolean {
+				lowerTypeDef = reTinyInt1.ReplaceAllString(lowerTypeDef, pgType)
+			}
 			continue
 		}
 
@@ -1460,8 +1467,24 @@ func cleanTypeDefinition(typeDefinition string) string {
 	return lowerTypeDef
 }
 
+// ConvertTableDDLOptions ConvertTableDDL 的可选行为参数（变参传入，全部可省略）
+type ConvertTableDDLOptions struct {
+	// TinyInt1AsBoolean 为 true 时 tinyint(1) 映射为 BOOLEAN；
+	// 默认 false 映射为 SMALLINT（保留整数语义，兼容视图/函数中
+	// `col = 1`、`COALESCE(col, 0)` 等用法，避免 PG 报 42883）
+	TinyInt1AsBoolean bool
+	// DistributedByColumns MPP 分布键列
+	DistributedByColumns []string
+}
+
 // ConvertTableDDL 转换MySQL表DDL到PostgreSQL
-func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumns ...string) (*ConvertTableDDLResult, error) {
+func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, opts ...ConvertTableDDLOptions) (*ConvertTableDDLResult, error) {
+	var opt ConvertTableDDLOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	distributedByColumns := opt.DistributedByColumns
+
 	// P2-04：仅转换字符串字面量之外的反引号标识符，
 	// 字面量内的反引号（如 COMMENT 'a`b'、enum('x`y')）原样保留
 	mysqlDDL = replaceBackticksOutsideLiterals(mysqlDDL)
@@ -1670,7 +1693,7 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 			}
 		}
 
-		typeDefinition = cleanTypeDefinition(typeDefinition)
+		typeDefinition = cleanTypeDefinition(typeDefinition, opt.TinyInt1AsBoolean)
 		if shouldFallbackGeneratedToPlainColumn(typeDefinition) {
 			typeDefinition = stripGeneratedClause(typeDefinition)
 		}
