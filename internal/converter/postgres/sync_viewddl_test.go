@@ -3,6 +3,9 @@ package postgres
 import (
 	"strings"
 	"testing"
+
+	"github.com/yourusername/mysql2pg/internal/config"
+	"github.com/yourusername/mysql2pg/internal/mysql"
 )
 
 func TestConvertViewDDL_MapsJSONUnquoteAndExtract(t *testing.T) {
@@ -887,5 +890,461 @@ FROM test_table`
 		if strings.Contains(lowerDDL, nw) {
 			t.Errorf("输出中仍包含 MySQL 类型 %q：%s", nw, ddl)
 		}
+	}
+}
+
+// TestConvertViewDDL_TailLiteralProtection 视图管道后段词替换不破坏字面量（P1-13）
+func TestConvertViewDDL_TailLiteralProtection(t *testing.T) {
+	tests := []struct {
+		name     string
+		viewSQL  string
+		contains []string // 字面量内容必须原样保留
+		rejects  []string // 不应出现（字面量被误替换的痕迹）
+	}{
+		{
+			name:     "字面量内的 database() 不被替换",
+			viewSQL:  "SELECT 'database() info' AS note, database() AS db FROM t1",
+			contains: []string{"'database() info'"},
+		},
+		{
+			name:     "字面量内的 year( 不被替换",
+			viewSQL:  "SELECT 'year(x) example' AS note, year(d) AS y FROM t1",
+			contains: []string{"'year(x) example'", "extract(year from"},
+		},
+		{
+			name:     "字面量内的 user 不被替换",
+			viewSQL:  "SELECT 'user: admin' AS note, user() AS u FROM t1",
+			contains: []string{"'user: admin'", "current_user"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ddl, err := ConvertViewDDL("v_tail_literal", tt.viewSQL)
+			if err != nil {
+				t.Fatalf("ConvertViewDDL 返回错误：%v", err)
+			}
+			lower := strings.ToLower(ddl)
+			for _, want := range tt.contains {
+				if !strings.Contains(lower, strings.ToLower(want)) {
+					t.Errorf("缺少 %q，实际：%s", want, ddl)
+				}
+			}
+			for _, bad := range tt.rejects {
+				if strings.Contains(lower, strings.ToLower(bad)) {
+					t.Errorf("不应包含 %q，实际：%s", bad, ddl)
+				}
+			}
+		})
+	}
+}
+
+// TestConvertMySQLDateFormatUnified 统一日期格式转换器的说明符覆盖（P1-12）
+func TestConvertMySQLDateFormatUnified(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"基础日期", "'%Y-%m-%d'", "'YYYY-MM-DD'"},
+		{"完整时间", "'%Y-%m-%d %H:%i:%s'", "'YYYY-MM-DD HH24:MI:SS'"},
+		{"12小时制", "'%r'", "'HH12:MI:SS AM'"},
+		{"24小时制", "'%T'", "'HH24:MI:SS'"},
+		{"微秒", "'%f'", "'US'"},
+		{"字面百分号", "'100%%'", "'100%'"},
+		{"星期与月份名", "'%W %M'", "'Day Month'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := convertMySQLDateFormatToPG(tt.in); got != tt.want {
+				t.Errorf("convertMySQLDateFormatToPG(%s) = %s, want %s", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFunctionHandlerConversion DECLARE HANDLER 转换（P1-14）
+func TestFunctionHandlerConversion(t *testing.T) {
+	t.Run("NOT FOUND handler 被移除（语义由 FETCH 转换覆盖）", func(t *testing.T) {
+		out, err := ConvertFunctionDDL(mysql.FunctionInfo{
+			Name: "f_cursor",
+			DDL: "CREATE FUNCTION f_cursor() RETURNS INT DETERMINISTIC BEGIN " +
+				"DECLARE done INT DEFAULT 0; " +
+				"DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1; " +
+				"RETURN 1; END",
+		})
+		if err != nil {
+			t.Fatalf("ConvertFunctionDDL 返回错误：%v", err)
+		}
+		if strings.Contains(out, "HANDLER FOR") {
+			t.Errorf("NOT FOUND handler 应被移除，实际：%s", out)
+		}
+	})
+
+	t.Run("SQLEXCEPTION handler 以注释保留", func(t *testing.T) {
+		out, err := ConvertFunctionDDL(mysql.FunctionInfo{
+			Name: "f_err",
+			DDL: "CREATE FUNCTION f_err() RETURNS INT DETERMINISTIC BEGIN " +
+				"DECLARE EXIT HANDLER FOR SQLEXCEPTION RETURN -1; " +
+				"RETURN 1; END",
+		})
+		if err != nil {
+			t.Fatalf("ConvertFunctionDDL 返回错误：%v", err)
+		}
+		if !strings.Contains(out, "/* [mysql2pg] MySQL HANDLER 无法自动转换") {
+			t.Errorf("SQLEXCEPTION handler 应以注释保留，实际：%s", out)
+		}
+	})
+
+	// P2-16 回归：多行 BEGIN 块 handler 必须整体被注释，
+	// 块内剩余语句不得泄漏进函数体（旧非贪婪匹配只吞到第一个分号）
+	t.Run("多行 BEGIN 块 handler 不泄漏", func(t *testing.T) {
+		out, err := ConvertFunctionDDL(mysql.FunctionInfo{
+			Name: "f_block",
+			DDL: "CREATE FUNCTION f_block() RETURNS INT DETERMINISTIC BEGIN " +
+				"DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RETURN -1; END; " +
+				"RETURN 1; END",
+		})
+		if err != nil {
+			t.Fatalf("ConvertFunctionDDL 返回错误：%v", err)
+		}
+		if !strings.Contains(out, "/* [mysql2pg] MySQL HANDLER 无法自动转换") {
+			t.Errorf("多行 handler 应以块注释保留，实际：%s", out)
+		}
+		// 块注释必须以 */ 闭合，且块尾的孤立 END 不得泄漏
+		if !strings.Contains(out, "*/") {
+			t.Errorf("块注释未闭合，实际：%s", out)
+		}
+		if strings.Count(out, "RETURN -1") != 1 || !strings.Contains(out, "/* [mysql2pg]") {
+			t.Errorf("handler 块内容位置异常，实际：%s", out)
+		}
+	})
+
+	// P2-16：SIGNAL SQLSTATE 转 RAISE EXCEPTION
+	t.Run("SIGNAL 转 RAISE EXCEPTION", func(t *testing.T) {
+		out, err := ConvertFunctionDDL(mysql.FunctionInfo{
+			Name: "f_signal",
+			DDL: "CREATE FUNCTION f_signal(v INT) RETURNS INT DETERMINISTIC BEGIN " +
+				"IF v < 0 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'v 不能为负'; END IF; " +
+				"RETURN v; END",
+		})
+		if err != nil {
+			t.Fatalf("ConvertFunctionDDL 返回错误：%v", err)
+		}
+		if strings.Contains(out, "SIGNAL") {
+			t.Errorf("SIGNAL 应被转换，实际：%s", out)
+		}
+		if !strings.Contains(out, "RAISE EXCEPTION USING ERRCODE = '45000', MESSAGE = 'v 不能为负';") {
+			t.Errorf("缺少 RAISE EXCEPTION 转换结果，实际：%s", out)
+		}
+	})
+
+	// P2-16：无 MESSAGE_TEXT 的 SIGNAL 与 RESIGNAL
+	t.Run("SIGNAL 无 MESSAGE 与 RESIGNAL", func(t *testing.T) {
+		out, err := ConvertFunctionDDL(mysql.FunctionInfo{
+			Name: "f_signal2",
+			DDL: "CREATE FUNCTION f_signal2(v INT) RETURNS INT DETERMINISTIC BEGIN " +
+				"IF v < 0 THEN SIGNAL SQLSTATE '45001'; END IF; " +
+				"RETURN v; END",
+		})
+		if err != nil {
+			t.Fatalf("ConvertFunctionDDL 返回错误：%v", err)
+		}
+		if !strings.Contains(out, "RAISE EXCEPTION USING ERRCODE = '45001';") {
+			t.Errorf("缺少无 MESSAGE 的 RAISE 转换，实际：%s", out)
+		}
+	})
+}
+
+func TestShouldSkipView_WithSet(t *testing.T) {
+	excludeSet := config.StringSet{
+		"view1":          {},
+		"complex_report": {},
+		"temp_stats":     {},
+	}
+
+	tests := []struct {
+		name     string
+		viewName string
+		set      config.StringSet
+		want     bool
+	}{
+		{"精确匹配", "view1", excludeSet, true},
+		{"大小写不敏感", "VIEW1", excludeSet, true},
+		{"混合大小写", "Complex_Report", excludeSet, true},
+		{"不匹配", "view2", excludeSet, false},
+		{"nil 集合", "view1", nil, false},
+		{"空集合", "view1", config.StringSet{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldSkipView(tt.viewName, tt.set); got != tt.want {
+				t.Errorf("shouldSkipView(%q) = %v, want %v", tt.viewName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldSkipFunction_WithSet(t *testing.T) {
+	excludeSet := config.StringSet{
+		"calc_total":    {},
+		"get_user_info": {},
+	}
+
+	tests := []struct {
+		name     string
+		funcName string
+		set      config.StringSet
+		want     bool
+	}{
+		{"精确匹配", "calc_total", excludeSet, true},
+		{"大小写不敏感", "CALC_TOTAL", excludeSet, true},
+		{"混合大小写", "Get_User_Info", excludeSet, true},
+		{"不匹配", "other_func", excludeSet, false},
+		{"nil 集合", "calc_total", nil, false},
+		{"空集合", "calc_total", config.StringSet{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldSkipFunction(tt.funcName, tt.set); got != tt.want {
+				t.Errorf("shouldSkipFunction(%q) = %v, want %v", tt.funcName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldSkipView_Performance(t *testing.T) {
+	largeSet := make(config.StringSet, 1000)
+	for i := 0; i < 1000; i++ {
+		largeSet[string(rune(i))] = struct{}{}
+	}
+
+	for i := 0; i < 10000; i++ {
+		_ = shouldSkipView(string(rune(i%1000)), largeSet)
+	}
+
+	t.Log("Large set lookup test completed successfully")
+}
+
+func TestShouldSkipFunction_Performance(t *testing.T) {
+	largeSet := make(config.StringSet, 1000)
+	for i := 0; i < 1000; i++ {
+		largeSet[string(rune(i))] = struct{}{}
+	}
+
+	for i := 0; i < 10000; i++ {
+		_ = shouldSkipFunction(string(rune(i%1000)), largeSet)
+	}
+
+	t.Log("Large set lookup test completed successfully")
+}
+
+// TestCompressWhitespaceOutsideLiterals 空白压缩必须保留字面量内的连续空白
+func TestCompressWhitespaceOutsideLiterals(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "代码区空白压缩，字面量内保留",
+			in:   "SELECT  a   FROM t WHERE b = 'x    y'",
+			want: "SELECT a FROM t WHERE b = 'x    y'",
+		},
+		{
+			name: "反引号标识符内空白保留",
+			in:   "SELECT  `col  name`   FROM t",
+			want: "SELECT `col  name` FROM t",
+		},
+		{
+			name: "双引号字面量内空白保留",
+			in:   `SELECT  "a   b"  FROM t`,
+			want: `SELECT "a   b" FROM t`,
+		},
+		{
+			name: "段间单个空格分隔保留",
+			in:   "SELECT 'x'   ,   'y'",
+			want: "SELECT 'x' , 'y'",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := compressWhitespaceOutsideLiterals(tt.in); got != tt.want {
+				t.Errorf("compressWhitespaceOutsideLiterals(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReplaceBackticksOutsideLiterals 反引号替换不得触碰字面量内部
+func TestReplaceBackticksOutsideLiterals(t *testing.T) {
+	in := "SELECT `col` FROM `t1` WHERE note = 'a`b'"
+	got := replaceBackticksOutsideLiterals(in)
+	want := `SELECT "col" FROM "t1" WHERE note = 'a` + "`" + `b'`
+	if got != want {
+		t.Errorf("replaceBackticksOutsideLiterals(%q) = %q, want %q", in, got, want)
+	}
+}
+
+// TestFindKeywordOutsideLiterals 关键字查找忽略字面量内部
+func TestFindKeywordOutsideLiterals(t *testing.T) {
+	sql := "SELECT 'call ifnull(a,b)' , ifnull(x, 1) FROM t"
+	// 字面量内的 ifnull 不算，应定位到字面量之外的 ifnull
+	pos := findKeywordOutsideLiterals(sql, "ifnull", 0)
+	if pos == -1 {
+		t.Fatal("应找到字面量之外的 ifnull")
+	}
+	if !strings.HasPrefix(sql[pos:], "ifnull(x") {
+		t.Errorf("定位错误：pos=%d, 上下文=%q", pos, sql[pos:])
+	}
+
+	// 仅存在于字面量内时返回 -1
+	sql2 := "SELECT 'ifnull(a,b)' FROM t"
+	if pos := findKeywordOutsideLiterals(sql2, "ifnull", 0); pos != -1 {
+		t.Errorf("字面量内的 ifnull 不应被找到, pos=%d", pos)
+	}
+}
+
+// TestFindMatchingParenQuoteAware 括号匹配必须跳过字符串内的括号
+func TestFindMatchingParenQuoteAware(t *testing.T) {
+	input := `f(a, ')((', b)`
+	idx := strings.Index(input, "(")
+	end := findMatchingParen(input, idx)
+	if end != len(input)-1 {
+		t.Errorf("findMatchingParen(%q) = %d, want %d", input, end, len(input)-1)
+	}
+
+	input2 := `f(a, "x)y", b)`
+	idx2 := strings.Index(input2, "(")
+	end2 := findMatchingParen(input2, idx2)
+	if end2 != len(input2)-1 {
+		t.Errorf("findMatchingParen(%q) = %d, want %d", input2, end2, len(input2)-1)
+	}
+
+	// 反斜杠转义的引号不结束字符串
+	input3 := `f('a\'(b')`
+	idx3 := strings.Index(input3, "(")
+	end3 := findMatchingParen(input3, idx3)
+	if end3 != len(input3)-1 {
+		t.Errorf("findMatchingParen(%q) = %d, want %d", input3, end3, len(input3)-1)
+	}
+}
+
+// TestConvertViewDDL_LiteralProtection 视图转换不得破坏字符串字面量内容
+func TestConvertViewDDL_LiteralProtection(t *testing.T) {
+	tests := []struct {
+		name     string
+		viewSQL  string
+		contains []string // 结果必须包含
+		rejects  []string // 结果不得包含
+	}{
+		{
+			name:     "字面量内的 IFNULL 不被替换，外层正常替换",
+			viewSQL:  "SELECT IFNULL(name, 'IFNULL(a,b)') AS n FROM t1",
+			contains: []string{`coalesce(name, 'IFNULL(a,b)')`},
+		},
+		{
+			name:     "字面量内连续空白保留",
+			viewSQL:  "SELECT 'a    b' AS s FROM t1",
+			contains: []string{`'a    b'`},
+			rejects:  []string{`'a b'`},
+		},
+		{
+			name:     "字面量内的 to_days 不被转换，外层正常转换",
+			viewSQL:  "SELECT to_days(dt) AS d, 'to_days(x)' AS s FROM t1",
+			contains: []string{`'to_days(x)'`, "extract(epoch"},
+		},
+		{
+			name:     "字面量含括号不破坏 concat 参数切分",
+			viewSQL:  "SELECT concat(name, ' (a) ') AS c FROM t1",
+			contains: []string{`' (a) '`, "||"},
+		},
+		{
+			name:     "字面量内的反引号保留",
+			viewSQL:  "SELECT 'a`b' AS s FROM `t1`",
+			contains: []string{"'a`b'", `"t1"`},
+		},
+		{
+			name:     "反斜杠转义引号的字面量保持完整",
+			viewSQL:  "SELECT 'it\\'s IFNULL(' AS s FROM t1",
+			contains: []string{`'it\'s IFNULL('`},
+		},
+		{
+			name:     "字面量内的 ISNULL 不被替换",
+			viewSQL:  "SELECT ISNULL(x) AS a, 'ISNULL(y)' AS b FROM t1",
+			contains: []string{`'ISNULL(y)'`, `is null`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ddl, err := ConvertViewDDL("v_literal_protect", tt.viewSQL)
+			if err != nil {
+				t.Fatalf("ConvertViewDDL 返回错误：%v", err)
+			}
+			for _, want := range tt.contains {
+				if !strings.Contains(ddl, want) {
+					t.Errorf("转换结果缺少 %q，实际：%s", want, ddl)
+				}
+			}
+			for _, bad := range tt.rejects {
+				if strings.Contains(ddl, bad) {
+					t.Errorf("转换结果不应包含 %q，实际：%s", bad, ddl)
+				}
+			}
+		})
+	}
+}
+
+// TestConvertFunctionDDL_LiteralProtection 函数体转换不得破坏字符串字面量内容
+func TestConvertFunctionDDL_LiteralProtection(t *testing.T) {
+	tests := []struct {
+		name     string
+		ddl      string
+		contains []string
+	}{
+		{
+			name:     "函数体字面量内的 IFNULL 不被替换",
+			ddl:      "CREATE FUNCTION f_lit_ifnull(a INT) RETURNS VARCHAR(50) DETERMINISTIC BEGIN RETURN IFNULL(a, 'IFNULL(x,y)'); END",
+			contains: []string{`'IFNULL(x,y)'`, "COALESCE("},
+		},
+		{
+			name:     "字面量内的 unsigned 字样不被剥离",
+			ddl:      "CREATE FUNCTION f_lit_unsigned() RETURNS VARCHAR(20) DETERMINISTIC BEGIN DECLARE v VARCHAR(20) DEFAULT 'unsigned'; RETURN v; END",
+			contains: []string{`'unsigned'`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := ConvertFunctionDDL(mysql.FunctionInfo{Name: "lit_test", DDL: tt.ddl})
+			if err != nil {
+				t.Fatalf("ConvertFunctionDDL 返回错误：%v", err)
+			}
+			for _, want := range tt.contains {
+				if !strings.Contains(out, want) {
+					t.Errorf("转换结果缺少 %q，实际：%s", want, out)
+				}
+			}
+		})
+	}
+}
+
+// TestLiteralMaskRoundTrip 遮蔽/恢复往返一致性
+func TestLiteralMaskRoundTrip(t *testing.T) {
+	sql := "SELECT ifnull(a, 'x(y)') , 'it\\'s' , \"dq\" FROM `t` WHERE b = 'multi  space'"
+	mask := newLiteralMask()
+	masked := mask.mask(sql)
+	// 遮蔽后不应再有引号包裹的字面量（反引号标识符不在遮蔽范围）
+	if strings.Contains(masked, "'x(y)'") || strings.Contains(masked, "'multi  space'") {
+		t.Fatalf("遮蔽失败：%s", masked)
+	}
+	// 占位符必须能穿过小写化与空白压缩
+	masked = strings.ToLower(masked)
+	if got := mask.unmask(masked); !strings.HasPrefix(got, "select ifnull(a, 'x(y)'") {
+		t.Errorf("往返恢复失败：%s", got)
 	}
 }

@@ -236,13 +236,13 @@ func TestCreateFunctionSQL_FeaturesCoverage(t *testing.T) {
 		"JSON_UNQUOTE+JSON_EXTRACT": "func_102_case_157_extract_bizid",
 		"DATE_FORMAT":               "func_103_case_158_period_key",
 		"LENGTH+BLOB":               "func_104_case_159_attachment_size",
-		"DECIMAL 高精度":             "func_105_case_160_numeric_score",
-		"AVG 聚合":                   "func_107_case_daily_order_avg_price",
+		"DECIMAL 高精度":               "func_105_case_160_numeric_score",
+		"AVG 聚合":                    "func_107_case_daily_order_avg_price",
 		"STR_TO_DATE":               "func_108_case_daily_payload_event_time",
-		"ELSEIF 链":                 "func_110_case_daily_numeric_risk_tag",
-		"done=1 兼容":               "fn_case_compat_memberratio",
-		"WHILE 循环":                 "fn_case_compat_unspecial",
-		"REPLACE 函数":               "fn_case_compat_unspecial",
+		"ELSEIF 链":                  "func_110_case_daily_numeric_risk_tag",
+		"done=1 兼容":                 "fn_case_compat_memberratio",
+		"WHILE 循环":                  "fn_case_compat_unspecial",
+		"REPLACE 函数":                "fn_case_compat_unspecial",
 	}
 
 	for feature, funcName := range features {
@@ -533,7 +533,7 @@ func TestCreateFunctionSQL_DateTimeFunctions(t *testing.T) {
 // TestFunctionConverter_processGroupConcat 测试 GROUP_CONCAT 处理
 func TestFunctionConverter_processGroupConcat(t *testing.T) {
 	converter := &FunctionConverter{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -565,7 +565,7 @@ func TestFunctionConverter_processGroupConcat(t *testing.T) {
 			expected: "STRING_AGG",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := converter.processGroupConcat(tt.input)
@@ -579,7 +579,7 @@ func TestFunctionConverter_processGroupConcat(t *testing.T) {
 // TestFunctionConverter_processDateDiff 测试 DATEDIFF 处理
 func TestFunctionConverter_processDateDiff(t *testing.T) {
 	converter := &FunctionConverter{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -606,7 +606,7 @@ func TestFunctionConverter_processDateDiff(t *testing.T) {
 			expected: "-",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := converter.processDateDiff(tt.input)
@@ -620,7 +620,7 @@ func TestFunctionConverter_processDateDiff(t *testing.T) {
 // TestFunctionConverter_processIfFunction 测试 IF 函数处理
 func TestFunctionConverter_processIfFunction(t *testing.T) {
 	converter := &FunctionConverter{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -652,7 +652,7 @@ func TestFunctionConverter_processIfFunction(t *testing.T) {
 			expected: "CASE WHEN",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := converter.processIfFunction(tt.input)
@@ -666,7 +666,7 @@ func TestFunctionConverter_processIfFunction(t *testing.T) {
 // TestFunctionConverter_processIsNull 测试 ISNULL 处理
 func TestFunctionConverter_processIsNull(t *testing.T) {
 	converter := &FunctionConverter{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -688,7 +688,7 @@ func TestFunctionConverter_processIsNull(t *testing.T) {
 			expected: "IS NULL",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := converter.processIsNull(tt.input)
@@ -702,7 +702,7 @@ func TestFunctionConverter_processIsNull(t *testing.T) {
 // TestFunctionConverter_handleUserVariables 测试用户变量处理
 func TestFunctionConverter_handleUserVariables(t *testing.T) {
 	converter := &FunctionConverter{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -724,7 +724,7 @@ func TestFunctionConverter_handleUserVariables(t *testing.T) {
 			expected: ":=",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter.body = tt.input
@@ -818,19 +818,19 @@ func TestFunctionConverter_parseCharacteristics(t *testing.T) {
 			wantComment: "test comment",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := NewFunctionConverter(mysql.FunctionInfo{
 				Name: "f",
 				DDL:  tt.ddl,
 			})
-			
+
 			err := converter.parseCharacteristics()
 			if err != nil {
 				t.Fatalf("parseCharacteristics() error = %v", err)
 			}
-			
+
 			if tt.wantVolatility != "" && converter.volatility != tt.wantVolatility {
 				t.Errorf("volatility = %q, want %q", converter.volatility, tt.wantVolatility)
 			}
@@ -867,14 +867,14 @@ func TestFunctionConverter_extractBody(t *testing.T) {
 			wantErr: false,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := NewFunctionConverter(mysql.FunctionInfo{
 				Name: "f",
 				DDL:  tt.ddl,
 			})
-			
+
 			err := converter.extractBody()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("extractBody() error = %v, wantErr %v", err, tt.wantErr)
@@ -1015,7 +1015,7 @@ func TestFunctionConverter_Convert_Integration(t *testing.T) {
 			wantErr: true,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := ConvertFunctionDDL(tt.funcInfo)
@@ -1039,10 +1039,10 @@ func TestFunctionConverter_Convert_Integration(t *testing.T) {
 // TestFunctionConverter_parseReturnType 测试返回类型解析
 func TestFunctionConverter_parseReturnType(t *testing.T) {
 	tests := []struct {
-		name        string
-		ddl         string
-		wantType    string
-		wantErr     bool
+		name     string
+		ddl      string
+		wantType string
+		wantErr  bool
 	}{
 		{
 			name:     "simple_int",
@@ -1119,13 +1119,13 @@ func TestFunctionConverter_parseReturnType(t *testing.T) {
 		{
 			name:     "tinyint_boolean",
 			ddl:      "CREATE FUNCTION f() RETURNS TINYINT(1) BEGIN RETURN 1; END",
-			wantType: "INTEGER",  // TINYINT 统一转换为 INTEGER
+			wantType: "INTEGER", // TINYINT 统一转换为 INTEGER
 			wantErr:  false,
 		},
 		{
 			name:     "tinyint_not_boolean",
 			ddl:      "CREATE FUNCTION f() RETURNS TINYINT(4) BEGIN RETURN 1; END",
-			wantType: "INTEGER",  // TINYINT 统一转换为 INTEGER
+			wantType: "INTEGER", // TINYINT 统一转换为 INTEGER
 			wantErr:  false,
 		},
 		{
@@ -1135,9 +1135,9 @@ func TestFunctionConverter_parseReturnType(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "missing_returns",
-			ddl:      "CREATE FUNCTION f() BEGIN RETURN 1; END",
-			wantErr:  true,
+			name:    "missing_returns",
+			ddl:     "CREATE FUNCTION f() BEGIN RETURN 1; END",
+			wantErr: true,
 		},
 		{
 			name:     "with_character_set",
@@ -1164,14 +1164,14 @@ func TestFunctionConverter_parseReturnType(t *testing.T) {
 			wantErr:  false,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := NewFunctionConverter(mysql.FunctionInfo{
 				Name: "f",
 				DDL:  tt.ddl,
 			})
-			
+
 			err := converter.parseReturnType()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseReturnType() error = %v, wantErr %v", err, tt.wantErr)
@@ -1208,7 +1208,7 @@ func TestHelperFunctions(t *testing.T) {
 			}
 		}
 	})
-	
+
 	t.Run("isIdentifierByte", func(t *testing.T) {
 		tests := []struct {
 			input byte
@@ -1230,7 +1230,7 @@ func TestHelperFunctions(t *testing.T) {
 			}
 		}
 	})
-	
+
 	t.Run("hasKeywordAt", func(t *testing.T) {
 		tests := []struct {
 			input   string
@@ -1255,7 +1255,7 @@ func TestHelperFunctions(t *testing.T) {
 			}
 		}
 	})
-	
+
 	t.Run("findReturnTypeEnd", func(t *testing.T) {
 		tests := []struct {
 			name    string
@@ -1267,37 +1267,37 @@ func TestHelperFunctions(t *testing.T) {
 				name:    "simple_int",
 				ddl:     "RETURNS INT BEGIN",
 				start:   8,
-				wantEnd: 12,  // INT 后面一个字符
+				wantEnd: 12, // INT 后面一个字符
 			},
 			{
 				name:    "varchar_with_precision",
 				ddl:     "RETURNS VARCHAR(255) BEGIN",
 				start:   8,
-				wantEnd: 21,  // VARCHAR(255) 后面一个字符
+				wantEnd: 21, // VARCHAR(255) 后面一个字符
 			},
 			{
 				name:    "with_deterministic",
 				ddl:     "RETURNS INT DETERMINISTIC BEGIN",
 				start:   8,
-				wantEnd: 12,  // 遇到 DETERMINISTIC 停止
+				wantEnd: 12, // 遇到 DETERMINISTIC 停止
 			},
 			{
 				name:    "with_reads_sql_data",
 				ddl:     "RETURNS INT READS SQL DATA BEGIN",
 				start:   8,
-				wantEnd: 12,  // 遇到 READS SQL DATA 停止
+				wantEnd: 12, // 遇到 READS SQL DATA 停止
 			},
 			{
 				name:    "with_not_deterministic",
 				ddl:     "RETURNS INT NOT DETERMINISTIC BEGIN",
 				start:   8,
-				wantEnd: 12,  // 遇到 NOT DETERMINISTIC 停止
+				wantEnd: 12, // 遇到 NOT DETERMINISTIC 停止
 			},
 			{
 				name:    "with_comment",
 				ddl:     "RETURNS INT COMMENT 'test' BEGIN",
 				start:   8,
-				wantEnd: 12,  // 遇到 COMMENT 停止
+				wantEnd: 12, // 遇到 COMMENT 停止
 			},
 		}
 		for _, tt := range tests {
@@ -1308,14 +1308,14 @@ func TestHelperFunctions(t *testing.T) {
 			})
 		}
 	})
-	
+
 	t.Run("splitArgsWithContext", func(t *testing.T) {
 		tests := []struct {
 			input string
 			want  []string
 		}{
 			{"a, b, c", []string{"a", "b", "c"}},
-			{"'a, b', c", []string{"'a, b'", "c"}}, // 引号内的逗号不分割
+			{"'a, b', c", []string{"'a, b'", "c"}},             // 引号内的逗号不分割
 			{"CONCAT(a, b), c", []string{"CONCAT(a, b)", "c"}}, // 括号内的逗号不分割
 			{"", []string{""}},
 			{"a", []string{"a"}},
@@ -1328,7 +1328,7 @@ func TestHelperFunctions(t *testing.T) {
 			}
 		}
 	})
-	
+
 	t.Run("normalizeMySQLEscapedQuoteLiteral", func(t *testing.T) {
 		tests := []struct {
 			input string
@@ -1343,14 +1343,14 @@ func TestHelperFunctions(t *testing.T) {
 			}
 		}
 	})
-	
+
 	t.Run("removeMySQLHashComments", func(t *testing.T) {
 		tests := []struct {
 			input string
 			want  string
 		}{
 			{"SELECT 1 # comment", "SELECT 1"},
-			{"SELECT 1 -- comment", "SELECT 1 -- comment"}, // 不处理 -- 注释
+			{"SELECT 1 -- comment", "SELECT 1 -- comment"},                 // 不处理 -- 注释
 			{"SELECT 'test # not comment'", "SELECT 'test # not comment'"}, // 引号内的 # 不移除
 			{"SELECT 1", "SELECT 1"},
 		}
@@ -1360,7 +1360,7 @@ func TestHelperFunctions(t *testing.T) {
 			}
 		}
 	})
-	
+
 	t.Run("normalizeEndLoopLabelTails", func(t *testing.T) {
 		tests := []struct {
 			input string
@@ -1383,11 +1383,11 @@ func TestHelperFunctions(t *testing.T) {
 // TestFunctionConverter_processDateDiff_Comprehensive 测试 DATEDIFF 处理的全面场景
 func TestFunctionConverter_processDateDiff_Comprehensive(t *testing.T) {
 	converter := &FunctionConverter{}
-	
+
 	tests := []struct {
-		name     string
-		input    string
-		expected string
+		name        string
+		input       string
+		expected    string
 		notExpected string
 	}{
 		{
@@ -1436,7 +1436,7 @@ func TestFunctionConverter_processDateDiff_Comprehensive(t *testing.T) {
 			expected: "SELECT 1",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := converter.processDateDiff(tt.input)
@@ -1455,7 +1455,7 @@ func TestFunctionConverter_processDateDiff_Comprehensive(t *testing.T) {
 // TestFunctionConverter_fixSyntax 测试语法修复功能
 func TestFunctionConverter_fixSyntax(t *testing.T) {
 	converter := &FunctionConverter{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -1512,7 +1512,7 @@ func TestFunctionConverter_fixSyntax(t *testing.T) {
 			expected: "CONTINUE",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter.body = tt.input
@@ -1574,7 +1574,7 @@ func Test_fixLoopSyntax(t *testing.T) {
 			expected: "WHILE done = FALSE LOOP\nSELECT 1;\nEND LOOP;",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := fixLoopSyntax(tt.input)
@@ -1590,7 +1590,7 @@ func Test_fixLoopSyntax(t *testing.T) {
 // TestFunctionConverter_convertBuiltinFunctions 测试内置函数转换
 func TestFunctionConverter_convertBuiltinFunctions(t *testing.T) {
 	converter := &FunctionConverter{}
-	
+
 	tests := []struct {
 		name     string
 		input    string
@@ -1746,7 +1746,7 @@ func TestFunctionConverter_convertBuiltinFunctions(t *testing.T) {
 			expected: "NULL",
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter.body = tt.input
@@ -1816,10 +1816,10 @@ func TestFunctionConverter_NoNameBasedPatches(t *testing.T) {
 // TestFunctionConverter_parseParameters 测试参数解析
 func TestFunctionConverter_parseParameters(t *testing.T) {
 	tests := []struct {
-		name        string
-		ddl         string
-		wantParams  string
-		wantErr     bool
+		name       string
+		ddl        string
+		wantParams string
+		wantErr    bool
 	}{
 		{
 			name:       "simple_int_param",
@@ -1876,19 +1876,19 @@ func TestFunctionConverter_parseParameters(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name:       "missing_parenthesis",
-			ddl:        "CREATE FUNCTION f RETURNS INT BEGIN RETURN 1; END",
-			wantErr:    true,
+			name:    "missing_parenthesis",
+			ddl:     "CREATE FUNCTION f RETURNS INT BEGIN RETURN 1; END",
+			wantErr: true,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := NewFunctionConverter(mysql.FunctionInfo{
 				Name: "f",
 				DDL:  tt.ddl,
 			})
-			
+
 			err := converter.parseParameters()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseParameters() error = %v, wantErr %v", err, tt.wantErr)
@@ -1899,4 +1899,427 @@ func TestFunctionConverter_parseParameters(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestConvertFunction_LEAVE_ITERATE 测试 LEAVE 和 ITERATE 转换
+func TestConvertFunction_LEAVE_ITERATE(t *testing.T) {
+	mysqlDDL := `CREATE FUNCTION test_leave_iterate(param INT) RETURNS TEXT
+READS SQL DATA
+BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_result TEXT DEFAULT '';
+    DECLARE cur_test CURSOR FOR SELECT id FROM test_table;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    OPEN cur_test;
+    read_loop: LOOP
+        FETCH cur_test INTO v_result;
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+        IF LENGTH(v_result) > 10 THEN
+            ITERATE read_loop;
+        END IF;
+    END LOOP;
+    CLOSE cur_test;
+
+    RETURN v_result;
+END`
+
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: "test_leave_iterate",
+		DDL:  mysqlDDL,
+	})
+
+	if err != nil {
+		t.Fatalf("转换失败：%v", err)
+	}
+
+	t.Logf("转换结果：%s", result)
+
+	// 检查 LEAVE 转换为 EXIT（不检查标签，因为标签可能被保留）
+	if !strings.Contains(result, "EXIT") {
+		t.Error("LEAVE 未转换为 EXIT")
+	}
+	// 检查是否有 LEAVE 关键字（不区分大小写，但不匹配标签名）
+	leaveRegex := regexp.MustCompile(`(?i)\bLEAVE\s+\w+`)
+	if leaveRegex.MatchString(result) {
+		t.Error("结果中仍包含 LEAVE 关键字")
+	}
+
+	// 检查 ITERATE 转换为 CONTINUE
+	if !strings.Contains(result, "CONTINUE") {
+		t.Error("ITERATE 未转换为 CONTINUE")
+	}
+	// 检查是否有 ITERATE 关键字（不区分大小写，但不匹配标签名）
+	iterateRegex := regexp.MustCompile(`(?i)\bITERATE\s+\w+`)
+	if iterateRegex.MatchString(result) {
+		t.Error("结果中仍包含 ITERATE 关键字")
+	}
+}
+
+// TestConvertFunction_WHILE_DO 测试 WHILE ... DO 转换
+func TestConvertFunction_WHILE_DO(t *testing.T) {
+	mysqlDDL := `CREATE FUNCTION test_while_do(_limit INT) RETURNS INT
+READS SQL DATA
+BEGIN
+    DECLARE v_counter INT DEFAULT 0;
+    DECLARE v_sum INT DEFAULT 0;
+
+    WHILE v_counter < _limit DO
+        SET v_counter = v_counter + 1;
+        SET v_sum = v_sum + v_counter;
+    END WHILE;
+
+    RETURN v_sum;
+END`
+
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: "test_while_do",
+		DDL:  mysqlDDL,
+	})
+
+	if err != nil {
+		t.Fatalf("转换失败：%v", err)
+	}
+
+	t.Logf("转换结果：%s", result)
+
+	// 检查 WHILE ... DO 转换为 WHILE ... LOOP
+	if !strings.Contains(result, "WHILE") || !strings.Contains(result, "LOOP") {
+		t.Error("WHILE ... DO 未转换为 WHILE ... LOOP")
+	}
+	if strings.Contains(strings.ToUpper(result), "END WHILE") {
+		t.Error("结果中仍包含 END WHILE")
+	}
+}
+
+// TestConvertFunction_ReturnTypes 测试返回类型转换
+func TestConvertFunction_ReturnTypes(t *testing.T) {
+	testCases := []struct {
+		name         string
+		mysqlType    string
+		expectedType string
+	}{
+		{"DOUBLE", "DOUBLE", "DOUBLE PRECISION"},
+		{"DOUBLE(10,2)", "DOUBLE(10,2)", "DOUBLE PRECISION"},
+		{"INT(11)", "INT(11)", "INTEGER"},
+		{"INT UNSIGNED", "INT UNSIGNED", "INTEGER"},
+		{"DECIMAL(65,30)", "DECIMAL(65,30)", "DECIMAL(65,30)"},
+		{"VARCHAR(255)", "VARCHAR(255)", "VARCHAR(255)"},
+		{"DATETIME(6)", "DATETIME(6)", "TIMESTAMP(6)"},
+		{"TINYINT(1)", "TINYINT(1)", "INTEGER"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mysqlDDL := "CREATE FUNCTION test_type() RETURNS " + tc.mysqlType + " READS SQL DATA BEGIN RETURN 1; END"
+
+			result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+				Name: "test_type",
+				DDL:  mysqlDDL,
+			})
+
+			if err != nil {
+				t.Fatalf("转换失败：%v", err)
+			}
+
+			t.Logf("转换结果：%s", result)
+
+			if !strings.Contains(result, "RETURNS "+tc.expectedType) {
+				t.Errorf("期望返回类型包含 %s，但得到：%s", tc.expectedType, result)
+			}
+		})
+	}
+}
+
+// TestConvertFunction_READS_SQL_DATA 测试 READS SQL DATA 移除
+func TestConvertFunction_READS_SQL_DATA(t *testing.T) {
+	mysqlDDL := `CREATE FUNCTION test_reads_sql_data(id INT) RETURNS TEXT
+READS SQL DATA
+BEGIN
+    DECLARE v_result TEXT;
+    SELECT name INTO v_result FROM test_table WHERE id = id;
+    RETURN v_result;
+END`
+
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: "test_reads_sql_data",
+		DDL:  mysqlDDL,
+	})
+
+	if err != nil {
+		t.Fatalf("转换失败：%v", err)
+	}
+
+	t.Logf("转换结果：%s", result)
+
+	// 检查 READS SQL DATA 已被移除
+	if strings.Contains(strings.ToUpper(result), "READS SQL DATA") {
+		t.Error("READS SQL DATA 未被移除")
+	}
+}
+
+// TestConvertFunction_DETERMINISTIC 测试 DETERMINISTIC 转换
+func TestConvertFunction_DETERMINISTIC(t *testing.T) {
+	mysqlDDL := `CREATE FUNCTION test_deterministic(x INT) RETURNS INT
+DETERMINISTIC
+BEGIN
+    RETURN x * 2;
+END`
+
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: "test_deterministic",
+		DDL:  mysqlDDL,
+	})
+
+	if err != nil {
+		t.Fatalf("转换失败：%v", err)
+	}
+
+	t.Logf("转换结果：%s", result)
+
+	// 检查 DETERMINISTIC 转换为 IMMUTABLE 或 STABLE
+	resultUpper := strings.ToUpper(result)
+	if !strings.Contains(resultUpper, "IMMUTABLE") && !strings.Contains(resultUpper, "STABLE") {
+		t.Error("DETERMINISTIC 未转换为 IMMUTABLE 或 STABLE")
+	}
+}
+
+// TestFunctionVariableDeclarationOrder 测试变量声明顺序问题
+// 复现错误：func_110_case_daily_numeric_risk_tag 的 DECLARE 语句被错误处理
+func TestFunctionVariableDeclarationOrder(t *testing.T) {
+	mysqlDDL := `CREATE FUNCTION func_110_case_daily_numeric_risk_tag(_id BIGINT UNSIGNED)
+RETURNS VARCHAR(16)
+READS SQL DATA
+BEGIN
+    DECLARE v_dec_high DECIMAL(65,30) DEFAULT 0;
+    DECLARE v_ratio NUMERIC(20,10) DEFAULT 0;
+    SELECT IFNULL(dec_high, 0), IFNULL(ratio, 0)
+      INTO v_dec_high, v_ratio
+    FROM case_160_numeric_boundary
+    WHERE id = _id
+    LIMIT 1;
+    IF v_dec_high >= 1000000000000 OR v_ratio >= 100000 THEN
+        RETURN 'HIGH';
+    ELSEIF v_dec_high >= 1000000 OR v_ratio >= 1000 THEN
+        RETURN 'MEDIUM';
+    END IF;
+    RETURN 'LOW';
+END`
+
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: "func_110_case_daily_numeric_risk_tag",
+		DDL:  mysqlDDL,
+	})
+
+	if err != nil {
+		t.Fatalf("转换失败：%v", err)
+	}
+
+	t.Logf("转换结果:\n%s", result)
+
+	// 检查 DECLARE 块是否正确
+	if !strings.Contains(result, "DECLARE") {
+		t.Error("缺少 DECLARE 块")
+	}
+
+	// 检查变量声明是否在 DECLARE 块中（而不是在 BEGIN 之后）
+	if strings.Contains(result, "BEGIN\nv_ratio") || strings.Contains(result, "BEGIN\nv_dec_high") {
+		t.Error("变量声明错误地出现在 BEGIN 之后，应该在 DECLARE 块中")
+	}
+
+	// 检查是否包含正确的变量声明
+	if !strings.Contains(result, "v_dec_high DECIMAL") && !strings.Contains(result, "v_dec_high NUMERIC") {
+		t.Error("缺少 v_dec_high 变量声明")
+	}
+
+	if !strings.Contains(result, "v_ratio NUMERIC") && !strings.Contains(result, "v_ratio DECIMAL") {
+		t.Error("缺少 v_ratio 变量声明")
+	}
+}
+
+// TestFunctionCursorClose 测试游标 CLOSE 语句处理
+// 复现错误：func_001_complex_analysis 的 CLOSE cur_complex 被错误处理为 cur_complex;
+func TestFunctionCursorClose(t *testing.T) {
+	mysqlDDL := `CREATE FUNCTION func_001_complex_analysis(param_limit INT) RETURNS TEXT
+READS SQL DATA
+BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_result TEXT DEFAULT '';
+    DECLARE v_counter INT DEFAULT 0;
+    DECLARE cur_complex CURSOR FOR
+        SELECT id FROM case_01_integers LIMIT param_limit;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    OPEN cur_complex;
+    read_loop: LOOP
+        FETCH cur_complex INTO v_result;
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+        SET v_counter = v_counter + 1;
+    END LOOP;
+    CLOSE cur_complex;
+
+    RETURN v_result;
+END`
+
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: "func_001_complex_analysis",
+		DDL:  mysqlDDL,
+	})
+
+	if err != nil {
+		t.Fatalf("转换失败：%v", err)
+	}
+
+	t.Logf("转换结果:\n%s", result)
+
+	// 检查是否有正确的 CLOSE 语句
+	if !strings.Contains(result, "CLOSE cur_complex") {
+		t.Error("缺少 CLOSE cur_complex 语句")
+	}
+
+	// 检查是否有错误的孤立游标名称
+	if strings.Contains(result, "END LOOP;\ncur_complex") || strings.Contains(result, "END LOOP; cur_complex") {
+		t.Error("游标名称错误地出现在 END LOOP 之后，应该是 CLOSE 语句")
+	}
+}
+
+// TestFunctionNumericTypeInDeclare 测试 NUMERIC 类型在 DECLARE 中的处理
+func TestFunctionNumericTypeInDeclare(t *testing.T) {
+	mysqlDDL := `CREATE FUNCTION test_numeric_declare(_id BIGINT)
+RETURNS VARCHAR(16)
+READS SQL DATA
+BEGIN
+    DECLARE v_ratio NUMERIC(20,10) DEFAULT 0;
+    SELECT ratio INTO v_ratio FROM test_table WHERE id = _id;
+    RETURN 'LOW';
+END`
+
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: "test_numeric_declare",
+		DDL:  mysqlDDL,
+	})
+
+	if err != nil {
+		t.Fatalf("转换失败：%v", err)
+	}
+
+	t.Logf("转换结果:\n%s", result)
+
+	// 检查 NUMERIC 类型是否被正确保留
+	if !strings.Contains(result, "NUMERIC(20,10)") && !strings.Contains(result, "DECIMAL(20,10)") {
+		t.Error("NUMERIC(20,10) 类型没有被正确转换")
+	}
+}
+
+// TestFunctionConcatWsWithCommaSeparator 测试 CONCAT_WS 在分隔符为逗号时的转换
+func TestFunctionConcatWsWithCommaSeparator(t *testing.T) {
+	mysqlDDL := `CREATE FUNCTION test_concat_ws_cursor(param_limit INT) RETURNS TEXT
+READS SQL DATA
+BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_result TEXT DEFAULT '';
+    DECLARE cur_complex CURSOR FOR
+        SELECT CONCAT_WS(',', t1.id, t1.event_date, t2.id) FROM case_97_partition_range_columns t1
+        LEFT JOIN case_88_year_conversion t2 ON t1.id = t2.id LIMIT param_limit;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    OPEN cur_complex;
+    read_loop: LOOP
+        FETCH cur_complex INTO v_result;
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+    END LOOP;
+    CLOSE cur_complex;
+    RETURN v_result;
+END`
+
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: "test_concat_ws_cursor",
+		DDL:  mysqlDDL,
+	})
+	if err != nil {
+		t.Fatalf("转换失败：%v", err)
+	}
+
+	lowerResult := strings.ToLower(result)
+	if strings.Contains(lowerResult, "concat_ws(") {
+		t.Fatalf("CONCAT_WS 未被转换：%s", result)
+	}
+	if strings.Contains(lowerResult, "array_to_string(array[',") {
+		t.Fatalf("CONCAT_WS 发生参数错位：%s", result)
+	}
+	if !strings.Contains(lowerResult, "array_to_string(array[") {
+		t.Fatalf("缺少 ARRAY_TO_STRING 转换结果：%s", result)
+	}
+}
+
+// 辅助函数：打印转换结果的调试信息
+func debugConversionResult(t *testing.T, name, ddl string) {
+	result, err := ConvertFunctionDDL(mysql.FunctionInfo{
+		Name: name,
+		DDL:  ddl,
+	})
+	if err != nil {
+		t.Logf("转换 %s 失败：%v", name, err)
+		return
+	}
+	t.Logf("=== %s 转换结果 ===", name)
+	t.Logf("%s", result)
+	t.Logf("=== END ===")
+}
+
+func TestDebugFunctionConversion(t *testing.T) {
+	// 从 create_function.sql 中读取实际函数进行测试
+	t.Run("func_110_case_daily_numeric_risk_tag", func(t *testing.T) {
+		mysqlDDL := `CREATE FUNCTION func_110_case_daily_numeric_risk_tag(_id BIGINT UNSIGNED)
+RETURNS VARCHAR(16)
+READS SQL DATA
+BEGIN
+    DECLARE v_dec_high DECIMAL(65,30) DEFAULT 0;
+    DECLARE v_ratio NUMERIC(20,10) DEFAULT 0;
+    SELECT IFNULL(dec_high, 0), IFNULL(ratio, 0)
+      INTO v_dec_high, v_ratio
+    FROM case_160_numeric_boundary
+    WHERE id = _id
+    LIMIT 1;
+    IF v_dec_high >= 1000000000000 OR v_ratio >= 100000 THEN
+        RETURN 'HIGH';
+    ELSEIF v_dec_high >= 1000000 OR v_ratio >= 1000 THEN
+        RETURN 'MEDIUM';
+    END IF;
+    RETURN 'LOW';
+END`
+		debugConversionResult(t, "func_110_case_daily_numeric_risk_tag", mysqlDDL)
+	})
+
+	t.Run("func_001_complex_analysis", func(t *testing.T) {
+		mysqlDDL := `CREATE FUNCTION func_001_complex_analysis(param_limit INT) RETURNS TEXT
+READS SQL DATA
+BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_result TEXT DEFAULT '';
+    DECLARE v_counter INT DEFAULT 0;
+    DECLARE cur_complex CURSOR FOR
+        SELECT id FROM case_01_integers LIMIT param_limit;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    OPEN cur_complex;
+    read_loop: LOOP
+        FETCH cur_complex INTO v_result;
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+        SET v_counter = v_counter + 1;
+    END LOOP;
+    CLOSE cur_complex;
+
+    RETURN v_result;
+END`
+		debugConversionResult(t, "func_001_complex_analysis", mysqlDDL)
+	})
 }
