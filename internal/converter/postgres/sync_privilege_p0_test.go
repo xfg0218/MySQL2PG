@@ -51,7 +51,7 @@ func TestUserPrivilegeRoleNameConsistency(t *testing.T) {
 		User:      "svc.app@%",
 		TableName: "t1",
 		TablePriv: "Select",
-	})
+	}, PrivilegeContext{Database: "targetdb", Schema: "public"})
 	if err != nil {
 		t.Fatalf("ConvertTablePrivilegeDDL 返回错误：%v", err)
 	}
@@ -67,6 +67,53 @@ func TestUserPrivilegeRoleNameConsistency(t *testing.T) {
 	}
 	if strings.Contains(joinedPriv, `"svc.app"`) {
 		t.Errorf("GRANT 不应指向原始用户名 svc.app，实际：%s", joinedPriv)
+	}
+	// P2-09：GRANT 必须指向 schema 限定的表
+	if !strings.Contains(joinedPriv, `ON "public"."t1"`) {
+		t.Errorf("GRANT 应指向 schema 限定的表，实际：%s", joinedPriv)
+	}
+}
+
+// TestSplitGrantObject P2-09：GRANT 对象解析（引号/反引号感知）
+func TestSplitGrantObject(t *testing.T) {
+	tests := []struct {
+		name   string
+		object string
+		want   []string
+	}{
+		{"全局", "*.*", []string{"*", "*"}},
+		{"库级", "test_db.*", []string{"test_db", "*"}},
+		{"反引号表", "`test_db`.`t1`", []string{"test_db", "t1"}},
+		{"库名含点号", "`my.db`.`t1`", []string{"my.db", "t1"}},
+		{"转义反引号", "`a``b`.`t1`", []string{"a`b", "t1"}},
+		{"双引号标识符", `"my.db"."t1"`, []string{"my.db", "t1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := splitGrantObject(tt.object)
+			if err != nil {
+				t.Fatalf("splitGrantObject(%q) 返回错误：%v", tt.object, err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("splitGrantObject(%q) = %v, want %v", tt.object, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("splitGrantObject(%q)[%d] = %q, want %q", tt.object, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestParseGrantStatement_DottedName P2-09：库名/表名含点号时解析不错位
+func TestParseGrantStatement_DottedName(t *testing.T) {
+	parsed, err := parseGrantStatement("GRANT SELECT ON `my.db`.`t1` TO 'u'@'%';")
+	if err != nil {
+		t.Fatalf("parseGrantStatement 返回错误：%v", err)
+	}
+	if parsed.Level != "table" || parsed.Database != "my.db" || parsed.Table != "t1" {
+		t.Errorf("解析结果错误：level=%s database=%s table=%s", parsed.Level, parsed.Database, parsed.Table)
 	}
 }
 

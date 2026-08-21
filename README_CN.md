@@ -40,7 +40,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │     └─ 若 use_table_list=true → 仅获取 table_list 中的表
  │
  ├─▶ [Step 2] 转换表结构 (tableddl: true)
- │     ├─ 字段类型智能映射（如 tinyint(1) → BOOLEAN）
+ │     ├─ 字段类型智能映射（如 tinyint(1) → SMALLINT，可选 tinyint1_as_boolean 转 BOOLEAN）
  │     ├─ lowercase_columns 控制字段名大小写
  │     ├─ 提取主键列作为 MPP 分布键
  │     ├─ 若启用 MPP（conversion.mpp.enabled=true）:
@@ -49,14 +49,17 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │
  ├─▶ [Step 3] 转换视图 (view: true)
  │     ├─ 若 exclude_use_view_list=true → 跳过 exclude_view_list 中的视图
- │     └─ MySQL 视图定义转换为 PostgreSQL 兼容语法
+ │     ├─ MySQL 视图定义转换为 PostgreSQL 兼容语法
+ │     └─ 注意：视图定义中的标识符（含视图名）统一转为小写，
+ │        字符串字面量内容不受影响（P2-13 约定）
  │
  ├─▶ [Step 4] 同步数据 (data: true)
  │     ├─ 若 truncate_before_sync=true → 清空目标表
- │     ├─ 分批读取 MySQL 数据（max_rows_per_batch）
+ │     ├─ 分批读取 MySQL 数据（max_rows_per_batch，宽表按估算行宽自适应下调）
  │     ├─ 批量插入 PostgreSQL（batch_insert_size）
- │     ├─ 并发线程数由 concurrency 控制
- │     └─ 自动禁用外键约束和索引提高性能
+ │     └─ 并发线程数由 concurrency 控制
+ │        （无外键/索引禁用动作：外键尚未迁移——见路线图；
+ │         二级索引在数据同步之后创建）
  │
  ├─▶ [Step 5] 转换索引 (indexes: true)
  │     ├─ 若 MPP 启用（Greenplum）:
@@ -77,7 +80,6 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
  │
  └─▶ [Final Step] 数据校验与完成 (validate_data: true)
        ├─ 查询 MySQL 和 PostgreSQL 表行数
-       ├─ 重新启用之前禁用的外键约束和索引
        ├─ 若 truncate_before_sync=false → 记录不一致表，继续执行
        ├─ 输出转换统计报告和性能指标
        └─ 生成不一致表清单（如有）
@@ -291,7 +293,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 | int, int(11), int(4), int(2), int(5), int(10), int(20), int(255), int(32), int(8), int(60), int(3), int(25), int(22), integer | INTEGER | 所有int变体统一转换为INTEGER |
 | mediumint, mediumint(9) | INTEGER | mediumint转换为INTEGER |
 | smallint, smallint(6), smallint(1), smallinteger | SMALLINT | 所有smallint变体统一转换为SMALLINT |
-| tinyint(1) | BOOLEAN | tinyint(1)转换为BOOLEAN（布尔值） |
+| tinyint(1) | SMALLINT（默认）/ BOOLEAN | 默认转 SMALLINT 保留整数语义（视图/函数中 `col = 1` 等用法保持有效）；设置 `tinyint1_as_boolean: true` 转 BOOLEAN |
 | tinyint, tinyint(4), tinyint(255), tinyinteger | SMALLINT | 其他tinyint变体转换为SMALLINT |
 | decimal, decimal(10,0), decimal(10,2), numeric | DECIMAL | decimal保持为DECIMAL，保留精度 |
 | double, double precision | DOUBLE PRECISION | double转换为DOUBLE PRECISION |

@@ -36,9 +36,14 @@ conversion:
     users: true       # 转换用户
     table_privileges: true # 转换用户在表上的权限
     lowercase_columns: true     # 控制表字段是否需要转小写，true为转小写（默认值），false保持与MySQL字段一致
+                                # 注意：视图 DDL 中的标识符（含视图名）始终整体转小写，
+                                # 与本选项无关，字符串字面量内容不受影响（P2-13 约定）
     skip_existing_tables: true  # 如果表在PostgreSQL中已存在，true 为跳过，false 为创建
     validate_data: true         # 同步数据后验证数据一致性
     truncate_before_sync: false  # 同步前是否清空表数据
+    tinyint1_as_boolean: false  # tinyint(1) 映射策略：false（默认）→ SMALLINT，保留整数语义，
+                                # 兼容视图/函数中 `col = 1`、COALESCE(col, 0) 等用法；
+                                # true → BOOLEAN（布尔语义，需确保无布尔列与整数的比较/算术）
     use_table_list: false       # 是否使用指定的表列表进行数据同步，其他步骤不生效
     table_list: [table1]  # 指定要同步的表列表，当use_table_list为true时生效，格式为[table1,table2,...]
     exclude_use_table_list: false   # 是否使用跳过表列表，为true时不同步exclude_table_list中的表
@@ -61,8 +66,8 @@ conversion:
     max_functions_per_batch: 5  # 一次性转换function的个数限制
     max_indexes_per_batch: 20   # 一次性转换index的个数限制
     max_users_per_batch: 10     # 一次性转换用户的个数限制
-    max_rows_per_batch: 1000    # 一次性同步数据的行数限制
-    batch_insert_size: 1000     # 批量插入的大小
+    max_rows_per_batch: 50000   # 一次性同步数据的行数限制（宽表会按估算行宽自适应下调）
+    batch_insert_size: 50000    # 批量插入的大小（建议与 max_rows_per_batch 保持一致）
 
 # 运行配置
 run:

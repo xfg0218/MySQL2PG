@@ -408,7 +408,7 @@ func TestCleanTypeDefinition_EnumWithCharset(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := cleanTypeDefinition(tt.input)
+			result := cleanTypeDefinition(tt.input, false)
 			if result != tt.expected {
 				t.Errorf("cleanTypeDefinition(%q) = %q, want %q", tt.input, result, tt.expected)
 			}

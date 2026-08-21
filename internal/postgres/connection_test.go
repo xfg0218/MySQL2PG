@@ -3,6 +3,7 @@ package postgres
 import (
 	"database/sql"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -271,5 +272,31 @@ func TestConvertBatchColumnValueBitAndTime(t *testing.T) {
 	// datetime 列不走 TIME 范围检查
 	if got := convertBatchColumnValue("dt", "2024-01-01 10:00:00", columnTypes); got != "2024-01-01 10:00:00" {
 		t.Fatalf("datetime 值期望透传，实际 %v", got)
+	}
+}
+
+// TestBuildSequenceBackfillQuery 序列回填 SQL 构造（issue：column ""id"" does not exist）：
+// pg_get_serial_sequence 的列参数是裸列名（PG 不解析其中双引号），
+// MAX()/FROM 位置则保持双引号标识符
+func TestBuildSequenceBackfillQuery(t *testing.T) {
+	query := buildSequenceBackfillQuery("t1", "id", 100)
+
+	if !strings.Contains(query, `pg_get_serial_sequence('"t1"', 'id')`) {
+		t.Errorf("pg_get_serial_sequence 列参数应为裸列名：%s", query)
+	}
+	if strings.Contains(query, `'''id''`) || strings.Contains(query, `'\"id\"'`) || strings.Contains(query, `'"id"'`) {
+		t.Errorf("pg_get_serial_sequence 列参数不得带双引号：%s", query)
+	}
+	if !strings.Contains(query, `MAX("id") FROM "t1"`) {
+		t.Errorf("MAX/FROM 位置应使用双引号标识符：%s", query)
+	}
+	if !strings.Contains(query, "100") {
+		t.Errorf("缺少序列下限值：%s", query)
+	}
+
+	// 列名含单引号时按字符串字面量规则双写转义
+	query = buildSequenceBackfillQuery("t1", "a'b", 1)
+	if !strings.Contains(query, `'a''b'`) {
+		t.Errorf("列名中的单引号应双写转义：%s", query)
 	}
 }

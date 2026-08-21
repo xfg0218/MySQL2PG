@@ -8,10 +8,17 @@ import (
 	"github.com/yourusername/mysql2pg/internal/mysql"
 )
 
-// ConvertTablePrivilegeDDL 将MySQL表权限转换为PostgreSQL表权限
-func ConvertTablePrivilegeDDL(tablePriv mysql.TablePrivInfo) ([]string, error) {
+// ConvertTablePrivilegeDDL 将MySQL表权限转换为PostgreSQL表权限。
+// ctx 提供目标 schema（P2-09）：GRANT 指向 schema 限定的表，
+// 与 tableLevelGrantDDLs 的 TABLE "schema"."table" 形式一致，
+// 不再依赖执行时的 search_path
+func ConvertTablePrivilegeDDL(tablePriv mysql.TablePrivInfo, ctx PrivilegeContext) ([]string, error) {
 
 	var pgDDLs []string
+
+	if ctx.Schema == "" {
+		ctx.Schema = "public"
+	}
 
 	// 提取用户名（处理带主机和不带主机的情况）
 	var rawUserName string
@@ -29,7 +36,7 @@ func ConvertTablePrivilegeDDL(tablePriv mysql.TablePrivInfo) ([]string, error) {
 	// 保证 GRANT 指向的角色与已创建角色一致（issue-11）
 	userName := normalizePGRoleName(rawUserName)
 	quotedRole := quotePGIdentifier(userName)
-	quotedTable := quotePGIdentifier(tablePriv.TableName)
+	quotedTable := fmt.Sprintf("%s.%s", quotePGIdentifier(ctx.Schema), quotePGIdentifier(tablePriv.TableName))
 
 	// 转换权限（忽略大小写）
 	tablePrivStr := strings.ToUpper(tablePriv.TablePriv)

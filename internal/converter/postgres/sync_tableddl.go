@@ -29,9 +29,14 @@ var (
 	reCurrentTimestampExtract = regexp.MustCompile(`current_timestamp\((\d+)\)`)
 
 	// 类型映射相关正则
-	reTinyInt1       = regexp.MustCompile(`(?i)\btinyint\(1\)\b`)
-	reJsonLength     = regexp.MustCompile(`(?i)\bjson\((\d+)\)\b`)
+	// tinyint(1) 是 MySQL 的布尔惯例；结尾不能带 \b（`)` 后跟非单词字符时无单词边界，
+	// 模式将永不匹配，P2-03 修复前的旧模式即因此失效）
+	reTinyInt1       = regexp.MustCompile(`(?i)\btinyint\(1\)`)
 	reJsonWithLength = regexp.MustCompile(`(?i)json\(\d+\)`)
+	// P2-01：PostgreSQL 不支持的 MySQL 8.0 列属性——INVISIBLE 不可见列与
+	// SRID 空间参照标识——转换时剥离，并由 ConvertTableDDL 记入降级告警
+	reInvisibleAttr = regexp.MustCompile(`(?i)\s+invisible\b`)
+	reSridAttr      = regexp.MustCompile(`(?i)\s+srid\s+\d+`)
 
 	// 无符号类型提升相关正则：MySQL 无符号整数需提升为能容纳完整无符号范围的 PG 类型
 	// bigint unsigned -> NUMERIC(20,0)，int unsigned -> BIGINT，smallint unsigned -> INTEGER
@@ -47,8 +52,6 @@ var (
 	reVarcharMissingParen  = regexp.MustCompile(`(?i)varchar\(\d+`)
 	reExtraParens          = regexp.MustCompile(`([a-zA-Z]+)\((\s*\d+\s*)\)\s*\)`)
 	reVarchar              = regexp.MustCompile(`(?i)varchar\(\d+\)`)
-	reEnum                 = regexp.MustCompile(`(?i)enum\(([^)]+)\)`)
-	reSet                  = regexp.MustCompile(`(?i)set\(([^)]+)\)`)
 	reVarcharEnum          = regexp.MustCompile(`(?i)varchar\(\d+\)\(([^)]+)\)`)
 	reVarcharZero          = regexp.MustCompile(`(?i)varchar\(0\)`)
 	reDoublePrecision      = regexp.MustCompile(`(?i)double precision\(\d+,\d+\)`)
@@ -144,19 +147,6 @@ var typeMappingOrder = []string{
 	"geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection",
 	// 特殊类型
 	"enum", "set",
-}
-
-// 定义需要保留精度的类型模式
-var typePatterns = map[string]*regexp.Regexp{
-	"decimal":   regexp.MustCompile(`(?i)\bdecimal\((\d+)(?:,(\d+))?\)\b`),
-	"numeric":   regexp.MustCompile(`(?i)\bnumeric\((\d+)(?:,(\d+))?\)\b`),
-	"datetime":  regexp.MustCompile(`(?i)\bdatetime\((\d+)\)\b`),
-	"timestamp": regexp.MustCompile(`(?i)\btimestamp\((\d+)\)\b`),
-	"char":      regexp.MustCompile(`(?i)\bchar\((\d+)\)\b`),
-	"varchar":   regexp.MustCompile(`(?i)\bvarchar\((\d+)\)\b`),
-	"double":    regexp.MustCompile(`(?i)\bdouble\((\d+)(?:,(\d+))?\)\b`),
-	"float":     regexp.MustCompile(`(?i)\bfloat\((\d+)(?:,(\d+))?\)\b`),
-	"time":      regexp.MustCompile(`(?i)\btime\((\d+)\)\b`),
 }
 
 // 类型映射表
@@ -940,64 +930,6 @@ func cleanTableLevelSettings(columnsDefinition string) string {
 	return columnsDefinition
 }
 
-// convertDataType 将MySQL数据类型转换为PostgreSQL数据类型
-func convertDataType(mysqlType string) (postgresType string, isAutoIncrement bool, err error) {
-	postgresType = mysqlType
-	isAutoIncrement = false
-
-	if strings.Contains(strings.ToLower(mysqlType), "auto_increment") {
-		isAutoIncrement = true
-		mysqlType = strings.ReplaceAll(strings.ToLower(mysqlType), "auto_increment", "")
-		mysqlType = strings.TrimSpace(mysqlType)
-	}
-
-	if reTinyInt1.MatchString(mysqlType) {
-		postgresType = "BOOLEAN"
-		return postgresType, isAutoIncrement, nil
-	}
-
-	if reJsonLength.MatchString(mysqlType) {
-		postgresType = "JSON"
-		return postgresType, isAutoIncrement, nil
-	}
-
-	mysqlType = reTypeMb3Direct.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reTypeMb3Any.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reTypeMb3Generic.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reMb3Suffix.ReplaceAllString(mysqlType, "")
-
-	mysqlType = reCharsetFull.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reCharsetSimple.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reCollate.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reComplexCharset.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reComplexCharsetSpecific.ReplaceAllString(mysqlType, "$1")
-	mysqlType = reComplexCharsetVarchar.ReplaceAllString(mysqlType, "$1")
-
-	mysqlType = reMb4Suffix.ReplaceAllString(mysqlType, "$1")
-	mysqlType = strings.TrimSpace(mysqlType)
-
-	for _, mysqlTypeKey := range typeMappingOrder {
-		if strings.Contains(strings.ToLower(mysqlType), strings.ToLower(mysqlTypeKey)) {
-			if pattern, exists := typePatterns[strings.ToLower(mysqlTypeKey)]; exists && pattern.MatchString(mysqlType) {
-				postgresType = mysqlType
-			} else {
-				postgresType = typeMap[mysqlTypeKey]
-			}
-			break
-		}
-	}
-
-	if isAutoIncrement {
-		if postgresType == "BIGINT" {
-			postgresType = "BIGSERIAL"
-		} else {
-			postgresType = "SERIAL"
-		}
-	}
-
-	return postgresType, isAutoIncrement, nil
-}
-
 // promoteUnsignedTypes 将 MySQL 无符号整数类型提升为能容纳完整无符号范围的等价类型，
 // 替换结果仍走标准类型映射链（bigint -> BIGINT、numeric(20,0) -> NUMERIC(20,0) 等）
 // bigint unsigned（0~18446744073709551615）超出 BIGINT 上限，提升为 numeric(20,0)
@@ -1091,6 +1023,113 @@ func convertCheckExpression(expr string, lowercaseColumns bool) string {
 		})
 	}
 	return reCheckIfnull.ReplaceAllString(expr, "COALESCE(")
+}
+
+// findTypeKeywordOutsideLiterals 在字面量之外查找类型关键字（大小写不敏感），
+// 并要求关键字前一个字符不是标识符字符，避免把 json_set( 误判为 set( 等
+func findTypeKeywordOutsideLiterals(sql, keyword string, from int) int {
+	idx := findKeywordOutsideLiterals(sql, keyword, from)
+	for idx != -1 {
+		if idx == 0 || !isIdentChar(sql[idx-1]) {
+			return idx
+		}
+		idx = findKeywordOutsideLiterals(sql, keyword, idx+len(keyword))
+	}
+	return -1
+}
+
+// decodeMySQLStringLiteral 解码带单引号的 MySQL 字符串字面量，返回原始内容：
+// 处理 ” 双写转义与反斜杠转义（MySQL 对未识别的转义序列会丢弃反斜杠）
+func decodeMySQLStringLiteral(quoted string) string {
+	if len(quoted) < 2 || quoted[0] != '\'' || !strings.HasSuffix(quoted, "'") {
+		return quoted
+	}
+	body := quoted[1 : len(quoted)-1]
+	var b strings.Builder
+	for i := 0; i < len(body); i++ {
+		ch := body[i]
+		if ch == '\\' && i+1 < len(body) {
+			i++
+			switch body[i] {
+			case 'n':
+				b.WriteByte('\n')
+			case 'r':
+				b.WriteByte('\r')
+			case 't':
+				b.WriteByte('\t')
+			case '0':
+				b.WriteByte(0)
+			case 'Z':
+				b.WriteByte(0x1a)
+			default:
+				// \' \" \\ 及未识别转义：保留转义后的字符本身
+				b.WriteByte(body[i])
+			}
+			continue
+		}
+		if ch == '\'' && i+1 < len(body) && body[i+1] == '\'' {
+			b.WriteByte('\'')
+			i++
+			continue
+		}
+		b.WriteByte(ch)
+	}
+	return b.String()
+}
+
+// parseEnumValues 从列定义行中提取 ENUM 值列表（P2-02），返回解码后的原始字符串；
+// 非 ENUM 列返回 nil。引号与括号感知：值内含 ')' 或引号时不再截断。
+func parseEnumValues(columnLine string) []string {
+	idx := findTypeKeywordOutsideLiterals(columnLine, "enum(", 0)
+	if idx == -1 {
+		return nil
+	}
+	openIdx := idx + len("enum(") - 1
+	closeIdx := findMatchingParen(columnLine, openIdx)
+	if closeIdx == -1 {
+		return nil
+	}
+	var values []string
+	for _, seg := range splitSQLSegments(columnLine[openIdx+1 : closeIdx]) {
+		if seg.kind == segString && len(seg.text) >= 2 && seg.text[0] == '\'' {
+			values = append(values, decodeMySQLStringLiteral(seg.text))
+		}
+	}
+	return values
+}
+
+// isSetTypeColumn 判断列定义是否为 SET 类型（P2-02）。
+// SET 的多值组合语义无法用 CHECK IN 表达，仅降级告警
+func isSetTypeColumn(columnLine string) bool {
+	return findTypeKeywordOutsideLiterals(columnLine, "set(", 0) != -1
+}
+
+// replaceEnumSetTypes 将 enum(...)/set(...) 类型连同完整值列表替换为 VARCHAR(255)。
+// 引号与括号感知：值内含 ')' 不再截断残留垃圾文本（P2-02，
+// 替代旧 reEnum/reSet 的 [^)]+ 模式）。必须在 typeMappingOrder 循环之前执行，
+// 否则 enum/set 关键字会先被 basicTypeRegexes 替换、值列表泄漏到输出
+func replaceEnumSetTypes(typeDef string) string {
+	typeDef = replaceTypeKeywordCall(typeDef, "enum(", "VARCHAR(255)")
+	return replaceTypeKeywordCall(typeDef, "set(", "VARCHAR(255)")
+}
+
+// replaceTypeKeywordCall 反复查找 kw( 形式的类型定义并整体替换为 repl，
+// 括号范围经引号感知的 findMatchingParen 确定
+func replaceTypeKeywordCall(typeDef, kw, repl string) string {
+	from := 0
+	for {
+		idx := findTypeKeywordOutsideLiterals(typeDef, kw, from)
+		if idx == -1 {
+			return typeDef
+		}
+		openIdx := idx + len(kw) - 1
+		closeIdx := findMatchingParen(typeDef, openIdx)
+		if closeIdx == -1 {
+			return typeDef
+		}
+		typeDef = typeDef[:idx] + repl + typeDef[closeIdx+1:]
+		from = idx + len(repl)
+	}
 }
 
 // reDefaultExpr MySQL 8.0 表达式默认值 DEFAULT (expr)
@@ -1275,8 +1314,9 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 	return
 }
 
-// cleanTypeDefinition 清理和规范化类型定义
-func cleanTypeDefinition(typeDefinition string) string {
+// cleanTypeDefinition 清理和规范化类型定义。
+// tinyInt1AsBoolean 控制 tinyint(1) 的映射目标（见 ConvertTableDDLOptions）
+func cleanTypeDefinition(typeDefinition string, tinyInt1AsBoolean bool) string {
 	if strings.Contains(strings.ToLower(typeDefinition), "generated always as") {
 		typeDefinition = reCharsetPrefix.ReplaceAllString(typeDefinition, "$1")
 		typeDefinition = convertGeneratedFunctionsToPostgres(typeDefinition)
@@ -1341,6 +1381,10 @@ func cleanTypeDefinition(typeDefinition string) string {
 	// BIT(n<=63) 走标准映射后残留的 (n) 由 reIntegerWithPrecision 清理
 	lowerTypeDef = reBit64.ReplaceAllString(lowerTypeDef, "NUMERIC(20,0)")
 
+	// P2-02：enum/set 类型连同完整值列表整体替换为 VARCHAR(255)，
+	// 必须在类型映射循环之前执行（否则 enum/set 关键字先被替换、值列表泄漏）
+	lowerTypeDef = replaceEnumSetTypes(lowerTypeDef)
+
 	// 应用类型映射
 	for _, mysqlType := range typeMappingOrder {
 		pgType, exists := typeMap[mysqlType]
@@ -1349,55 +1393,20 @@ func cleanTypeDefinition(typeDefinition string) string {
 		}
 
 		if mysqlType == "tinyint(1)" {
-			lowerTypeDef = reTinyInt1.ReplaceAllString(lowerTypeDef, pgType)
+			// 默认（false）：跳过 BOOLEAN 替换，tinyint(1) 由后续 tinyint 条目
+			// 映射为 SMALLINT，保留整数语义，兼容视图/函数中 `col = 1` 等整数
+			// 比较（PG 无 boolean = integer 运算符，会报 42883）；
+			// 仅当显式开启 tinyint1_as_boolean 时替换为 BOOLEAN
+			if tinyInt1AsBoolean {
+				lowerTypeDef = reTinyInt1.ReplaceAllString(lowerTypeDef, pgType)
+			}
 			continue
 		}
 
-		if pattern, ok := typePatterns[mysqlType]; ok {
-			lowerTypeDef = pattern.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
-				match := pattern.FindStringSubmatch(m)
-				if len(match) >= 2 {
-					switch mysqlType {
-					case "decimal", "numeric":
-						if len(match) == 3 && match[2] != "" {
-							return fmt.Sprintf("%s(%s,%s)", strings.ToUpper(mysqlType), match[1], match[2])
-						}
-						return fmt.Sprintf("%s(%s)", strings.ToUpper(mysqlType), match[1])
-					case "datetime":
-						return fmt.Sprintf("TIMESTAMP(%s)", match[1])
-					case "timestamp":
-						return fmt.Sprintf("TIMESTAMPTZ(%s)", match[1])
-					case "time":
-						return fmt.Sprintf("TIME(%s)", match[1])
-					case "char":
-						return fmt.Sprintf("CHAR(%s)", match[1])
-					case "varchar":
-						return fmt.Sprintf("VARCHAR(%s)", match[1])
-					case "double":
-						if len(match) == 3 && match[2] != "" {
-							return fmt.Sprintf("DOUBLE PRECISION(%s,%s)", match[1], match[2])
-						}
-						return fmt.Sprintf("DOUBLE PRECISION(%s)", match[1])
-					case "float":
-						if len(match) == 3 && match[2] != "" {
-							return fmt.Sprintf("REAL(%s,%s)", match[1], match[2])
-						}
-						return fmt.Sprintf("REAL(%s)", match[1])
-					default:
-						return pgType
-					}
-				}
-				return pgType
-			})
-		}
-
-		// 使用预编译的正则进行替换
+		// 基本类型关键字替换只替换类型名本身，括号内的精度参数原样保留，
+		// 由 typeMappingOrder 后的兜底正则清理残留（如 double(10,2) 的 (10,2)）
 		if re, ok := basicTypeRegexes[mysqlType]; ok {
 			lowerTypeDef = re.ReplaceAllString(lowerTypeDef, pgType)
-		}
-
-		if mysqlType == "json" {
-			lowerTypeDef = reJsonLength.ReplaceAllString(lowerTypeDef, "JSON")
 		}
 	}
 
@@ -1417,8 +1426,6 @@ func cleanTypeDefinition(typeDefinition string) string {
 	})
 
 	lowerTypeDef = reVarchar.ReplaceAllStringFunc(lowerTypeDef, func(m string) string { return strings.ToUpper(m) })
-	lowerTypeDef = reEnum.ReplaceAllString(lowerTypeDef, "VARCHAR(255)")
-	lowerTypeDef = reSet.ReplaceAllString(lowerTypeDef, "VARCHAR(255)")
 	lowerTypeDef = reVarcharEnum.ReplaceAllString(lowerTypeDef, "VARCHAR(255)")
 	lowerTypeDef = reVarcharZero.ReplaceAllString(lowerTypeDef, "VARCHAR(1)")
 	lowerTypeDef = reDoublePrecision.ReplaceAllString(lowerTypeDef, "DOUBLE PRECISION")
@@ -1447,6 +1454,11 @@ func cleanTypeDefinition(typeDefinition string) string {
 		lowerTypeDef = reVirtual.ReplaceAllString(lowerTypeDef, " STORED")
 	}
 
+	// P2-01：剥离 MySQL 8.0 的 INVISIBLE/SRID 列属性（PG 无对应语义，
+	// 字面量感知替换避免误伤默认值字面量；告警由 ConvertTableDDL 按原行检测记入）
+	lowerTypeDef = replaceRegexOutsideLiterals(lowerTypeDef, reInvisibleAttr, "")
+	lowerTypeDef = replaceRegexOutsideLiterals(lowerTypeDef, reSridAttr, "")
+
 	if strings.HasSuffix(lowerTypeDef, ",") {
 		lowerTypeDef = strings.TrimSuffix(lowerTypeDef, ",")
 	}
@@ -1455,9 +1467,27 @@ func cleanTypeDefinition(typeDefinition string) string {
 	return lowerTypeDef
 }
 
+// ConvertTableDDLOptions ConvertTableDDL 的可选行为参数（变参传入，全部可省略）
+type ConvertTableDDLOptions struct {
+	// TinyInt1AsBoolean 为 true 时 tinyint(1) 映射为 BOOLEAN；
+	// 默认 false 映射为 SMALLINT（保留整数语义，兼容视图/函数中
+	// `col = 1`、`COALESCE(col, 0)` 等用法，避免 PG 报 42883）
+	TinyInt1AsBoolean bool
+	// DistributedByColumns MPP 分布键列
+	DistributedByColumns []string
+}
+
 // ConvertTableDDL 转换MySQL表DDL到PostgreSQL
-func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumns ...string) (*ConvertTableDDLResult, error) {
-	mysqlDDL = strings.ReplaceAll(mysqlDDL, "`", "\"")
+func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, opts ...ConvertTableDDLOptions) (*ConvertTableDDLResult, error) {
+	var opt ConvertTableDDLOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	distributedByColumns := opt.DistributedByColumns
+
+	// P2-04：仅转换字符串字面量之外的反引号标识符，
+	// 字面量内的反引号（如 COMMENT 'a`b'、enum('x`y')）原样保留
+	mysqlDDL = replaceBackticksOutsideLiterals(mysqlDDL)
 
 	columnNamesMap := make(map[string]string)
 	columnCommentsMap := make(map[string]string)
@@ -1587,6 +1617,13 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 		// DECIMAL 系 UNSIGNED 需在转换后补 CHECK (col >= 0)（PG 无无符号类型）
 		isUnsignedDecimalLike := isUnsignedDecimalLikeColumn(trimmedLine)
 
+		// P2-01：INVISIBLE/SRID 属性在 cleanTypeDefinition 中剥离，此处按原行检测以便记入告警
+		hasInvisibleAttr := findTypeKeywordOutsideLiterals(trimmedLine, "invisible", 0) != -1
+		hasSridAttr := findTypeKeywordOutsideLiterals(trimmedLine, "srid", 0) != -1
+		// P2-02：ENUM 值列表解析与 SET 类型检测（引号感知，需在类型转换前基于原行进行）
+		enumValues := parseEnumValues(trimmedLine)
+		isSetTypeCol := isSetTypeColumn(trimmedLine)
+
 		columnName, typeDefinition, columnComment, isConstraint, isIncompleteType, defaultWarning, err := processColumnDefinition(trimmedLine, lowercaseColumns)
 		if defaultWarning != "" {
 			warnings = append(warnings, fmt.Sprintf("列 %s: %s", columnName, defaultWarning))
@@ -1656,7 +1693,7 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 			}
 		}
 
-		typeDefinition = cleanTypeDefinition(typeDefinition)
+		typeDefinition = cleanTypeDefinition(typeDefinition, opt.TinyInt1AsBoolean)
 		if shouldFallbackGeneratedToPlainColumn(typeDefinition) {
 			typeDefinition = stripGeneratedClause(typeDefinition)
 		}
@@ -1673,6 +1710,23 @@ func ConvertTableDDL(mysqlDDL string, lowercaseColumns bool, distributedByColumn
 		if isUnsignedDecimalLike {
 			// MySQL DECIMAL 系 UNSIGNED 的非负语义在 PostgreSQL 中以 CHECK 约束表达
 			newColumnDefinition += fmt.Sprintf(` CHECK ("%s" >= 0)`, columnName)
+		}
+		if len(enumValues) > 0 {
+			// P2-02：ENUM 值域约束以 CHECK IN 表达（SET 的多值组合无法用 IN 表达，仅告警）
+			quotedValues := make([]string, 0, len(enumValues))
+			for _, v := range enumValues {
+				quotedValues = append(quotedValues, "'"+escapeSQLString(v)+"'")
+			}
+			newColumnDefinition += fmt.Sprintf(` CHECK ("%s" IN (%s))`, columnName, strings.Join(quotedValues, ", "))
+		}
+		if isSetTypeCol {
+			warnings = append(warnings, fmt.Sprintf("列 %s: SET 类型的多值组合语义无法用 CHECK 约束表达，已转为 VARCHAR(255)，值域约束未迁移", columnName))
+		}
+		if hasInvisibleAttr {
+			warnings = append(warnings, fmt.Sprintf("列 %s: INVISIBLE 属性无法迁移，列已转为普通可见列", columnName))
+		}
+		if hasSridAttr {
+			warnings = append(warnings, fmt.Sprintf("列 %s: SRID 属性无法迁移已剥离，空间数据完整性依赖应用层保证", columnName))
 		}
 		columnDefinitions = append(columnDefinitions, newColumnDefinition)
 	}

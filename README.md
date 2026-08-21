@@ -39,8 +39,8 @@ Start
  │     └─ If use_table_list=true → Only fetch tables in table_list
  │
  ├─▶ [Step 2] Convert table structures (tableddl: true)
- │     ├─ Intelligent field type mapping (e.g., tinyint(1) → BOOLEAN)
- │     ├─ lowercase_columns/lowercase_tables controls field/table name casing
+ │     ├─ Intelligent field type mapping (e.g., tinyint(1) → SMALLINT, or BOOLEAN via tinyint1_as_boolean)
+ │     ├─ lowercase_columns controls field name casing
  │     ├─ Extract primary key columns for MPP distribution key
  │     ├─ If MPP enabled (conversion.mpp.enabled=true):
  │     │   └─ Add DISTRIBUTED BY (pk_col1, pk_col2, ...) clause
@@ -48,14 +48,17 @@ Start
  │
  ├─▶ [Step 3] Convert views (views: true)
  │     ├─ If exclude_use_view_list=true → Filter out views in exclude_view_list
- │     └─ Convert MySQL view definitions to PostgreSQL compatible syntax
+ │     ├─ Convert MySQL view definitions to PostgreSQL compatible syntax
+ │     └─ Note: identifiers in view definitions (including the view name) are
+ │        always lowercased; string literal content is preserved (P2-13 convention)
  │
  ├─▶ [Step 4] Sync data (data: true)
  │     ├─ If truncate_before_sync=true → Truncate target tables
- │     ├─ Batch read MySQL data (max_rows_per_batch)
+ │     ├─ Batch read MySQL data (max_rows_per_batch, auto-scaled down for wide tables)
  │     ├─ Batch insert into PostgreSQL (batch_insert_size)
- │     ├─ Concurrency controlled by concurrency parameter
- │     └─ Automatically disable foreign key constraints and indexes for performance
+ │     └─ Concurrency controlled by concurrency parameter
+ │        (no FK/index disabling: FKs are not migrated yet — see roadmap;
+ │         secondary indexes are created after data sync)
  │
  ├─▶ [Step 5] Convert indexes (indexes: true)
  │     ├─ If MPP enabled (Greenplum):
@@ -76,7 +79,6 @@ Start
  │
  └─▶ [Final Step] Data validation & Completion (validate_data: true)
        ├─ Query row counts for MySQL and PostgreSQL tables
-       ├─ Re-enable previously disabled foreign key constraints and indexes
        ├─ If truncate_before_sync=false → Log inconsistent tables, continue execution
        ├─ Output conversion statistics report and performance metrics
        └─ Generate inconsistent table list (if any)
@@ -330,7 +332,7 @@ Supports conversion of 40+ MySQL field types to PostgreSQL compatible types, wit
 | int, int(11), integer, etc.  | INTEGER            | All int variants to INTEGER                             |
 | mediumint, mediumint(9)      | INTEGER            | mediumint to INTEGER                                    |
 | smallint, smallint(6), etc.  | SMALLINT           | All smallint variants to SMALLINT                       |
-| tinyint(1)                   | BOOLEAN            | tinyint(1) to BOOLEAN                                   |
+| tinyint(1)                   | SMALLINT (default) / BOOLEAN | Default SMALLINT keeps integer semantics (views/functions using `col = 1` stay valid); set `tinyint1_as_boolean: true` for BOOLEAN |
 | tinyint, tinyint(4), etc.    | SMALLINT           | Other tinyint variants to SMALLINT                      |
 | decimal, numeric             | DECIMAL            | decimal kept as DECIMAL, preserving precision           |
 | double, double precision     | DOUBLE PRECISION   | double to DOUBLE PRECISION                              |

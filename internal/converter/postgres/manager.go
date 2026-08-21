@@ -1331,7 +1331,10 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 			distByCols = extractPrimaryKeyColumnsFromDDL(table.DDL)
 		}
 
-		pgResult, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns, distByCols...)
+		pgResult, err := ConvertTableDDL(table.DDL, m.config.Conversion.Options.LowercaseColumns, ConvertTableDDLOptions{
+			TinyInt1AsBoolean:    m.config.Conversion.Options.TinyInt1AsBoolean,
+			DistributedByColumns: distByCols,
+		})
 		if err != nil {
 			// 记录转换失败的 MySQL 表的部分转换结果
 			m.Log("转换表 %s，MySQL DDL: %s", table.Name, table.DDL)
@@ -1597,6 +1600,11 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 			m.RecordConversionWarning("函数语法", function.Name,
 				"包含 DECLARE HANDLER 错误处理：NOT FOUND 语义已转为 IF NOT FOUND，其他 HANDLER 以注释保留，请人工复核")
 		}
+		// P2-16：SIGNAL/RESIGNAL 抛错语义转换提示（RESIGNAL 子串含 SIGNAL，一并覆盖）
+		if strings.Contains(strings.ToUpper(function.DDL), "SIGNAL") {
+			m.RecordConversionWarning("函数语法", function.Name,
+				"包含 SIGNAL/RESIGNAL 抛错语句：SIGNAL 已转为 RAISE EXCEPTION，RESIGNAL 转为 RAISE，错误处理语义请人工复核")
+		}
 
 		// 更新进度
 		completed := m.completeTask()
@@ -1660,7 +1668,10 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 		}
 		// ========== MPP 处理结束 ==========
 
-		pgDDL, err := ConvertIndexDDL(index.Table, index, m.config.Conversion.Options.LowercaseColumns, columnNamesMap)
+		pgDDL, indexWarnings, err := ConvertIndexDDL(index, m.config.Conversion.Options.LowercaseColumns, columnNamesMap)
+		for _, w := range indexWarnings {
+			m.RecordConversionWarning("索引", index.Table, fmt.Sprintf("%s: %s", index.Name, w))
+		}
 		if err != nil {
 			errMsg := fmt.Sprintf("转换索引 %s 失败: %v", lowercaseIndexName, err)
 			m.logError(errMsg)
@@ -1669,7 +1680,7 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 			return err
 		}
 
-		// 如果没有生成DDL语句（比如只包含pri_key的索引），则跳过
+		// 如果没有生成DDL语句（比如只包含pri_key的索引、被跳过的函数/SPATIAL索引），则跳过
 		if pgDDL == "" {
 			<-semaphore
 			m.updateProgress()
@@ -1789,8 +1800,13 @@ func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{
 	)
 }
 
-// convertTablePrivileges 转换表权限
+// convertTablePrivileges 旧 grant 选项的表权限入口（已废弃，P2-09）：
+// 此前仅以 time.Sleep 模拟成功、不做任何授权。真实的表权限转换由
+// table_privileges 选项驱动的 convertTablePrivilegesNew 完成。
+// 保留进度计数语义，但如实报告未执行任何转换
 func (m *Manager) convertTablePrivileges(tables []mysql.TableInfo, semaphore chan struct{}) error {
+	m.RecordConversionWarning("权限", "*",
+		"grant 选项已废弃且从未实现真实转换，本次未执行任何表级授权；请改用 conversion.options.table_privileges")
 	for _, table := range tables {
 		// 取消检查：根 context 取消后停止处理后续表权限
 		if err := m.context().Err(); err != nil {
@@ -1798,20 +1814,18 @@ func (m *Manager) convertTablePrivileges(tables []mysql.TableInfo, semaphore cha
 		}
 
 		semaphore <- struct{}{}
-		// 模拟权限转换
-		time.Sleep(100 * time.Millisecond)
 
 		// 更新进度
 		completed := m.completeTask()
 		progress := float64(completed) / float64(m.totalTasks) * 100
 
-		// 显示转换成功信息（根据配置决定是否在控制台显示）
+		// 显示转换信息（根据配置决定是否在控制台显示）
 		if m.config.Run.ShowConsoleLogs {
-			fmt.Printf("进度: %.2f%% (%d/%d) : 转换表 %s 的权限成功\n", progress, completed, m.totalTasks, table.Name)
+			fmt.Printf("进度: %.2f%% (%d/%d) : 跳过表 %s 的权限（grant 选项已废弃，请使用 table_privileges）\n", progress, completed, m.totalTasks, table.Name)
 		}
 
 		// 记录到日志文件
-		m.Log("转换表 %s 的权限成功", table.Name)
+		m.Log("跳过表 %s 的权限转换（grant 选项已废弃，请使用 table_privileges）", table.Name)
 
 		<-semaphore
 	}
@@ -1860,8 +1874,12 @@ func (m *Manager) convertTablePrivilegesNew(tablePrivileges []mysql.TablePrivInf
 			continue
 		}
 
-		// 转换表权限
-		pgDDLs, err := ConvertTablePrivilegeDDL(tablePriv)
+		// 转换表权限（P2-09：GRANT 指向 schema 限定的表，与用户权限路径一致）
+		privilegeCtx := PrivilegeContext{
+			Database: m.config.PostgreSQL.Database,
+			Schema:   mpp.ParseSearchPath(m.postgresConn.GetPgConnectionParams()),
+		}
+		pgDDLs, err := ConvertTablePrivilegeDDL(tablePriv, privilegeCtx)
 		if err != nil {
 			errMsg := fmt.Sprintf("转换表权限失败: %v", err)
 			m.logError(errMsg)
@@ -2061,11 +2079,23 @@ func (m *Manager) RecordConversionWarning(category, object, detail string) {
 	m.mutex.Unlock()
 }
 
-// displayConversionWarnings 显示转换降级/丢弃清单（P1-20）
+// displayConversionWarnings 显示转换降级/丢弃清单（P1-20）。
+// 按 类别+对象+说明 去重并保持顺序：分批处理的路径（如废弃的 grant 选项）
+// 可能对同一事实重复记录
 func (m *Manager) displayConversionWarnings() {
 	m.mutex.Lock()
-	warnings := append([]ConversionWarning(nil), m.conversionWarnings...)
+	collected := append([]ConversionWarning(nil), m.conversionWarnings...)
 	m.mutex.Unlock()
+
+	seen := make(map[string]bool)
+	var warnings []ConversionWarning
+	for _, w := range collected {
+		key := w.Category + "\x00" + w.Object + "\x00" + w.Detail
+		if !seen[key] {
+			seen[key] = true
+			warnings = append(warnings, w)
+		}
+	}
 	if len(warnings) == 0 {
 		return
 	}

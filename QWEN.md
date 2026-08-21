@@ -300,16 +300,18 @@ Step 6: Convert functions (functions: true)
   └─ Execute CREATE FUNCTION statements in PostgreSQL
 
 Step 7: Convert users (users: true)
-  └─ MySQL Users → PostgreSQL Roles (preserve password hashes)
+  └─ MySQL Users → PostgreSQL Roles (passwords are not migrated: hash formats
+     are incompatible; a reset list with ALTER USER templates is output)
 
 Step 8: Convert table privileges (table_privileges: true)
   └─ GRANT statements converted to PostgreSQL equivalents
 
 Final Step: Data validation & Completion (validate_data: true)
   ├─ Compare row counts: MySQL vs PostgreSQL
-  ├─ Re-enable foreign key constraints and indexes
   ├─ Report inconsistent tables (if truncate_before_sync=false, continues)
   └─ Output conversion statistics and performance metrics
+  (no FK/index disabling happens during sync: FKs are not migrated yet and
+   secondary indexes are created after data sync)
 ```
 
 ## HTML Report Structure
@@ -387,7 +389,7 @@ Report is a single self-contained HTML file with inline CSS and Google Fonts —
 | `int`, `int(11)`, `integer` | `INTEGER` | All int variants |
 | `mediumint`, `mediumint(9)` | `INTEGER` | |
 | `smallint`, `smallint(6)` | `SMALLINT` | All smallint variants |
-| `tinyint(1)` | `BOOLEAN` | Special case |
+| `tinyint(1)` | `SMALLINT`（默认）/ `BOOLEAN`（`tinyint1_as_boolean: true`） | 默认保留整数语义，兼容视图/函数中 `col = 1` 用法（PG 无 boolean = integer 运算符） |
 | `tinyint`, `tinyint(4)` | `SMALLINT` | Other tinyint variants |
 | `decimal`, `numeric` | `DECIMAL` | Preserves precision |
 | `double`, `double precision` | `DOUBLE PRECISION` | |

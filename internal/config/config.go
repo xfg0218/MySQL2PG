@@ -79,6 +79,12 @@ type OptionsConfig struct {
 	ValidateData       bool     `mapstructure:"validate_data"`          // 同步后验证数据一致性
 	LowercaseColumns   bool     `mapstructure:"lowercase_columns"`      // 表字段是否转小写，true代表转小写，默认，false代表与mysql一致
 	TruncateBeforeSync bool     `mapstructure:"truncate_before_sync"`   // 同步前是否清空表数据
+	// tinyint(1) 映射策略：MySQL 的 tinyint(1) 虽是布尔惯例但本质是整数，
+	// 视图/函数中广泛存在 `col = 1`、`COALESCE(col, 0)` 等用法，映射为 PG BOOLEAN
+	// 会因 boolean = integer 无对应运算符而报 42883。
+	// 默认 false：tinyint(1) -> SMALLINT，保留整数语义、视图/函数完全兼容；
+	// 显式 true：映射为 BOOLEAN，需自行确保无布尔列与整数的比较/算术
+	TinyInt1AsBoolean bool `mapstructure:"tinyint1_as_boolean"`
 
 	// 视图排除列表
 	SkipUseViewList bool      `mapstructure:"exclude_use_view_list"` // 是否使用视图排除列表
@@ -235,6 +241,9 @@ func (c *Config) ValidateConfig() error {
 	}
 	if c.Conversion.Limits.MaxRowsPerBatch <= 0 {
 		c.Conversion.Limits.MaxRowsPerBatch = 50000 // 默认值，与 BatchInsertSize 保持一致以减少网络往返
+	}
+	if c.Conversion.Limits.BatchInsertSize <= 0 {
+		c.Conversion.Limits.BatchInsertSize = 50000 // 默认值，与 MaxRowsPerBatch 对齐，避免读 50000 行却按 10000 行分块插入
 	}
 
 	// MPP 配置默认值

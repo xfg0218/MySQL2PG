@@ -88,14 +88,19 @@ var (
 	reVarDecl = regexp.MustCompile(`(?i)\s*(\w+)\s+(INT|VARCHAR|TEXT|DECIMAL|NUMERIC|DATE|TIME|TIMESTAMP|BOOLEAN|FLOAT|DOUBLE|CHAR|REFCURSOR|TINYINT|BIGINT|MEDIUMINT|SMALLINT)\s*(?:UNSIGNED)?\s*(?:\((\d+(?:,\d+)?)\))?\s*(?:DEFAULT\s+([^;]+))?;`)
 
 	// 基础清理相关
-	reBegin           = regexp.MustCompile(`(?i)BEGIN\s*`)
-	reEnd             = regexp.MustCompile(`(?i)\s*END\s*(?:\$\$|;)*\s*$`)
-	reDeclare         = regexp.MustCompile(`(?i)DECLARE\s*`)
-	reLabel           = regexp.MustCompile(`(?i)\w+:\s*`)
-	reHandler         = regexp.MustCompile(`(?i)DECLARE\s+(CONTINUE|EXIT)\s+HANDLER\s+FOR\s+[^;]+?;`)
-	reHandlerSpecific = regexp.MustCompile(`(?i)DECLARE\s+(CONTINUE|EXIT)\s+HANDLER\s+FOR\s+NOT\s+FOUND\s+.*?;`)
-	reCommentVar      = regexp.MustCompile(`(?i)--\s*声明变量`)
-	reCommentCursor   = regexp.MustCompile(`(?i)--\s*声明游标.*`)
+	reBegin         = regexp.MustCompile(`(?i)BEGIN\s*`)
+	reEnd           = regexp.MustCompile(`(?i)\s*END\s*(?:\$\$|;)*\s*$`)
+	reDeclare       = regexp.MustCompile(`(?i)DECLARE\s*`)
+	reLabel         = regexp.MustCompile(`(?i)\w+:\s*`)
+	reHandlerStart  = regexp.MustCompile(`(?i)DECLARE\s+(CONTINUE|EXIT)\s+HANDLER\s+FOR\s+`)
+	reCommentVar    = regexp.MustCompile(`(?i)--\s*声明变量`)
+	reCommentCursor = regexp.MustCompile(`(?i)--\s*声明游标.*`)
+
+	// P2-16：SIGNAL/RESIGNAL 转换。字面量先经 literalMask 遮蔽，
+	// 遮蔽后的字面量形如 __m2pg_lit_N__ 占位符
+	reSignalStmt    = regexp.MustCompile(`(?i)\bSIGNAL\s+SQLSTATE\s+(__m2pg_lit_\d+__)\s*([^;]*);`)
+	reSignalMessage = regexp.MustCompile(`(?i)\bMESSAGE_TEXT\s*=\s*(__m2pg_lit_\d+__|[A-Za-z_]\w*)`)
+	reResignalStmt  = regexp.MustCompile(`(?i)\bRESIGNAL\b[^;]*;`)
 
 	// 简单函数替换
 	reLower = regexp.MustCompile(`(?i)LOWER\s*\(([^)]+?)\)`)
@@ -480,15 +485,187 @@ func (c *FunctionConverter) extractBody() error {
 // 强加给所有同名（或名字含该子串）的函数，产生不可解释的输出。
 // 无法通用转换的语法应在迁移报告中提示人工复核，而非静默定制改写。
 func (c *FunctionConverter) applySpecificPatches() {
-	// P1-14：DECLARE HANDLER 处理：
-	// FOR NOT FOUND 的语义已由 FETCH 转换覆盖（FETCH 转换生成 IF NOT FOUND THEN done := true），删除声明即可；
-	// 其他 HANDLER（SQLEXCEPTION 等）无法转换，以注释保留原文避免 PG 语法错误，并由迁移报告告警
-	c.body = reHandler.ReplaceAllStringFunc(c.body, func(m string) string {
-		if strings.Contains(strings.ToLower(m), "not found") {
-			return ""
+	// P2-16：先转换 SIGNAL/RESIGNAL——handler 块内部的 SIGNAL 在被整体注释前
+	// 同样完成转换，注释中保留的是转换后的形态
+	c.convertSignalStatements()
+	// P1-14/P2-16：移除/注释 DECLARE HANDLER 声明（含多行 BEGIN 块整体识别）
+	c.removeDeclareHandlers()
+}
+
+// convertSignalStatements 将 MySQL SIGNAL/RESIGNAL 抛错语句转换为 PG RAISE（P2-16）：
+//   - SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'msg' → RAISE EXCEPTION USING ERRCODE = '45000', MESSAGE = 'msg'
+//   - SIGNAL SQLSTATE '45000' → RAISE EXCEPTION USING ERRCODE = '45000'
+//   - RESIGNAL → RAISE（重抛语义依赖 EXCEPTION 块，需人工复核）
+//
+// MESSAGE_TEXT 之外的 SET 子句（MYSQL_ERRNO 等）无 PG 等价物，随改写丢弃。
+// 在字面量遮蔽下进行，MESSAGE_TEXT 的字符串值以占位符形式保留到 unmask 后还原
+func (c *FunctionConverter) convertSignalStatements() {
+	mask := newLiteralMask()
+	c.body = mask.mask(c.body)
+
+	c.body = reSignalStmt.ReplaceAllStringFunc(c.body, func(m string) string {
+		parts := reSignalStmt.FindStringSubmatch(m)
+		if parts == nil {
+			return m
 		}
-		return "-- [mysql2pg] MySQL HANDLER 无法自动转换，原文: " + strings.TrimSpace(m)
+		sqlstate := parts[1]
+		var message string
+		if m2 := reSignalMessage.FindStringSubmatch(parts[2]); m2 != nil {
+			message = m2[1]
+		}
+		if message != "" {
+			return fmt.Sprintf("RAISE EXCEPTION USING ERRCODE = %s, MESSAGE = %s;", sqlstate, message)
+		}
+		return fmt.Sprintf("RAISE EXCEPTION USING ERRCODE = %s;", sqlstate)
 	})
+
+	c.body = reResignalStmt.ReplaceAllString(c.body, "RAISE; -- [mysql2pg] RESIGNAL 转为 RAISE，重抛语义需人工复核")
+
+	c.body = mask.unmask(c.body)
+}
+
+// removeDeclareHandlers 处理 DECLARE HANDLER 声明（P1-14 + P2-16）：
+// FOR NOT FOUND 的语义已由 FETCH 转换覆盖（生成 IF NOT FOUND THEN done := true），删除声明即可；
+// 其他 HANDLER（SQLEXCEPTION 等）无法转换，以块注释保留原文，由迁移报告告警。
+//
+// 旧实现用非贪婪 [^;]+?; 匹配，多行 BEGIN 块只吞到第一个分号，
+// 块内剩余语句（SIGNAL/ROLLBACK/孤立 END）会泄漏进函数体造成 plpgsql 语法错误；
+// 现在整块范围由 findHandlerExtent 以 BEGIN/END 计数（字面量感知）确定
+func (c *FunctionConverter) removeDeclareHandlers() {
+	// from 记录已处理位置：替换产生的注释中含 HANDLER 原文，
+	// 搜索必须从替换结果之后继续，否则会重复匹配
+	from := 0
+	for {
+		loc := reHandlerStart.FindStringIndex(c.body[from:])
+		if loc == nil {
+			return
+		}
+		start := from + loc[0]
+		end := from + findHandlerExtent(c.body, from+loc[1])
+		handlerText := strings.TrimSpace(c.body[start:end])
+
+		var repl string
+		if strings.Contains(strings.ToLower(handlerText), "not found") {
+			repl = ""
+		} else {
+			// 块注释保留原文；防御原文中的 */ 提前终止注释
+			safe := strings.ReplaceAll(handlerText, "*/", "* /")
+			repl = "/* [mysql2pg] MySQL HANDLER 无法自动转换，原文: " + safe + " */"
+		}
+		c.body = c.body[:start] + repl + c.body[end:]
+		from = start + len(repl)
+	}
+}
+
+// findHandlerExtent 确定 DECLARE HANDLER 声明的完整范围（从 FOR 关键字之后开始扫描）：
+// 单语句 handler 结束于第一个 ';'；带 BEGIN 块的 handler 结束于配对的 END;
+func findHandlerExtent(body string, from int) int {
+	i := from
+	upper := strings.ToUpper(body)
+	for i < len(body) {
+		ch := body[i]
+		if ch == '\'' || ch == '"' {
+			i = skipStringLiteral(body, i)
+			continue
+		}
+		if ch == ';' {
+			return i + 1
+		}
+		if isWordAt(upper, i, "BEGIN") {
+			if end := findBeginBlockEnd(body, i); end != -1 {
+				return end
+			}
+			// BEGIN 块未闭合：取到文本末尾，避免块内容泄漏
+			return len(body)
+		}
+		i++
+	}
+	return len(body)
+}
+
+// findBeginBlockEnd 从 beginIdx 处的 BEGIN 开始找到配对 END; 的结束位置
+// （返回 END 后分号之后的下标）。字面量感知：END IF/END LOOP/END WHILE/END CASE
+// 是子块结束符，不与 BEGIN 配对。未闭合返回 -1
+func findBeginBlockEnd(body string, beginIdx int) int {
+	depth := 0
+	i := beginIdx
+	upper := strings.ToUpper(body)
+	for i < len(body) {
+		ch := body[i]
+		if ch == '\'' || ch == '"' {
+			i = skipStringLiteral(body, i)
+			continue
+		}
+		if isWordAt(upper, i, "BEGIN") {
+			depth++
+			i += len("BEGIN")
+			continue
+		}
+		if isWordAt(upper, i, "END") {
+			j := i + len("END")
+			k := j
+			for k < len(body) && (body[k] == ' ' || body[k] == '\t' || body[k] == '\n' || body[k] == '\r') {
+				k++
+			}
+			if isWordAt(upper, k, "IF") || isWordAt(upper, k, "LOOP") ||
+				isWordAt(upper, k, "WHILE") || isWordAt(upper, k, "CASE") {
+				// END IF 等子块结束符，不与 BEGIN 配对
+				i = k
+				continue
+			}
+			depth--
+			if depth == 0 {
+				// 跳过 END 与 ';' 之间可能的标签/空白
+				for k < len(body) && body[k] != ';' {
+					k++
+				}
+				if k < len(body) {
+					return k + 1
+				}
+				return len(body)
+			}
+			i = j
+			continue
+		}
+		i++
+	}
+	return -1
+}
+
+// skipStringLiteral 从 start 处的引号开始跳过一个字符串字面量，
+// 返回字面量之后的下标（支持反斜杠与双写引号转义；未闭合时取到文本末尾）
+func skipStringLiteral(body string, start int) int {
+	quote := body[start]
+	i := start + 1
+	for i < len(body) {
+		if body[i] == '\\' {
+			i += 2
+			continue
+		}
+		if body[i] == quote {
+			if i+1 < len(body) && body[i+1] == quote {
+				i += 2
+				continue
+			}
+			return i + 1
+		}
+		i++
+	}
+	return len(body)
+}
+
+// isWordAt 判断已大写文本 upper 在位置 i 处是否为完整单词 word（前后非标识符字符）
+func isWordAt(upper string, i int, word string) bool {
+	if i+len(word) > len(upper) || upper[i:i+len(word)] != word {
+		return false
+	}
+	if i > 0 && isIdentChar(upper[i-1]) {
+		return false
+	}
+	if i+len(word) < len(upper) && isIdentChar(upper[i+len(word)]) {
+		return false
+	}
+	return true
 }
 
 // convertDataTypes 转换基本数据类型
@@ -1118,7 +1295,11 @@ func (c *FunctionConverter) handleVariables() {
 	// 形如 "单词:" 的内容（issue-12）
 	body = reDeclare.ReplaceAllString(body, "")
 	body = replaceRegexOutsideLiterals(body, reLabel, "")
-	body = reHandler.ReplaceAllString(body, "")
+	// 兜底：以块感知方式继续清理残留的 DECLARE HANDLER
+	// （applySpecificPatches 已处理大部分情形，此处防范特殊形态漏网）
+	c.body = body
+	c.removeDeclareHandlers()
+	body = c.body
 
 	// 2. 提取变量声明
 	processedDeclarations := make(map[string]bool)

@@ -287,7 +287,9 @@ func (a *MigrationAssessor) assessTablesWithMigrationLogic() {
 		}
 
 		// 使用现有 ConvertTableDDL 函数进行转换评估
-		_, err = postgres.ConvertTableDDL(ddl, a.config.Conversion.Options.LowercaseColumns)
+		_, err = postgres.ConvertTableDDL(ddl, a.config.Conversion.Options.LowercaseColumns, postgres.ConvertTableDDLOptions{
+			TinyInt1AsBoolean: a.config.Conversion.Options.TinyInt1AsBoolean,
+		})
 		if err != nil {
 			table.Risks = append(table.Risks, Risk{
 				Level:       RiskLevelHigh,
