@@ -17,9 +17,9 @@ import (
 
 // ConversionContext 转换上下文，包含版本信息
 type ConversionContext struct {
-	MySQLVersion     *mysql.MySQLVersionInfo
+	MySQLVersion      *mysql.MySQLVersionInfo
 	PostgreSQLVersion *postgres.PostgreSQLVersionInfo
-	Config           *config.Config
+	Config            *config.Config
 }
 
 // shouldUseAdvancedRegexp 是否使用高级 REGEXP 转换
@@ -58,7 +58,7 @@ type Manager struct {
 	// 根 context（通常来自 signal.NotifyContext），取消后各阶段循环停止派发新任务
 	ctx context.Context
 	// 版本信息
-	mysqlVersion     *mysql.MySQLVersionInfo
+	mysqlVersion      *mysql.MySQLVersionInfo
 	postgreSQLVersion *postgres.PostgreSQLVersionInfo
 	// 转换上下文
 	conversionCtx *ConversionContext
@@ -80,18 +80,18 @@ type Manager struct {
 
 // AssessmentResults 评估结果
 type AssessmentResults struct {
-	TableErrors       map[string]error       // 表转换错误
-	ViewErrors        map[string]error       // 视图转换错误
-	FunctionErrors    map[string]error       // 函数转换错误
-	IndexErrors       map[string]error       // 索引转换错误
-	TableWarnings     map[string][]string    // 表转换警告
-	ViewWarnings      map[string][]string    // 视图转换警告
-	FunctionWarnings  map[string][]string    // 函数转换警告
-	IndexWarnings     map[string][]string    // 索引转换警告
-	ConversionStats   []ConversionStageStat  // 转换统计
-	TotalRows         int64                  // 总行数
-	TableDDLResults   map[string]string      // 表 DDL 转换结果（成功转换后的 PostgreSQL DDL）
-	ViewDDLResults    map[string]string      // 视图 DDL 转换结果
+	TableErrors        map[string]error      // 表转换错误
+	ViewErrors         map[string]error      // 视图转换错误
+	FunctionErrors     map[string]error      // 函数转换错误
+	IndexErrors        map[string]error      // 索引转换错误
+	TableWarnings      map[string][]string   // 表转换警告
+	ViewWarnings       map[string][]string   // 视图转换警告
+	FunctionWarnings   map[string][]string   // 函数转换警告
+	IndexWarnings      map[string][]string   // 索引转换警告
+	ConversionStats    []ConversionStageStat // 转换统计
+	TotalRows          int64                 // 总行数
+	TableDDLResults    map[string]string     // 表 DDL 转换结果（成功转换后的 PostgreSQL DDL）
+	ViewDDLResults     map[string]string     // 视图 DDL 转换结果
 	FunctionDDLResults map[string]string     // 函数 DDL 转换结果
 }
 
@@ -214,20 +214,13 @@ func (m *Manager) Run() error {
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n1. 开始转换表结构...")
 			}
-			// 记录DDL转换开始时间
-			startTime := time.Now()
 			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
-			if err := m.convertTables(filteredTables, semaphore); err != nil {
+			var wg sync.WaitGroup
+			errorChan := make(chan error, len(filteredTables)+8)
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表结构", filteredTables, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertTables)
+			if err := drainErrors(errorChan); err != nil {
 				return err
 			}
-			// 记录DDL转换结束时间并添加到转换统计中
-			endTime := time.Now()
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表结构",
-				StartTime:   startTime,
-				EndTime:     endTime,
-				ObjectCount: len(filteredTables),
-			})
 		}
 
 		// 执行数据同步（如果启用）
@@ -237,22 +230,14 @@ func (m *Manager) Run() error {
 			}
 			// P1-07：按配置开启一致性快照，保证源库并发写入时读到一致数据
 			m.beginSnapshotIfEnabled()
-			// 记录数据同步开始时间
-			startTime := time.Now()
 			semaphore := make(chan struct{}, m.config.Conversion.Limits.Concurrency)
-			if err := m.syncTableData(filteredTables, semaphore); err != nil {
-				m.mysqlConn.EndConsistentSnapshot()
+			var wg sync.WaitGroup
+			errorChan := make(chan error, len(filteredTables)+8)
+			runBatchStage(m, &wg, semaphore, errorChan, "同步表数据", filteredTables, m.config.Conversion.Limits.MaxDDLPerBatch, m.syncTableData)
+			m.mysqlConn.EndConsistentSnapshot()
+			if err := drainErrors(errorChan); err != nil {
 				return err
 			}
-			m.mysqlConn.EndConsistentSnapshot()
-			// 记录数据同步结束时间并添加到转换统计中
-			endTime := time.Now()
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "同步表数据",
-				StartTime:   startTime,
-				EndTime:     endTime,
-				ObjectCount: len(filteredTables),
-			})
 		}
 		// 第四阶段：执行索引同步（如果启用）
 		if m.config.Conversion.Options.Indexes && len(indexes) > 0 {
@@ -282,32 +267,7 @@ func (m *Manager) Run() error {
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n4. 转换表索引...")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxIndexesPerBatch
-			for i := 0; i < len(filteredIndexes); i += batchSize {
-				end := i + batchSize
-				if end > len(filteredIndexes) {
-					end = len(filteredIndexes)
-				}
-
-				batch := filteredIndexes[i:end]
-				wg.Add(1)
-				go func(batch []mysql.IndexInfo) {
-					defer wg.Done()
-					if err := m.convertIndexes(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待索引同步完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表索引",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(filteredIndexes),
-			})
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表索引", filteredIndexes, m.config.Conversion.Limits.MaxIndexesPerBatch, m.convertIndexes)
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -528,6 +488,38 @@ func drainErrors(errorChan chan error) error {
 	return fmt.Errorf("共 %d 个错误:\n  - %s", len(errs), strings.Join(msgs, "\n  - "))
 }
 
+// runBatchStage 以"切批 → 并行执行 → 等待 → 记录阶段统计"为原子单元执行一个阶段
+// （P3-08：统一各阶段重复的切批并行编排，Run 白名单路径与 executeConversion 共用）。
+// 不做错误聚合：调用方在原有位置 drainErrors，保持各阶段既有的错误检查时机。
+// 阶段内的快照开启/结束等特有逻辑仍由调用方包裹在外部
+func runBatchStage[T any](m *Manager, wg *sync.WaitGroup, semaphore chan struct{}, errorChan chan error,
+	stageName string, objects []T, batchSize int,
+	stageFn func(batch []T, semaphore chan struct{}) error) {
+	startTime := time.Now()
+	for i := 0; i < len(objects); i += batchSize {
+		end := i + batchSize
+		if end > len(objects) {
+			end = len(objects)
+		}
+
+		batch := objects[i:end]
+		wg.Add(1)
+		go func(batch []T) {
+			defer wg.Done()
+			if err := stageFn(batch, semaphore); err != nil {
+				errorChan <- err
+			}
+		}(batch)
+	}
+	wg.Wait()
+	m.conversionStats = append(m.conversionStats, ConversionStageStat{
+		StageName:   stageName,
+		StartTime:   startTime,
+		EndTime:     time.Now(),
+		ObjectCount: len(objects),
+	})
+}
+
 // executeConversion 执行完整的转换流程
 // 按照配置的顺序执行表DDL、数据、索引、函数、视图、用户和权限的转换
 func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.FunctionInfo, indexes []mysql.IndexInfo, views []mysql.ViewInfo, users []mysql.UserInfo, tablePrivileges []mysql.TablePrivInfo) error {
@@ -583,32 +575,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				fmt.Printf("│  🚀 Stage 1/%d: 转换表结构 (%d tables)                       │\n", m.getStageCount(), len(filteredTables))
 				fmt.Println("└─────────────────────────────────────────────────────────────────┘")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-			for i := 0; i < len(filteredTables); i += batchSize {
-				end := i + batchSize
-				if end > len(filteredTables) {
-					end = len(filteredTables)
-				}
-
-				batch := filteredTables[i:end]
-				wg.Add(1)
-				go func(batch []mysql.TableInfo) {
-					defer wg.Done()
-					if err := m.convertTables(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待表DDL同步完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表结构",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(filteredTables),
-			})
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表结构", filteredTables, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertTables)
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -623,32 +590,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				fmt.Printf("│  🚀 Stage %d/%d: 转换表视图 (%d views)                         │\n", m.getCurrentStage(2), m.getStageCount(), len(views))
 				fmt.Println("└─────────────────────────────────────────────────────────────────┘")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-			for i := 0; i < len(views); i += batchSize {
-				end := i + batchSize
-				if end > len(views) {
-					end = len(views)
-				}
-
-				batch := views[i:end]
-				wg.Add(1)
-				go func(batch []mysql.ViewInfo) {
-					defer wg.Done()
-					if err := m.convertViews(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待视图转换完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表视图",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(views),
-			})
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表视图", views, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertViews)
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -665,33 +607,8 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			}
 			// P1-07：按配置开启一致性快照，保证源库并发写入时读到一致数据
 			m.beginSnapshotIfEnabled()
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-			for i := 0; i < len(filteredTables); i += batchSize {
-				end := i + batchSize
-				if end > len(filteredTables) {
-					end = len(filteredTables)
-				}
-
-				batch := filteredTables[i:end]
-				wg.Add(1)
-				go func(batch []mysql.TableInfo) {
-					defer wg.Done()
-					if err := m.syncTableData(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待表数据同步完成
+			runBatchStage(m, &wg, semaphore, errorChan, "同步表数据", filteredTables, m.config.Conversion.Limits.MaxDDLPerBatch, m.syncTableData)
 			m.mysqlConn.EndConsistentSnapshot()
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "同步表数据",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(filteredTables),
-			})
 		} else if m.config.Conversion.Options.Data {
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n2. 同步表数据...")
@@ -712,32 +629,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				fmt.Printf("│  🚀 Stage %d/%d: 转换表索引 (%d indexes)                       │\n", m.getCurrentStage(3), m.getStageCount(), len(indexes))
 				fmt.Println("└─────────────────────────────────────────────────────────────────┘")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxIndexesPerBatch
-			for i := 0; i < len(indexes); i += batchSize {
-				end := i + batchSize
-				if end > len(indexes) {
-					end = len(indexes)
-				}
-
-				batch := indexes[i:end]
-				wg.Add(1)
-				go func(batch []mysql.IndexInfo) {
-					defer wg.Done()
-					if err := m.convertIndexes(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待索引同步完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表索引",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(indexes),
-			})
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表索引", indexes, m.config.Conversion.Limits.MaxIndexesPerBatch, m.convertIndexes)
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -753,32 +645,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					fmt.Printf("│  🚀 Stage %d/%d: 转换函数 (%d functions)                      │\n", m.getCurrentStage(4), m.getStageCount(), len(functions))
 					fmt.Println("└─────────────────────────────────────────────────────────────────┘")
 				}
-				// 记录开始时间
-				startTime := time.Now()
-				batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-				for i := 0; i < len(functions); i += batchSize {
-					end := i + batchSize
-					if end > len(functions) {
-						end = len(functions)
-					}
-
-					batch := functions[i:end]
-					wg.Add(1)
-					go func(batch []mysql.FunctionInfo) {
-						defer wg.Done()
-						if err := m.convertFunctions(batch, semaphore); err != nil {
-							errorChan <- err
-						}
-					}(batch)
-				}
-				wg.Wait() // 等待函数同步完成
-				// 记录结束时间和对象数量
-				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "转换函数",
-					StartTime:   startTime,
-					EndTime:     time.Now(),
-					ObjectCount: len(functions),
-				})
+				runBatchStage(m, &wg, semaphore, errorChan, "转换函数", functions, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertFunctions)
 
 				// 检查是否有错误
 				if err := drainErrors(errorChan); err != nil {
@@ -803,32 +670,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					fmt.Printf("│  🚀 Stage %d/%d: 转换库用户 (%d users)                          │\n", m.getCurrentStage(5), m.getStageCount(), len(users))
 					fmt.Println("└─────────────────────────────────────────────────────────────────┘")
 				}
-				// 记录开始时间
-				startTime := time.Now()
-				batchSize := m.config.Conversion.Limits.MaxUsersPerBatch
-				for i := 0; i < len(users); i += batchSize {
-					end := i + batchSize
-					if end > len(users) {
-						end = len(users)
-					}
-
-					batch := users[i:end]
-					wg.Add(1)
-					go func(batch []mysql.UserInfo) {
-						defer wg.Done()
-						if err := m.convertUsers(batch, semaphore); err != nil {
-							errorChan <- err
-						}
-					}(batch)
-				}
-				wg.Wait() // 等待用户同步完成
-				// 记录结束时间和对象数量
-				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "转换库用户",
-					StartTime:   startTime,
-					EndTime:     time.Now(),
-					ObjectCount: len(users),
-				})
+				runBatchStage(m, &wg, semaphore, errorChan, "转换库用户", users, m.config.Conversion.Limits.MaxUsersPerBatch, m.convertUsers)
 
 				// 检查是否有错误
 				if err := drainErrors(errorChan); err != nil {
@@ -852,32 +694,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 					fmt.Printf("│  🚀 Stage %d/%d: 转换表权限 (%d tables)                         │\n", m.getCurrentStage(6), m.getStageCount(), len(filteredTables))
 					fmt.Println("└─────────────────────────────────────────────────────────────────┘")
 				}
-				// 记录开始时间
-				startTime := time.Now()
-				batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-				for i := 0; i < len(filteredTables); i += batchSize {
-					end := i + batchSize
-					if end > len(filteredTables) {
-						end = len(filteredTables)
-					}
-
-					batch := filteredTables[i:end]
-					wg.Add(1)
-					go func(batch []mysql.TableInfo) {
-						defer wg.Done()
-						if err := m.convertTablePrivileges(batch, semaphore); err != nil {
-							errorChan <- err
-						}
-					}(batch)
-				}
-				wg.Wait() // 等待权限转换完成
-				// 记录结束时间和对象数量
-				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "转换表权限",
-					StartTime:   startTime,
-					EndTime:     time.Now(),
-					ObjectCount: len(filteredTables),
-				})
+				runBatchStage(m, &wg, semaphore, errorChan, "转换表权限", filteredTables, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertTablePrivileges)
 
 				// 检查是否有错误
 				if err := drainErrors(errorChan); err != nil {
@@ -930,32 +747,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n1. 开始转换表结构...")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-			for i := 0; i < len(tables); i += batchSize {
-				end := i + batchSize
-				if end > len(tables) {
-					end = len(tables)
-				}
-
-				batch := tables[i:end]
-				wg.Add(1)
-				go func(batch []mysql.TableInfo) {
-					defer wg.Done()
-					if err := m.convertTables(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待表DDL同步完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表结构",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(tables),
-			})
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表结构", tables, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertTables)
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -968,32 +760,10 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n2. 同步表数据...")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-			for i := 0; i < len(tables); i += batchSize {
-				end := i + batchSize
-				if end > len(tables) {
-					end = len(tables)
-				}
-
-				batch := tables[i:end]
-				wg.Add(1)
-				go func(batch []mysql.TableInfo) {
-					defer wg.Done()
-					if err := m.syncTableData(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待表数据同步完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "同步表数据",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(tables),
-			})
+			// P1-07：与全选项路径一致，按配置开启一致性快照
+			m.beginSnapshotIfEnabled()
+			runBatchStage(m, &wg, semaphore, errorChan, "同步表数据", tables, m.config.Conversion.Limits.MaxDDLPerBatch, m.syncTableData)
+			m.mysqlConn.EndConsistentSnapshot()
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -1001,37 +771,12 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			}
 		}
 
-		// 第二阶段：执行视图转换（如果启用）
+		// 第三阶段：执行视图转换（如果启用）
 		if m.config.Conversion.Options.View && len(views) > 0 {
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n3. 转换表视图...")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-			for i := 0; i < len(views); i += batchSize {
-				end := i + batchSize
-				if end > len(views) {
-					end = len(views)
-				}
-
-				batch := views[i:end]
-				wg.Add(1)
-				go func(batch []mysql.ViewInfo) {
-					defer wg.Done()
-					if err := m.convertViews(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待视图转换完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表视图",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(views),
-			})
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表视图", views, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertViews)
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -1044,32 +789,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n4. 转换表索引...")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxIndexesPerBatch
-			for i := 0; i < len(indexes); i += batchSize {
-				end := i + batchSize
-				if end > len(indexes) {
-					end = len(indexes)
-				}
-
-				batch := indexes[i:end]
-				wg.Add(1)
-				go func(batch []mysql.IndexInfo) {
-					defer wg.Done()
-					if err := m.convertIndexes(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待索引同步完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表索引",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(indexes),
-			})
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表索引", indexes, m.config.Conversion.Limits.MaxIndexesPerBatch, m.convertIndexes)
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -1083,32 +803,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				if m.config.Run.ShowConsoleLogs {
 					fmt.Println("\n5. 开始转换函数...")
 				}
-				// 记录开始时间
-				startTime := time.Now()
-				batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-				for i := 0; i < len(functions); i += batchSize {
-					end := i + batchSize
-					if end > len(functions) {
-						end = len(functions)
-					}
-
-					batch := functions[i:end]
-					wg.Add(1)
-					go func(batch []mysql.FunctionInfo) {
-						defer wg.Done()
-						if err := m.convertFunctions(batch, semaphore); err != nil {
-							errorChan <- err
-						}
-					}(batch)
-				}
-				wg.Wait() // 等待函数同步完成
-				// 记录结束时间和对象数量
-				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "转换函数",
-					StartTime:   startTime,
-					EndTime:     time.Now(),
-					ObjectCount: len(functions),
-				})
+				runBatchStage(m, &wg, semaphore, errorChan, "转换函数", functions, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertFunctions)
 
 				// 检查是否有错误
 				if err := drainErrors(errorChan); err != nil {
@@ -1130,32 +825,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 				if m.config.Run.ShowConsoleLogs {
 					fmt.Println("\n6. 开始转换用户...")
 				}
-				// 记录开始时间
-				startTime := time.Now()
-				batchSize := m.config.Conversion.Limits.MaxUsersPerBatch
-				for i := 0; i < len(users); i += batchSize {
-					end := i + batchSize
-					if end > len(users) {
-						end = len(users)
-					}
-
-					batch := users[i:end]
-					wg.Add(1)
-					go func(batch []mysql.UserInfo) {
-						defer wg.Done()
-						if err := m.convertUsers(batch, semaphore); err != nil {
-							errorChan <- err
-						}
-					}(batch)
-				}
-				wg.Wait() // 等待用户同步完成
-				// 记录结束时间和对象数量
-				m.conversionStats = append(m.conversionStats, ConversionStageStat{
-					StageName:   "转换库用户",
-					StartTime:   startTime,
-					EndTime:     time.Now(),
-					ObjectCount: len(users),
-				})
+				runBatchStage(m, &wg, semaphore, errorChan, "转换库用户", users, m.config.Conversion.Limits.MaxUsersPerBatch, m.convertUsers)
 
 				// 检查是否有错误
 				if err := drainErrors(errorChan); err != nil {
@@ -1176,32 +846,7 @@ func (m *Manager) executeConversion(tables []mysql.TableInfo, functions []mysql.
 			if m.config.Run.ShowConsoleLogs {
 				fmt.Println("\n7. 转换表权限...")
 			}
-			// 记录开始时间
-			startTime := time.Now()
-			batchSize := m.config.Conversion.Limits.MaxDDLPerBatch
-			for i := 0; i < len(tables); i += batchSize {
-				end := i + batchSize
-				if end > len(tables) {
-					end = len(tables)
-				}
-
-				batch := tables[i:end]
-				wg.Add(1)
-				go func(batch []mysql.TableInfo) {
-					defer wg.Done()
-					if err := m.convertTablePrivileges(batch, semaphore); err != nil {
-						errorChan <- err
-					}
-				}(batch)
-			}
-			wg.Wait() // 等待权限转换完成
-			// 记录结束时间和对象数量
-			m.conversionStats = append(m.conversionStats, ConversionStageStat{
-				StageName:   "转换表权限",
-				StartTime:   startTime,
-				EndTime:     time.Now(),
-				ObjectCount: len(tables),
-			})
+			runBatchStage(m, &wg, semaphore, errorChan, "转换表权限", tables, m.config.Conversion.Limits.MaxDDLPerBatch, m.convertTablePrivileges)
 
 			// 检查是否有错误
 			if err := drainErrors(errorChan); err != nil {
@@ -2100,6 +1745,7 @@ func (m *Manager) displayConversionWarnings() {
 		return
 	}
 
+	/***
 	if m.config.Run.ShowConsoleLogs {
 		fmt.Printf("\n以下 %d 项语义在转换中被降级或丢弃，请复核:\n", len(warnings))
 		for _, w := range warnings {
@@ -2110,6 +1756,7 @@ func (m *Manager) displayConversionWarnings() {
 	for _, w := range warnings {
 		m.Log("  - [%s] %s: %s", w.Category, w.Object, w.Detail)
 	}
+		***/
 }
 
 // displayPasswordResetUsers 显示迁移后需要人工重置密码的用户清单（issue-10）

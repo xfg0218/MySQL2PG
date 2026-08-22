@@ -2,8 +2,28 @@ package mysql
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 )
+
+// TestBuildUsersQuery P3-05：系统用户排除按官方命名空间规则，
+// 不再依赖含重复项和生造账号的枚举清单
+func TestBuildUsersQuery(t *testing.T) {
+	query := buildUsersQuery()
+
+	if !strings.Contains(query, `user NOT LIKE 'mysql.%'`) {
+		t.Errorf("应按 mysql.%% 前缀排除内置账号：%s", query)
+	}
+	if !strings.Contains(query, `user != 'root'`) {
+		t.Errorf("应排除 root：%s", query)
+	}
+	// 不应再出现逐个枚举（旧清单有重复与生造账号）
+	for _, legacy := range []string{"mysql.pfsadmin", "mysql.sys", "pfs_role_admin", "debian-sys-maint"} {
+		if strings.Contains(query, legacy) {
+			t.Errorf("查询不应再逐个枚举内置账号（%s）：%s", legacy, query)
+		}
+	}
+}
 
 // TestAppendIndexRow_FunctionalNullColumn P2-01：函数索引部件的 NULL 列名
 // 只标记 IsFunctional，不得报错或写入空列名

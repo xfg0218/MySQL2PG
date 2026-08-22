@@ -3,12 +3,72 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/yourusername/mysql2pg/internal/config"
 	"github.com/yourusername/mysql2pg/internal/mysql"
 )
+
+// TestRunBatchStage P3-08：阶段执行器语义——切批并行执行、
+// 对象恰好处理一次、阶段统计落账、错误进入聚合通道
+func TestRunBatchStage(t *testing.T) {
+	t.Run("切批并行并记录统计", func(t *testing.T) {
+		m := &Manager{}
+		var wg sync.WaitGroup
+		semaphore := make(chan struct{}, 2)
+		errorChan := make(chan error, 8)
+
+		var mu sync.Mutex
+		seen := map[string]int{}
+		stageFn := func(batch []string, sem chan struct{}) error {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			mu.Lock()
+			for _, s := range batch {
+				seen[s]++
+			}
+			mu.Unlock()
+			return nil
+		}
+
+		runBatchStage(m, &wg, semaphore, errorChan, "测试阶段", []string{"a", "b", "c", "d", "e"}, 2, stageFn)
+
+		for _, k := range []string{"a", "b", "c", "d", "e"} {
+			if seen[k] != 1 {
+				t.Errorf("对象 %s 处理次数 = %d, want 1", k, seen[k])
+			}
+		}
+		if len(m.conversionStats) != 1 {
+			t.Fatalf("统计条数 = %d, want 1", len(m.conversionStats))
+		}
+		if stat := m.conversionStats[0]; stat.StageName != "测试阶段" || stat.ObjectCount != 5 {
+			t.Errorf("统计内容错误: %+v", stat)
+		}
+		if err := drainErrors(errorChan); err != nil {
+			t.Errorf("不应有错误：%v", err)
+		}
+	})
+
+	t.Run("阶段错误进入聚合通道", func(t *testing.T) {
+		m := &Manager{}
+		var wg sync.WaitGroup
+		semaphore := make(chan struct{}, 1)
+		errorChan := make(chan error, 4)
+
+		stageFn := func(batch []int, sem chan struct{}) error {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			return fmt.Errorf("批次处理失败")
+		}
+		runBatchStage(m, &wg, semaphore, errorChan, "失败阶段", []int{1, 2, 3}, 1, stageFn)
+
+		if err := drainErrors(errorChan); err == nil {
+			t.Fatal("应聚合到阶段错误")
+		}
+	})
+}
 
 // TestManagerContextNilSafe 未通过 NewManager 构造的 Manager
 // context() 必须回退为 context.Background()，保证测试与直接构造场景的 nil 安全
