@@ -599,7 +599,7 @@ func displayProgressNoLock(update progressUpdate) {
 		}
 	}
 
-	fmt.Printf("%s%s📊 %.1f%% | %s | %s | %s/%s rows | %s | ETA: %s",
+	fmt.Printf("%s%s %.1f%% | %s | %s | %s/%s rows | %s | ETA: %s",
 		ansiClearLine,
 		ansiCarriageReturn,
 		progress,
@@ -669,7 +669,7 @@ func displayProgress(tableName string, processedRows int64, totalRows int64, sta
 			}
 		}
 
-		fmt.Printf("%s%s📊 %.1f%% | %s | %s | %s/%s rows | %s | ETA: %s",
+		fmt.Printf("%s%s %.1f%% | %s | %s | %s/%s rows | %s | ETA: %s",
 			ansiClearLine,
 			ansiCarriageReturn,
 			progress,

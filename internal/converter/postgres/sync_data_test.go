@@ -22,7 +22,7 @@ func benchmarkDisplayProgressMutex(tableName string, processedRows int64, totalR
 	bar := strings.Repeat("█", filledLength) + strings.Repeat("░", barLength-filledLength)
 
 	benchmarkMutex.Lock()
-	fmt.Printf("\r📊 %.1f%% | %s | %s", progress, tableName, bar)
+	fmt.Printf("\r %.1f%% | %s | %s", progress, tableName, bar)
 	benchmarkMutex.Unlock()
 }
 
