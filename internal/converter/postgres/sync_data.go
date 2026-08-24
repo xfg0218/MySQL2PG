@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,17 +141,11 @@ type progressUpdate struct {
 // SyncTableData 同步表数据（主协调函数）
 // ctx 为根 context（通常来自 signal.NotifyContext）：取消后停止派发新表，
 // 已派发表的进行中批次会完整提交后再退出
-func SyncTableData(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), updateProgress func(), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}, progressChan chan progressUpdate) error {
-	// 启动专用进度消费者 goroutine
+func SyncTableData(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), updateProgress func(), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, tables []mysql.TableInfo, semaphore chan struct{}, progressChan chan progressUpdate, printer *progressPrinter) error {
+	// 启动专用进度消费者 goroutine：高频更新合并渲染，通道关闭时渲染最终状态并收尾换行
 	progressDone := make(chan struct{})
 	go func() {
-		var lastUpdate time.Time
-		for update := range progressChan {
-			if time.Since(lastUpdate) >= progressUpdateInterval {
-				displayProgressNoLock(update)
-				lastUpdate = time.Now()
-			}
-		}
+		consumeProgressUpdates(progressChan, printer)
 		close(progressDone)
 	}()
 
@@ -176,7 +172,7 @@ func SyncTableData(ctx context.Context, mysqlConn *mysql.Connection, postgresCon
 				}()
 
 				// 执行单表同步
-				err := syncSingleTable(ctx, mysqlConn, postgresConn, config, table, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, progressChan)
+				err := syncSingleTable(ctx, mysqlConn, postgresConn, config, table, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, progressChan, printer)
 				if err != nil {
 					select {
 					case errorChan <- err:
@@ -228,7 +224,7 @@ func SyncTableData(ctx context.Context, mysqlConn *mysql.Connection, postgresCon
 // syncSingleTable 同步单个表的数据
 // ctx 为根 context：仅用于取消检查与批次前置操作；
 // 进行中批次的 DB 操作使用脱离取消信号的批次 context（见 paginateAndInsert）
-func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, progressChan chan progressUpdate) error {
+func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, progressChan chan progressUpdate, printer *progressPrinter) error {
 	// 获取表列信息
 	columns, columnTypes, err := mysqlConn.GetTableColumnsWithTypes(table.Name)
 	if err != nil {
@@ -247,7 +243,7 @@ func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresC
 
 	// 如果表为空，处理空表逻辑
 	if totalRows == 0 {
-		return handleEmptyTable(postgresConn, config, table.Name, table.DDL, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables)
+		return handleEmptyTable(postgresConn, config, table.Name, table.DDL, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, printer)
 	}
 
 	// 取消检查：开始实际写入前若已取消则直接退出
@@ -279,14 +275,14 @@ func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresC
 	backfillAutoIncrementSequence(postgresConn, config, table.Name, table.DDL, log, logError)
 
 	// 显示同步成功信息
-	logSyncComplete(config, table.Name, processedRows, validationResult, log, logError, completedTasks, totalTasks)
+	logSyncComplete(config, table.Name, processedRows, validationResult, log, logError, completedTasks, totalTasks, printer)
 
 	return nil
 }
 
 // handleEmptyTable 处理空表逻辑
 // mysqlDDL 用于解析表级 AUTO_INCREMENT=N：空表也可能带有业务故意设置的自增起始值
-func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, tableName, mysqlDDL string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency) error {
+func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, tableName, mysqlDDL string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, completedTasks *atomic.Int64, totalTasks int, inconsistentTables *[]TableDataInconsistency, printer *progressPrinter) error {
 	log("表 %s 没有数据，跳过同步", tableName)
 
 	// 回填自增列序列：空表也可能通过 AUTO_INCREMENT=N 指定了起始值
@@ -325,7 +321,7 @@ func handleEmptyTable(postgresConn *postgres.Connection, config *config.Config, 
 		completed := completedTasks.Load()
 		overallProgress := float64(completed) / float64(totalTasks) * 100
 		currentTask := completed + 1
-		fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 数据成功，共有 0 行数据，%s \n", overallProgress, currentTask, totalTasks, tableName, validationResult)
+		printer.println("进度: %.2f%% (%d/%d) : 同步表 %s 数据成功，共有 0 行数据，%s", overallProgress, currentTask, totalTasks, tableName, validationResult)
 	}
 
 	log("表 %s 同步完成，0 行数据，%s", tableName, validationResult)
@@ -359,14 +355,6 @@ func truncateTable(ctx context.Context, postgresConn *postgres.Connection, table
 	}
 
 	return nil
-}
-
-// 进度条状态跟踪
-type progressState struct {
-	lastBarLength int
-	lastProgress  float64
-	syncStartTime time.Time
-	totalRows     int64
 }
 
 // paginateAndInsert 分页读取 MySQL 数据并批量插入 PostgreSQL
@@ -446,11 +434,8 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 	// 同步数据
 	var processedRows int64
 
-	// 进度条状态跟踪
-	state := &progressState{
-		syncStartTime: time.Now(),
-		totalRows:     totalRows,
-	}
+	// 进度条状态跟踪：起始时间用于计算速度与 ETA
+	syncStartTime := time.Now()
 
 	for {
 		// 取消检查：开启新批次前若已取消则停止，进行中的批次不受影响（完整提交）
@@ -533,10 +518,10 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 			break
 		}
 
-		// 显示同步进度（无锁 channel 方式）
-		if config.Run.ShowConsoleLogs {
+		// 显示同步进度（无锁 channel 方式）：由 show_progress 开关控制
+		if config.Run.ShowProgress {
 			select {
-			case progressChan <- progressUpdate{table.Name, processedRows, state.totalRows, time.Since(state.syncStartTime)}:
+			case progressChan <- progressUpdate{table.Name, processedRows, totalRows, time.Since(syncStartTime)}:
 			default:
 				// 通道满时丢弃，不阻塞工作 goroutine
 			}
@@ -546,8 +531,84 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 	return processedRows, nil
 }
 
-// displayProgressNoLock 无锁进度显示（由专用 goroutine 调用）
-func displayProgressNoLock(update progressUpdate) {
+// progressPrinter 协调数据同步阶段的控制台输出：
+// 进度行由专用消费者 goroutine 原地刷新（无尾部换行），其他输出（完成/错误/日志行）
+// 打印前必须先结束未收尾的进度行，否则会粘连或被 \033[2K 清行抹掉
+type progressPrinter struct {
+	mu       sync.Mutex
+	w        io.Writer
+	terminal bool // stdout 是否为终端：非终端禁用 ANSI 原地刷新
+	dirty    bool // 当前是否存在未换行收尾的进度行
+}
+
+// newProgressPrinter 创建写入 stdout 的进度输出器，自动检测终端能力
+func newProgressPrinter() *progressPrinter {
+	return &progressPrinter{w: os.Stdout, terminal: isTerminalOutput(os.Stdout)}
+}
+
+// isTerminalOutput 判断文件是否为终端（字符设备），仅用标准库实现
+func isTerminalOutput(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// render 原地刷新一行进度（仅终端模式），由专用消费者 goroutine 调用
+func (p *progressPrinter) render(update progressUpdate) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.terminal {
+		return
+	}
+	fmt.Fprintf(p.w, "%s%s %s", ansiClearLine, ansiCarriageReturn, formatProgressLine(update))
+	p.dirty = true
+}
+
+// println 打印普通行：先结束未收尾的进度行，保证输出独占新行
+func (p *progressPrinter) println(format string, args ...interface{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.dirty {
+		fmt.Fprint(p.w, "\n")
+		p.dirty = false
+	}
+	fmt.Fprintf(p.w, format+"\n", args...)
+}
+
+// endLine 结束未收尾的进度行（无进度行时为空操作）
+func (p *progressPrinter) endLine() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.dirty {
+		fmt.Fprint(p.w, "\n")
+		p.dirty = false
+	}
+}
+
+// consumeProgressUpdates 消费进度更新：高频更新只保留最新值（合并渲染），
+// 节流间隔到达时渲染；通道关闭后渲染最终状态并换行收尾，保证 100% 状态可见
+func consumeProgressUpdates(ch <-chan progressUpdate, p *progressPrinter) {
+	var latest *progressUpdate
+	var lastRender time.Time
+	for update := range ch {
+		u := update
+		latest = &u
+		if time.Since(lastRender) >= progressUpdateInterval {
+			p.render(*latest)
+			latest = nil
+			lastRender = time.Now()
+		}
+	}
+	if latest != nil {
+		p.render(*latest)
+	}
+	p.endLine()
+}
+
+// formatProgressLine 生成单行进度文本：百分比 | 表名 | 进度条 | 行数 | 速度 | ETA
+func formatProgressLine(update progressUpdate) string {
 	progress := float64(update.processedRows) / float64(update.totalRows) * 100
 	if progress > 100 {
 		progress = 100
@@ -573,22 +634,12 @@ func displayProgressNoLock(update progressUpdate) {
 	}
 
 	// 生成进度条
-	barLength := progressBarWidth
-	filledLength := int(progress / 100 * float64(barLength))
-	spaceCount := barLength - filledLength
+	filledLength := int(progress / 100 * float64(progressBarWidth))
+	spaceCount := progressBarWidth - filledLength
 	if spaceCount < 0 {
 		spaceCount = 0
 	}
 	bar := strings.Repeat("█", filledLength) + strings.Repeat("░", spaceCount)
-
-	// 格式化数字带千位分隔符
-	formatRows := func(n int64) string {
-		s := fmt.Sprintf("%d", n)
-		for i := len(s) - 3; i > 0; i -= 3 {
-			s = s[:i] + "," + s[i:]
-		}
-		return s
-	}
 
 	speedStr := ""
 	if speed > 0 {
@@ -599,9 +650,7 @@ func displayProgressNoLock(update progressUpdate) {
 		}
 	}
 
-	fmt.Printf("%s%s %.1f%% | %s | %s | %s/%s rows | %s | ETA: %s",
-		ansiClearLine,
-		ansiCarriageReturn,
+	return fmt.Sprintf("%.1f%% | %s | %s | %s/%s rows | %s | ETA: %s",
 		progress,
 		update.tableName,
 		bar,
@@ -611,78 +660,13 @@ func displayProgressNoLock(update progressUpdate) {
 		etaStr)
 }
 
-// displayProgress 显示同步进度
-func displayProgress(tableName string, processedRows int64, totalRows int64, state *progressState, lastProgressUpdate *time.Time, mutex *sync.Mutex) {
-	progress := float64(processedRows) / float64(totalRows) * 100
-	if progress > 100 {
-		progress = 100
+// formatRows 数字千位分隔符
+func formatRows(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
 	}
-
-	// 计算速度和ETA
-	elapsed := time.Since(state.syncStartTime).Seconds()
-	var speed float64
-	var etaStr string
-	if elapsed > 0 {
-		speed = float64(processedRows) / elapsed
-	}
-	remainingRows := totalRows - processedRows
-	if speed > 0 && remainingRows > 0 {
-		etaSeconds := float64(remainingRows) / speed
-		if etaSeconds < 60 {
-			etaStr = fmt.Sprintf("%.0fs", etaSeconds)
-		} else if etaSeconds < 3600 {
-			etaStr = fmt.Sprintf("%dm%ds", int(etaSeconds)/60, int(etaSeconds)%60)
-		} else {
-			etaStr = fmt.Sprintf("%dh%dm", int(etaSeconds)/3600, (int(etaSeconds)%3600)/60)
-		}
-	}
-
-	// 生成进度条
-	barLength := progressBarWidth
-	filledLength := int(progress / 100 * float64(barLength))
-	spaceCount := barLength - filledLength
-	if spaceCount < 0 {
-		spaceCount = 0
-	}
-	bar := strings.Repeat("█", filledLength) + strings.Repeat("░", spaceCount)
-
-	// 格式化数字带千位分隔符
-	formatRows := func(n int64) string {
-		s := fmt.Sprintf("%d", n)
-		for i := len(s) - 3; i > 0; i -= 3 {
-			s = s[:i] + "," + s[i:]
-		}
-		return s
-	}
-
-	// 时间驱动的进度刷新
-	now := time.Now()
-	if now.Sub(*lastProgressUpdate) >= progressUpdateInterval {
-		mutex.Lock()
-
-		speedStr := ""
-		if speed > 0 {
-			if speed >= 1000 {
-				speedStr = fmt.Sprintf("%.1fK rows/s", speed/1000)
-			} else {
-				speedStr = fmt.Sprintf("%.0f rows/s", speed)
-			}
-		}
-
-		fmt.Printf("%s%s %.1f%% | %s | %s | %s/%s rows | %s | ETA: %s",
-			ansiClearLine,
-			ansiCarriageReturn,
-			progress,
-			tableName,
-			bar,
-			formatRows(processedRows),
-			formatRows(totalRows),
-			speedStr,
-			etaStr)
-
-		*lastProgressUpdate = now
-		mutex.Unlock()
-	}
+	return s
 }
 
 // validateData 验证数据一致性
@@ -742,15 +726,16 @@ func evaluateRowCountValidation(tableName string, mysqlCount, pgCount int64, tru
 }
 
 // logSyncComplete 记录同步完成信息
-func logSyncComplete(config *config.Config, tableName string, processedRows int64, validationResult string, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), completedTasks *atomic.Int64, totalTasks int) {
+func logSyncComplete(config *config.Config, tableName string, processedRows int64, validationResult string, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), completedTasks *atomic.Int64, totalTasks int, printer *progressPrinter) {
 	// 显示同步成功信息（根据配置决定是否在控制台显示）
 	if config.Run.ShowConsoleLogs {
 		completed := completedTasks.Load()
 		overallProgress := float64(completed) / float64(totalTasks) * 100
 		currentTask := completed + 1
-		fmt.Printf("进度: %.2f%% (%d/%d) : 同步表 %s 完成，%d 行数据，%s\n", overallProgress, currentTask, totalTasks, tableName, processedRows, validationResult)
+		printer.println("进度: %.2f%% (%d/%d) : 同步表 %s 完成，%d 行数据，%s", overallProgress, currentTask, totalTasks, tableName, processedRows, validationResult)
 	}
 
 	// 记录同步完成信息
-	log("\n分页同步表 %s 完成，%d 行数据，%s", tableName, processedRows, validationResult)
+	// 不能带前导换行：日志按行解析，时间戳必须与内容同行才能被 report parser 识别
+	log("分页同步表 %s 完成，%d 行数据，%s", tableName, processedRows, validationResult)
 }

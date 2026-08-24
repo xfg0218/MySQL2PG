@@ -76,6 +76,9 @@ type Manager struct {
 	assessmentMode bool
 	// 评估结果（仅在评估模式下填充）
 	assessmentResults *AssessmentResults
+	// 数据同步阶段的进度行守卫：控制台输出普通行前先结束未收尾的进度行，避免粘连。
+	// 写入发生在同步 worker 启动前与全部结束后，不存在并发读写
+	progressLineGuard *progressPrinter
 }
 
 // AssessmentResults 评估结果
@@ -1427,6 +1430,10 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 // syncTableData 同步表数据
 func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	progressChan := make(chan progressUpdate, m.config.Conversion.Limits.Concurrency)
+	printer := newProgressPrinter()
+	// 注册进度行守卫：数据同步期间 log/logError 的控制台输出先结束未收尾的进度行
+	m.progressLineGuard = printer
+	defer func() { m.progressLineGuard = nil }()
 	return SyncTableData(
 		m.context(),
 		m.mysqlConn,
@@ -1442,6 +1449,7 @@ func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{
 		tables,
 		semaphore,
 		progressChan,
+		printer,
 	)
 }
 
@@ -1588,6 +1596,9 @@ func (m *Manager) Log(format string, args ...interface{}) {
 
 	// 根据配置决定是否在控制台显示
 	if m.config.Run.ShowLogInConsole {
+		if m.progressLineGuard != nil {
+			m.progressLineGuard.endLine()
+		}
 		fmt.Println(logMsg)
 	}
 }
@@ -1613,6 +1624,9 @@ func (m *Manager) logError(errMsg string, args ...interface{}) {
 
 	// 根据配置决定是否在控制台显示
 	if m.config.Run.ShowConsoleLogs {
+		if m.progressLineGuard != nil {
+			m.progressLineGuard.endLine()
+		}
 		fmt.Printf("错误: %s\n", errMsg)
 	}
 }

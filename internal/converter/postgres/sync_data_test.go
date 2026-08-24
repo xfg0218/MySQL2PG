@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"sync"
@@ -252,5 +253,152 @@ func TestEvaluateRowCountValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestProgressPrinterRenderNonTerminal 非终端模式：原地刷新被禁用，不产生任何输出
+func TestProgressPrinterRenderNonTerminal(t *testing.T) {
+	var buf bytes.Buffer
+	p := &progressPrinter{w: &buf, terminal: false}
+
+	p.render(progressUpdate{tableName: "t1", processedRows: 50, totalRows: 100, elapsed: time.Second})
+	if buf.Len() != 0 {
+		t.Errorf("非终端模式不应输出进度行，实际: %q", buf.String())
+	}
+
+	p.endLine()
+	if buf.Len() != 0 {
+		t.Errorf("非终端模式 endLine 不应输出，实际: %q", buf.String())
+	}
+
+	// println 在非终端模式下仍应正常输出（完成行不依赖 ANSI）
+	p.println("done %d", 1)
+	if buf.String() != "done 1\n" {
+		t.Errorf("非终端模式 println 应正常输出，实际: %q", buf.String())
+	}
+}
+
+// TestProgressPrinterRenderAndEndLine 终端模式：渲染置脏、进度行不带换行、endLine 收尾
+func TestProgressPrinterRenderAndEndLine(t *testing.T) {
+	var buf bytes.Buffer
+	p := &progressPrinter{w: &buf, terminal: true}
+
+	p.render(progressUpdate{tableName: "t1", processedRows: 50, totalRows: 100, elapsed: time.Second})
+	out := buf.String()
+	if !strings.HasPrefix(out, ansiClearLine+ansiCarriageReturn) {
+		t.Errorf("渲染应以清行+回车开头，实际: %q", out)
+	}
+	if !strings.Contains(out, "50.0%") || !strings.Contains(out, "t1") {
+		t.Errorf("渲染应包含百分比与表名，实际: %q", out)
+	}
+	if strings.HasSuffix(out, "\n") {
+		t.Errorf("进度行不应带换行符，实际: %q", out)
+	}
+
+	buf.Reset()
+	p.endLine()
+	if buf.String() != "\n" {
+		t.Errorf("dirty 状态 endLine 应输出换行，实际: %q", buf.String())
+	}
+
+	buf.Reset()
+	p.endLine()
+	if buf.Len() != 0 {
+		t.Errorf("干净状态 endLine 不应输出，实际: %q", buf.String())
+	}
+}
+
+// TestProgressPrinterPrintln 普通行先结束未收尾的进度行再输出
+func TestProgressPrinterPrintln(t *testing.T) {
+	var buf bytes.Buffer
+	p := &progressPrinter{w: &buf, terminal: true}
+
+	// 无进度行时直接输出
+	p.println("进度: %.2f%%", 50.0)
+	if buf.String() != "进度: 50.00%\n" {
+		t.Errorf("println 输出不符，实际: %q", buf.String())
+	}
+
+	// 有未收尾进度行时先换行，避免粘连
+	buf.Reset()
+	p.render(progressUpdate{tableName: "t1", processedRows: 100, totalRows: 100, elapsed: time.Second})
+	buf.Reset()
+	p.println("done")
+	if buf.String() != "\ndone\n" {
+		t.Errorf("dirty 状态 println 应先换行再输出，实际: %q", buf.String())
+	}
+}
+
+// TestConsumeProgressUpdatesFinalRender 通道关闭后渲染最终状态并换行收尾
+func TestConsumeProgressUpdatesFinalRender(t *testing.T) {
+	var buf bytes.Buffer
+	p := &progressPrinter{w: &buf, terminal: true}
+	ch := make(chan progressUpdate, 4)
+
+	// 连续快速发送（间隔远小于节流窗口），最终状态必须被渲染
+	for i := int64(1); i <= 3; i++ {
+		ch <- progressUpdate{tableName: "t1", processedRows: i * 10, totalRows: 30, elapsed: time.Duration(i) * time.Millisecond}
+	}
+	close(ch)
+	consumeProgressUpdates(ch, p)
+
+	out := buf.String()
+	if !strings.Contains(out, "100.0%") {
+		t.Errorf("关闭后应渲染最终 100.0%% 状态，实际: %q", out)
+	}
+	if !strings.Contains(out, "30/30 rows") {
+		t.Errorf("关闭后应渲染最终行数，实际: %q", out)
+	}
+	if !strings.HasSuffix(out, "\n") {
+		t.Errorf("收尾应换行，实际: %q", out)
+	}
+}
+
+// TestConsumeProgressUpdatesEmpty 无更新的空通道：不输出任何内容
+func TestConsumeProgressUpdatesEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	p := &progressPrinter{w: &buf, terminal: true}
+	ch := make(chan progressUpdate)
+	close(ch)
+
+	consumeProgressUpdates(ch, p)
+	if buf.Len() != 0 {
+		t.Errorf("空通道不应有输出，实际: %q", buf.String())
+	}
+}
+
+// TestFormatProgressLine 进度行格式：百分比封顶、千位分隔符
+func TestFormatProgressLine(t *testing.T) {
+	line := formatProgressLine(progressUpdate{tableName: "orders", processedRows: 1234567, totalRows: 1234567, elapsed: 2 * time.Second})
+	if !strings.Contains(line, "100.0%") {
+		t.Errorf("行数相等应显示 100.0%%，实际: %q", line)
+	}
+	if !strings.Contains(line, "1,234,567/1,234,567 rows") {
+		t.Errorf("千位分隔符格式不符，实际: %q", line)
+	}
+
+	// processedRows 超过 totalRows 时百分比封顶 100
+	over := formatProgressLine(progressUpdate{tableName: "t", processedRows: 200, totalRows: 100, elapsed: time.Second})
+	if !strings.Contains(over, "100.0%") {
+		t.Errorf("百分比应封顶 100，实际: %q", over)
+	}
+}
+
+// TestFormatRows 千位分隔符边界值
+func TestFormatRows(t *testing.T) {
+	tests := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0"},
+		{999, "999"},
+		{1000, "1,000"},
+		{1234567, "1,234,567"},
+		{100000000, "100,000,000"},
+	}
+	for _, tt := range tests {
+		if got := formatRows(tt.in); got != tt.want {
+			t.Errorf("formatRows(%d) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
