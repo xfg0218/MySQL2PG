@@ -745,22 +745,23 @@ func (c *Connection) GetFunctions() ([]FunctionInfo, error) {
 	return functions, nil
 }
 
+// buildUsersQuery 构造用户列表查询（P3-05）。
+// MySQL 内置账号全部位于 mysql.* 命名空间（官方清单：mysql.sys、mysql.session、
+// mysql.infoschema、mysql.pfsadmin，以及 Debian/Ubuntu 包的 mysql.debian-sys-maint），
+// 统一用前缀规则排除，不再逐个枚举——旧清单既重复（mysql.pfsadmin 写了两次）
+// 又包含生造账号（mysql.pfs_role_admin_role_role_role 等不存在的名字）。
+// root 单独排除：迁移工具自身即以 root（或等价管理账号）连接源库
+func buildUsersQuery() string {
+	return `
+		SELECT user, host, authentication_string, plugin
+		FROM mysql.user
+		WHERE user != 'root' AND user NOT LIKE 'mysql.%'`
+}
+
 // GetUsers 获取所有用户信息
 // 同时读取 authentication_string 与 plugin 以感知密码状态（密码本身不可迁移，issue-10）
 func (c *Connection) GetUsers() ([]UserInfo, error) {
-	// MySQL中获取用户权限
-	rows, err := c.db.QueryContext(c.context(), `
-		SELECT user, host, authentication_string, plugin
-		FROM mysql.user 
-		WHERE user != 'root' AND user != 'mysql.sys' AND
-		user != 'mysql.session' AND user != 'mysql.infoschema' AND
-		user != 'mysql.pfsadmin' AND user != 'mysql.pfs' AND
-		user != 'mysql.pfs_admin' AND user != 'mysql.pfs_admin_role' AND
-		user != 'mysql.pfs_role_admin' AND user != 'mysql.pfs_role_admin_role' AND
-		user != 'mysql.pfs_role_admin_role_role' AND
-		user != 'mysql.pfs_role_admin_role_role_role' AND user != 'mysql.pfsadmin' AND
-		user != 'mysql.debian-sys-maint'
-	`)
+	rows, err := c.db.QueryContext(c.context(), buildUsersQuery())
 	if err != nil {
 		return nil, fmt.Errorf("获取用户列表失败: %w", err)
 	}
