@@ -130,6 +130,41 @@ func adaptiveBatchSizes(readBatch int64, insertBatch int, rowWidth int) (int64, 
 	return readBatch, insertBatch
 }
 
+// buildOffsetOrderBy 为无主键表的 OFFSET 分页生成确定性排序子句（全列排序）。
+// JSON 与空间类型不可直接参与 ORDER BY，予以排除；若无可排序列返回空字符串，
+// 由调用方输出警告。列名用反引号包裹并转义内嵌反引号。
+// 注意：TEXT/BLOB 排序受 MySQL max_sort_length 前缀限制，
+// 前缀完全相同的超长文本之间仍可能乱序（概率极低且不影响其他场景）
+func buildOffsetOrderBy(columns []string, columnTypes map[string]string) string {
+	quoted := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if !isSortableColumnType(columnTypes[col]) {
+			continue
+		}
+		quoted = append(quoted, "`"+strings.ReplaceAll(col, "`", "``")+"`")
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// isSortableColumnType 判断列类型是否可直接参与 ORDER BY。
+// JSON 与空间类型在 MySQL 中不可直接排序，必须排除；未知类型按可排序处理
+func isSortableColumnType(rawType string) bool {
+	t := strings.ToLower(strings.TrimSpace(rawType))
+	if strings.HasPrefix(t, "json") {
+		return false
+	}
+	unsortablePrefixes := []string{
+		"geometry", "geomcollection", "geometrycollection", "point",
+		"linestring", "polygon", "multipoint", "multilinestring", "multipolygon",
+	}
+	for _, prefix := range unsortablePrefixes {
+		if strings.HasPrefix(t, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
 // progressUpdate 无锁进度更新类型
 type progressUpdate struct {
 	tableName     string
@@ -339,7 +374,7 @@ func truncateTable(ctx context.Context, postgresConn *postgres.Connection, table
 		return fmt.Errorf("开始事务失败: %w", err)
 	}
 
-	truncateQuery := fmt.Sprintf("TRUNCATE TABLE \"%s\"", tableName)
+	truncateQuery := fmt.Sprintf("TRUNCATE TABLE %s", quotePGIdentifier(tableName))
 	if _, err := tx.Exec(ctx, truncateQuery); err != nil {
 		errMsg := fmt.Sprintf("清空表 %s 数据失败: %v", tableName, err)
 		logError(errMsg)
@@ -427,7 +462,14 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 			useStreaming = true
 			log("表 %s 无主键（%d 行），采用流式读取", table.Name, totalRows)
 		} else {
-			log("警告: 表 %s 无主键且行数较大（%d 行），采用 OFFSET 分页（复杂度 O(n²)，建议源表添加主键）", table.Name, totalRows)
+			// OFFSET 分页必须配合确定性排序：MySQL 对无 ORDER BY 的查询不保证行序，
+			// 跨页扫描可能重复或漏行。全列排序保证全序，代价是每页查询需额外排序开销
+			orderBy = buildOffsetOrderBy(columns, columnTypes)
+			if orderBy == "" {
+				log("警告: 表 %s 无主键且行数较大（%d 行），采用 OFFSET 分页（复杂度 O(n²)），且无可排序列，无法保证分页确定性，跨页可能重复或漏行，建议源表添加主键", table.Name, totalRows)
+			} else {
+				log("警告: 表 %s 无主键且行数较大（%d 行），采用 OFFSET 分页（复杂度 O(n²)，已启用全列排序保证确定性），建议源表添加主键", table.Name, totalRows)
+			}
 		}
 	}
 

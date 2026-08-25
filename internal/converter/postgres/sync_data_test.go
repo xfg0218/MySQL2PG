@@ -402,3 +402,69 @@ func TestFormatRows(t *testing.T) {
 		}
 	}
 }
+
+// TestIsSortableColumnType JSON 与空间类型不可排序，其余类型可排序
+func TestIsSortableColumnType(t *testing.T) {
+	sortable := []string{
+		"int(11)", "bigint", "varchar(255)", "text", "longtext",
+		"datetime", "decimal(10,2)", "enum('a','b')", "TINYINT(1)", "",
+	}
+	for _, typ := range sortable {
+		if !isSortableColumnType(typ) {
+			t.Errorf("类型 %q 应可排序", typ)
+		}
+	}
+
+	unsortable := []string{
+		"json", "JSON", "geometry", "point", "linestring", "polygon",
+		"multipoint", "multilinestring", "multipolygon",
+		"geometrycollection", "GEOMCOLLECTION",
+	}
+	for _, typ := range unsortable {
+		if isSortableColumnType(typ) {
+			t.Errorf("类型 %q 应不可排序", typ)
+		}
+	}
+}
+
+// TestBuildOffsetOrderBy 全列排序子句：反引号包裹、内嵌转义、JSON/空间列排除
+func TestBuildOffsetOrderBy(t *testing.T) {
+	tests := []struct {
+		name        string
+		columns     []string
+		columnTypes map[string]string
+		want        string
+	}{
+		{
+			name:        "普通列",
+			columns:     []string{"id", "name"},
+			columnTypes: map[string]string{"id": "int(11)", "name": "varchar(255)"},
+			want:        "`id`, `name`",
+		},
+		{
+			name:        "排除 json 与空间类型",
+			columns:     []string{"id", "doc", "geo"},
+			columnTypes: map[string]string{"id": "int(11)", "doc": "json", "geo": "point"},
+			want:        "`id`",
+		},
+		{
+			name:        "列名内嵌反引号转义",
+			columns:     []string{"a`b"},
+			columnTypes: map[string]string{"a`b": "int(11)"},
+			want:        "`a``b`",
+		},
+		{
+			name:        "全部不可排序返回空",
+			columns:     []string{"doc", "geo"},
+			columnTypes: map[string]string{"doc": "json", "geo": "geometry"},
+			want:        "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildOffsetOrderBy(tt.columns, tt.columnTypes); got != tt.want {
+				t.Errorf("buildOffsetOrderBy() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
