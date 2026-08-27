@@ -183,8 +183,10 @@ mysql:
   max_open_conns: 100           # Max open connections (default: 100)
   max_idle_conns: 50            # Max idle connections (default: 50)
   conn_max_lifetime: 3600       # Connection lifetime in seconds (default: 3600)
-  connection_params: charset=utf8mb4&parseTime=false&interpolateParams=true
+  connection_params: charset=utf8mb4&interpolateParams=true
 ```
+
+> **注意**：`parseTime` 由工具强制开启（`buildMySQLDriverConfig`）。时间列（DATE/DATETIME/TIMESTAMP）依赖 `time.Time` 语义经 `sql.NullTime` 进入 `pgx.CopyFrom` 二进制协议；若允许用户在 `connection_params` 中将其置为 `false`，时间值会以字符串读回并导致 `timestamptz` 编码失败（`cannot find encode plan`）。此处配置该项会被忽略。
 
 ### PostgreSQL Connection
 

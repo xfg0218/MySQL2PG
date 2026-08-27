@@ -174,11 +174,14 @@ func makeTypedDest(colType string) typedDest {
 		if strings.Contains(lower, "bool") {
 			return typedDest{value: new(sql.NullBool)}
 		}
+		// date/datetime/timestamp 经 parseTime 以 time.Time 到达（见 buildMySQLDriverConfig），
+		// 用 NullTime 承接，使值以 time.Time 进入 pgx.CopyFrom 二进制协议
+		// （string/[]byte 对 timestamp/timestamptz 无 encode plan）
 		if strings.Contains(lower, "datetime") || strings.Contains(lower, "timestamp") {
-			return typedDest{value: new(sql.NullString), isTime: true}
+			return typedDest{value: new(sql.NullTime), isTime: true}
 		}
 		if strings.Contains(lower, "date") {
-			return typedDest{value: new(sql.NullString)}
+			return typedDest{value: new(sql.NullTime), isTime: true}
 		}
 		if strings.Contains(lower, "time") {
 			return typedDest{value: new(sql.NullString)}
@@ -202,6 +205,9 @@ func resetTypedDestinations(dests []typedDest) {
 			*v = sql.NullFloat64{}
 		case *sql.NullBool:
 			*v = sql.NullBool{}
+		case *sql.NullTime:
+			*v = sql.NullTime{}
+			dests[i].isTime = true
 		case *time.Time:
 			*v = time.Time{}
 			dests[i].isTime = true
@@ -246,6 +252,12 @@ func getTypedValue(dest *typedDest) interface{} {
 			return nil
 		}
 		return v.Bool
+	case *sql.NullTime:
+		// 零日期（0000-00-00...）被驱动解析为零值 time.Time 且 Valid=true，统一转 NULL
+		if !v.Valid || v.Time.IsZero() {
+			return nil
+		}
+		return v.Time
 	case *time.Time:
 		if v.IsZero() {
 			return nil

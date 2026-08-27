@@ -41,6 +41,23 @@ func (c *utcConnector) Driver() driver.Driver {
 	return c.base.Driver()
 }
 
+// buildMySQLDriverConfig 解析 DSN 并固化两个关键的驱动行为：
+//   - Loc 固定 UTC：与会话时区固定 UTC 保持一致，保证 parseTime 得到的时间值
+//     是正确的 UTC 墙钟时间（driver 默认即 UTC，此处显式覆盖，防止被用户连接参数中的 loc 覆盖）
+//   - ParseTime 强制开启：go-sql-driver 对重复 DSN 参数取最后一次出现的值，
+//     用户 connection_params 中的 parseTime=false 会覆盖内置设置，导致时间列以字符串读回、
+//     无法被 pgx.CopyFrom 二进制协议编码（timestamp/timestamptz）；
+//     时间值管道（sql.NullTime → time.Time → CopyFrom）依赖该设置
+func buildMySQLDriverConfig(dsn string) (*gmysql.Config, error) {
+	driverCfg, err := gmysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("解析MySQL连接串失败: %w", err)
+	}
+	driverCfg.Loc = time.UTC
+	driverCfg.ParseTime = true
+	return driverCfg, nil
+}
+
 // MySQLVersionInfo MySQL 版本信息
 type MySQLVersionInfo struct {
 	Major int
@@ -158,14 +175,10 @@ func NewConnection(ctx context.Context, config *config.MySQLConfig) (*Connection
 		dsn += config.ConnectionParams
 	}
 
-	driverCfg, err := gmysql.ParseDSN(dsn)
+	driverCfg, err := buildMySQLDriverConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("解析MySQL连接串失败: %w", err)
+		return nil, err
 	}
-	// 会话时区已固定为 UTC，客户端时间解析也必须使用 UTC，
-	// 二者一致才能保证 parseTime 得到的时间值是正确的 UTC 墙钟时间
-	// （driver 默认即 UTC，此处显式覆盖，防止被用户连接参数中的 loc 覆盖）
-	driverCfg.Loc = time.UTC
 
 	connector, err := gmysql.NewConnector(driverCfg)
 	if err != nil {
