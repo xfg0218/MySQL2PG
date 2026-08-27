@@ -87,7 +87,7 @@ func (c *Connection) GetTables(skipUseTableList bool, skipTableList []string, us
 		  AND table_type = 'BASE TABLE'
 		  AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
 	`
-	rows, err = c.db.QueryContext(c.context(), query, c.config.Database)
+	rows, err = queryWithRetry(c.context(), c.db, query, c.config.Database)
 
 	if err != nil {
 		// 如果失败，返回包含当前用户名的详细错误信息
@@ -311,7 +311,7 @@ func (c *Connection) getTableDDL(ctx context.Context, tableName string) (string,
 	var ddl string
 	query := fmt.Sprintf("SHOW CREATE TABLE `%s`", tableName)
 
-	rows, err := c.db.QueryContext(ctx, query)
+	rows, err := queryWithRetry(ctx, c.db, query)
 	if err != nil {
 		// 检查错误是否是因为权限不足导致的 SHOW VIEW 命令被拒绝
 		if strings.Contains(err.Error(), "SHOW VIEW command denied") || strings.Contains(err.Error(), "1142") {
