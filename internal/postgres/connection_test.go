@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 基准测试：多级 rowSlicePool vs 单级池
@@ -88,6 +89,15 @@ func TestMakeTypedDestUsesNullableTypes(t *testing.T) {
 		{name: "float", colType: "float", typeName: "*sql.NullFloat64"},
 		{name: "bool", colType: "boolean", typeName: "*sql.NullBool"},
 		{name: "varchar", colType: "varchar(64)", typeName: "*sql.NullString"},
+		// issue #156：date/datetime/timestamp 必须用 NullTime 承接 time.Time，
+		// 字符串对 pgx.CopyFrom 二进制协议的 timestamp/timestamptz 无 encode plan
+		{name: "date", colType: "date", typeName: "*sql.NullTime"},
+		{name: "datetime", colType: "datetime", typeName: "*sql.NullTime"},
+		{name: "datetime(6)", colType: "datetime(6)", typeName: "*sql.NullTime"},
+		{name: "timestamp", colType: "timestamp", typeName: "*sql.NullTime"},
+		{name: "timestamp(6)", colType: "timestamp(6)", typeName: "*sql.NullTime"},
+		// TIME 驱动不解析（无日期部分），保持字符串透传
+		{name: "time", colType: "time", typeName: "*sql.NullString"},
 	}
 
 	for _, tc := range cases {
@@ -110,8 +120,33 @@ func TestMakeTypedDestUsesNullableTypes(t *testing.T) {
 				if _, ok := dest.value.(*sql.NullBool); !ok {
 					t.Fatalf("期望 *sql.NullBool，实际 %T", dest.value)
 				}
+			case "*sql.NullTime":
+				if _, ok := dest.value.(*sql.NullTime); !ok {
+					t.Fatalf("期望 *sql.NullTime，实际 %T", dest.value)
+				}
 			}
 		})
+	}
+}
+
+// TestGetTypedValueNullTime issue #156：NullTime 值提取语义，
+// 零日期（驱动解析为零值 time.Time 且 Valid=true）统一转 NULL
+func TestGetTypedValueNullTime(t *testing.T) {
+	null := typedDest{value: &sql.NullTime{}}
+	if got := getTypedValue(&null); got != nil {
+		t.Fatalf("期望 nil，实际 %v", got)
+	}
+
+	zero := typedDest{value: &sql.NullTime{Time: time.Time{}, Valid: true}}
+	if got := getTypedValue(&zero); got != nil {
+		t.Fatalf("零日期应转 NULL，实际 %v", got)
+	}
+
+	ts := time.Date(2026, 7, 30, 2, 59, 34, 0, time.UTC)
+	valid := typedDest{value: &sql.NullTime{Time: ts, Valid: true}}
+	got, ok := getTypedValue(&valid).(time.Time)
+	if !ok || !got.Equal(ts) {
+		t.Fatalf("期望 %v，实际 %v", ts, getTypedValue(&valid))
 	}
 }
 
@@ -143,6 +178,7 @@ func TestResetTypedDestinationsResetsNullableState(t *testing.T) {
 		{value: &sql.NullString{String: "x", Valid: true}},
 		{value: &sql.NullFloat64{Float64: 1.2, Valid: true}},
 		{value: &sql.NullBool{Bool: true, Valid: true}},
+		{value: &sql.NullTime{Time: time.Date(2026, 7, 30, 2, 59, 34, 0, time.UTC), Valid: true}},
 	}
 
 	resetTypedDestinations(dests)
@@ -158,6 +194,9 @@ func TestResetTypedDestinationsResetsNullableState(t *testing.T) {
 	}
 	if v := dests[3].value.(*sql.NullBool); v.Valid || v.Bool {
 		t.Fatalf("NullBool 未正确重置: %+v", *v)
+	}
+	if v := dests[4].value.(*sql.NullTime); v.Valid || !v.Time.IsZero() {
+		t.Fatalf("NullTime 未正确重置: %+v", *v)
 	}
 }
 

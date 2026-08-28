@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -14,6 +15,59 @@ import (
 	gmysql "github.com/go-sql-driver/mysql"
 	"github.com/yourusername/mysql2pg/internal/config"
 )
+
+const (
+	// transientConnRetries 瞬时连接错误的最大重试次数
+	transientConnRetries = 2
+	// transientConnRetryBaseDelay 重试退避基础时长（第 n 次重试前等待 n 倍基础时长）
+	transientConnRetryBaseDelay = 200 * time.Millisecond
+)
+
+// isTransientConnError 判断是否为可重试的瞬时连接错误：
+// 链路抖动或服务端断开后，连接池中的死连接被取出使用时驱动返回这些错误，
+// 重新发起查询即可由连接池换新连接执行（database/sql 仅对 ErrBadConn 自动
+// 重试，其余错误会直接冒泡并终止整轮转换）
+func isTransientConnError(err error) bool {
+	return errors.Is(err, driver.ErrBadConn) ||
+		errors.Is(err, gmysql.ErrInvalidConn) ||
+		errors.Is(err, gmysql.ErrBusyBuffer)
+}
+
+// retryOnTransientConn 执行 fn，遇到瞬时连接错误时按线性退避重试；
+// 非连接错误立即返回，ctx 取消或重试次数耗尽时返回最后一次错误。
+// 仅用于查询发起阶段（尚未开始消费结果集），可安全重放；
+// 数据批次中途（Rows 迭代中）的失败不做自动重试，避免无幂等保障时重复写入
+func retryOnTransientConn(ctx context.Context, attempts int, baseDelay time.Duration, fn func() error) error {
+	var err error
+	for attempt := 0; attempt <= attempts; attempt++ {
+		if err = fn(); err == nil || !isTransientConnError(err) {
+			return err
+		}
+		if attempt == attempts {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(attempt+1) * baseDelay):
+		}
+	}
+	return err
+}
+
+// queryWithRetry 在给定执行器上发起查询，对瞬时连接错误有限重试。
+// 仅覆盖查询发起阶段；结果集迭代中的失败由调用方按表级错误处理
+func queryWithRetry(ctx context.Context, q interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+}, query string, args ...interface{}) (*sql.Rows, error) {
+	var rows *sql.Rows
+	err := retryOnTransientConn(ctx, transientConnRetries, transientConnRetryBaseDelay, func() error {
+		var qerr error
+		rows, qerr = q.QueryContext(ctx, query, args...)
+		return qerr
+	})
+	return rows, err
+}
 
 // utcConnector 包装 MySQL 驱动的 connector，在每个新建的连接上固定会话时区
 // MySQL TIMESTAMP 内部按 UTC 存储、存取时经会话时区与 UTC 互转；将会话时区固定为 UTC
@@ -39,6 +93,23 @@ func (c *utcConnector) Connect(ctx context.Context) (driver.Conn, error) {
 
 func (c *utcConnector) Driver() driver.Driver {
 	return c.base.Driver()
+}
+
+// buildMySQLDriverConfig 解析 DSN 并固化两个关键的驱动行为：
+//   - Loc 固定 UTC：与会话时区固定 UTC 保持一致，保证 parseTime 得到的时间值
+//     是正确的 UTC 墙钟时间（driver 默认即 UTC，此处显式覆盖，防止被用户连接参数中的 loc 覆盖）
+//   - ParseTime 强制开启：go-sql-driver 对重复 DSN 参数取最后一次出现的值，
+//     用户 connection_params 中的 parseTime=false 会覆盖内置设置，导致时间列以字符串读回、
+//     无法被 pgx.CopyFrom 二进制协议编码（timestamp/timestamptz）；
+//     时间值管道（sql.NullTime → time.Time → CopyFrom）依赖该设置
+func buildMySQLDriverConfig(dsn string) (*gmysql.Config, error) {
+	driverCfg, err := gmysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("解析MySQL连接串失败: %w", err)
+	}
+	driverCfg.Loc = time.UTC
+	driverCfg.ParseTime = true
+	return driverCfg, nil
 }
 
 // MySQLVersionInfo MySQL 版本信息
@@ -158,14 +229,10 @@ func NewConnection(ctx context.Context, config *config.MySQLConfig) (*Connection
 		dsn += config.ConnectionParams
 	}
 
-	driverCfg, err := gmysql.ParseDSN(dsn)
+	driverCfg, err := buildMySQLDriverConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("解析MySQL连接串失败: %w", err)
+		return nil, err
 	}
-	// 会话时区已固定为 UTC，客户端时间解析也必须使用 UTC，
-	// 二者一致才能保证 parseTime 得到的时间值是正确的 UTC 墙钟时间
-	// （driver 默认即 UTC，此处显式覆盖，防止被用户连接参数中的 loc 覆盖）
-	driverCfg.Loc = time.UTC
 
 	connector, err := gmysql.NewConnector(driverCfg)
 	if err != nil {
@@ -177,6 +244,9 @@ func NewConnection(ctx context.Context, config *config.MySQLConfig) (*Connection
 	db.SetMaxOpenConns(config.MaxOpenConns)                                    // 最大打开连接数
 	db.SetMaxIdleConns(config.MaxIdleConns)                                    // 最大空闲连接数
 	db.SetConnMaxLifetime(time.Duration(config.ConnMaxLifetime) * time.Second) // 连接最大生命周期
+	// 链路抖动后空闲的死连接最长可滞留 ConnMaxLifetime（默认 1 小时），
+	// 期间被后续查询反复取用；闲置超过 5 分钟的连接先行回收，缩小死连接影响面
+	db.SetConnMaxIdleTime(5 * time.Minute)
 
 	// 测试连接
 	if err := db.PingContext(ctx); err != nil {
@@ -202,7 +272,7 @@ func (c *Connection) GetDB() *sql.DB {
 
 // GetTableColumns 获取表的列信息
 func (c *Connection) GetTableColumns(tableName string) ([]string, error) {
-	rows, err := c.db.QueryContext(c.context(), fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
+	rows, err := queryWithRetry(c.context(), c.db, fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
 	if err != nil {
 		return nil, fmt.Errorf("获取表列信息失败: %w", err)
 	}
@@ -225,7 +295,7 @@ func (c *Connection) GetTableColumns(tableName string) ([]string, error) {
 
 // GetTableColumnsWithTypes 获取表的列名和类型信息
 func (c *Connection) GetTableColumnsWithTypes(tableName string) ([]string, map[string]string, error) {
-	rows, err := c.db.QueryContext(c.context(), fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
+	rows, err := queryWithRetry(c.context(), c.db, fmt.Sprintf("SHOW COLUMNS FROM `%s`", tableName))
 	if err != nil {
 		return nil, nil, fmt.Errorf("获取表列信息失败: %w", err)
 	}
@@ -268,7 +338,7 @@ func (c *Connection) GetTableData(ctx context.Context, tableName string, columns
 	}
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
-	rows, err := c.querier().QueryContext(ctx, query)
+	rows, err := queryWithRetry(ctx, c.querier(), query)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败: %w", err)
 	}
@@ -286,7 +356,7 @@ func (c *Connection) QueryTableRows(ctx context.Context, tableName string, colum
 	}
 	query := fmt.Sprintf("SELECT %s FROM `%s`", strings.Join(quotedColumns, ", "), tableName)
 
-	rows, err := c.querier().QueryContext(ctx, query)
+	rows, err := queryWithRetry(ctx, c.querier(), query)
 	if err != nil {
 		return nil, fmt.Errorf("流式读取表数据失败: %w", err)
 	}
@@ -315,7 +385,7 @@ func (c *Connection) GetTableDataWithPagination(ctx context.Context, tableName s
 			columnsStr, tableName, primaryKey, limit)
 	}
 
-	rows, err := c.querier().QueryContext(ctx, query, args...)
+	rows, err := queryWithRetry(ctx, c.querier(), query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败: %w", err)
 	}
@@ -356,7 +426,7 @@ func (c *Connection) GetTableDataWithCompositeKeyPagination(ctx context.Context,
 			columnsStr, tableName, primaryKeyStr, limit)
 	}
 
-	rows, err := c.querier().QueryContext(ctx, query, args...)
+	rows, err := queryWithRetry(ctx, c.querier(), query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("获取表数据失败：%w", err)
 	}
@@ -370,7 +440,7 @@ func (c *Connection) GetTablePrimaryKeys(tableName string) ([]string, error) {
 	// 这样可以同时兼容MySQL 5.7和MySQL 8.0
 	query := fmt.Sprintf("SHOW KEYS FROM `%s` WHERE Key_name = 'PRIMARY'", tableName)
 
-	rows, err := c.db.QueryContext(c.context(), query)
+	rows, err := queryWithRetry(c.context(), c.db, query)
 	if err != nil {
 		return nil, fmt.Errorf("获取表主键失败: %w", err)
 	}
@@ -446,7 +516,9 @@ func (c *Connection) EstimateRowSize(tableName string) (int64, error) {
 // GetTableRowCount 获取表的行数（开启一致性快照时读取快照视图，P1-07）
 func (c *Connection) GetTableRowCount(tableName string) (int64, error) {
 	var count int64
-	err := c.querier().QueryRowContext(c.context(), fmt.Sprintf("SELECT COUNT(*) FROM `%s`", tableName)).Scan(&count)
+	err := retryOnTransientConn(c.context(), transientConnRetries, transientConnRetryBaseDelay, func() error {
+		return c.querier().QueryRowContext(c.context(), fmt.Sprintf("SELECT COUNT(*) FROM `%s`", tableName)).Scan(&count)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("获取表行数失败: %w", err)
 	}
