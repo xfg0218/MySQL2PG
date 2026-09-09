@@ -117,6 +117,10 @@ type RunConfig struct {
 	LogFilePath       string `mapstructure:"log_file_path"`
 	ShowConsoleLogs   bool   `mapstructure:"show_console_logs"`
 	ShowLogInConsole  bool   `mapstructure:"show_log_in_console"`
+	// EnableDDLOutput 是否把转换后的 PostgreSQL DDL（表/索引/视图/函数等）导出到文件
+	EnableDDLOutput bool `mapstructure:"enable_ddl_output"`
+	// DDLOutputFilePath 转换后 DDL 的导出文件路径（相对路径以运行目录为准）
+	DDLOutputFilePath string `mapstructure:"ddl_output_file_path"`
 }
 
 // LoadConfig 加载配置文件

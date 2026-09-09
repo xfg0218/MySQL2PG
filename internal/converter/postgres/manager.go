@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,11 +49,13 @@ func (c *ConversionContext) shouldUseJsonArrayInsert() bool {
 
 // Manager 转换管理器
 type Manager struct {
-	mysqlConn      *mysql.Connection
-	postgresConn   *postgres.Connection
-	config         *config.Config
-	errorLogFile   *os.File
-	logFile        *os.File
+	mysqlConn    *mysql.Connection
+	postgresConn *postgres.Connection
+	config       *config.Config
+	errorLogFile *os.File
+	logFile      *os.File
+	// 转换后 DDL 导出文件（run.enable_ddl_output=true 时打开）
+	ddlOutputFile  *os.File
 	totalTasks     int
 	completedTasks atomic.Int64
 	mutex          sync.Mutex
@@ -145,21 +149,66 @@ func (m *Manager) context() context.Context {
 	return m.ctx
 }
 
+// openDDLExportFile 打开 run.ddl_output_file_path 指定的导出文件。
+// 每次运行覆盖重建；文件所在目录不存在时自动创建
+func (m *Manager) openDDLExportFile() error {
+	if m.config == nil || !m.config.Run.EnableDDLOutput || m.config.Run.DDLOutputFilePath == "" {
+		return nil
+	}
+	path := m.config.Run.DDLOutputFilePath
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("创建 DDL 导出目录失败: %w", err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("打开 DDL 导出文件失败: %w", err)
+	}
+	m.ddlOutputFile = f
+	return nil
+}
+
+// exportDDLToFile 把转换后生成的 DDL 写入导出文件（若已启用）。
+// 各转换阶段以多个 goroutine 并发执行，统一经 m.mutex 串行化写入
+func (m *Manager) exportDDLToFile(category, objectName, ddl string) {
+	if m.ddlOutputFile == nil {
+		return
+	}
+	ddl = strings.TrimSpace(ddl)
+	if ddl == "" {
+		return
+	}
+	ddl = strings.TrimSuffix(ddl, ";")
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	fmt.Fprintf(m.ddlOutputFile, "-- ===== [%s] %s =====\n%s;\n\n", category, objectName, ddl)
+}
+
 // Close 关闭转换管理器
-// 关闭打开的日志文件
+// 关闭打开的日志文件、DDL 导出文件和错误日志文件；
+// 任一文件关闭失败都会保留并返回，互不覆盖
 func (m *Manager) Close() error {
-	var err error
+	var errs []error
 	if m.logFile != nil {
 		if closeErr := m.logFile.Close(); closeErr != nil {
-			err = closeErr
+			errs = append(errs, fmt.Errorf("关闭日志文件失败: %w", closeErr))
 		}
 	}
 
-	if closeErr := m.errorLogFile.Close(); closeErr != nil && err == nil {
-		err = closeErr
+	if m.ddlOutputFile != nil {
+		if closeErr := m.ddlOutputFile.Close(); closeErr != nil {
+			errs = append(errs, fmt.Errorf("关闭 DDL 导出文件失败: %w", closeErr))
+		}
 	}
 
-	return err
+	if m.errorLogFile != nil {
+		if closeErr := m.errorLogFile.Close(); closeErr != nil {
+			errs = append(errs, fmt.Errorf("关闭错误日志文件失败: %w", closeErr))
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // Run 执行完整的转换流程
@@ -168,6 +217,14 @@ func (m *Manager) Run() error {
 	// 启动前检查取消信号
 	if err := m.context().Err(); err != nil {
 		return fmt.Errorf("转换已取消: %w", err)
+	}
+
+	// run.enable_ddl_output=true 时打开导出文件
+	if err := m.openDDLExportFile(); err != nil {
+		return err
+	}
+	if m.ddlOutputFile != nil {
+		m.Log("转换后的 PostgreSQL DDL 将导出到文件: %s", m.config.Run.DDLOutputFilePath)
 	}
 
 	m.Log("表MySQL 的DDL、数据、view、索引、函数、用户和权限的转换到 PostgreSQL ...")
@@ -933,6 +990,9 @@ func (m *Manager) convertViews(views []mysql.ViewInfo, semaphore chan struct{}) 
 			return err
 		}
 
+		// 导出转换后的视图 DDL
+		m.exportDDLToFile("视图", view.ViewName, pgViewDDL)
+
 		// 执行创建视图的SQL语句
 		if err := m.postgresConn.ExecuteDDL(pgViewDDL, view.ViewDefinition); err != nil {
 			errMsg := fmt.Sprintf("创建表视图 %s 失败: %v", view.ViewName, err)
@@ -1003,6 +1063,15 @@ func (m *Manager) convertTables(tables []mysql.TableInfo, semaphore chan struct{
 		// 汇入 DDL 转换中的语义降级/丢弃警告（P1-20）
 		for _, w := range pgResult.Warnings {
 			m.RecordConversionWarning("表结构", table.Name, w)
+		}
+
+		// 导出转换后的表结构 DDL（含分区子表与 CHECK 约束）
+		m.exportDDLToFile("表结构", table.Name, pgResult.DDL)
+		for _, partitionDDL := range pgResult.PartitionDDLs {
+			m.exportDDLToFile("表结构", table.Name+" 分区子表", partitionDDL)
+		}
+		for _, checkDDL := range pgResult.CheckConstraints {
+			m.exportDDLToFile("表结构", table.Name+" CHECK 约束", checkDDL)
 		}
 
 		// 先检查表是否存在
@@ -1235,6 +1304,9 @@ func (m *Manager) convertFunctions(functions []mysql.FunctionInfo, semaphore cha
 			return err
 		}
 
+		// 导出转换后的函数/存储过程 DDL
+		m.exportDDLToFile("函数/存储过程", function.Name, pgDDL)
+
 		if err := m.postgresConn.ExecuteDDL(pgDDL, function.DDL); err != nil {
 			errMsg := fmt.Sprintf("执行函数 %s DDL失败: %v", function.Name, err)
 			m.logError(errMsg)
@@ -1334,6 +1406,9 @@ func (m *Manager) convertIndexes(indexes []mysql.IndexInfo, semaphore chan struc
 			m.updateProgress()
 			continue
 		}
+
+		// 导出转换后的索引 DDL
+		m.exportDDLToFile("索引", fmt.Sprintf("%s.%s", index.Table, lowercaseIndexName), pgDDL)
 
 		// 执行DDL语句
 		if err := m.postgresConn.ExecuteDDL(pgDDL); err != nil {

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -302,5 +305,78 @@ func TestConvertFunctions_SkippedFunctionsCountedOnce(t *testing.T) {
 	want := int64(len(functions))
 	if got := m.completedTasks.Load(); got != want {
 		t.Errorf("completedTasks = %d, want %d（被跳过的函数只应计数一次，不应双计数）", got, want)
+	}
+}
+
+// TestDDLExportToFile run.enable_ddl_output=true：目录自动创建、语句按分类写入、
+// 本身带分号的 DDL 不会产生双分号
+func TestDDLExportToFile(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "ddl", "pgsql_ddl.sql")
+	m := &Manager{config: &config.Config{Run: config.RunConfig{
+		EnableDDLOutput:   true,
+		DDLOutputFilePath: outPath,
+	}}}
+
+	if err := m.openDDLExportFile(); err != nil {
+		t.Fatalf("openDDLExportFile() 失败: %v", err)
+	}
+	m.exportDDLToFile("表结构", "sys_user", `CREATE TABLE "sys_user" (id BIGSERIAL PRIMARY KEY)`)
+	m.exportDDLToFile("表结构", "orders 分区子表", `CREATE TABLE "orders_p1" PARTITION OF "orders" FOR VALUES FROM (0) TO (100);`)
+	m.exportDDLToFile("索引", "sys_user.idx_username", `CREATE INDEX "idx_username" ON "sys_user" ("username");`)
+	m.exportDDLToFile("视图", "v_user", `CREATE OR REPLACE VIEW "v_user" AS SELECT 1`)
+
+	if err := m.ddlOutputFile.Close(); err != nil {
+		t.Fatalf("关闭 DDL 导出文件失败: %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("读取 DDL 导出文件失败: %v", err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"-- ===== [表结构] sys_user =====",
+		`CREATE TABLE "sys_user" (id BIGSERIAL PRIMARY KEY);`,
+		"-- ===== [表结构] orders 分区子表 =====",
+		`CREATE TABLE "orders_p1" PARTITION OF "orders" FOR VALUES FROM (0) TO (100);`,
+		"-- ===== [索引] sys_user.idx_username =====",
+		`CREATE INDEX "idx_username" ON "sys_user" ("username");`,
+		"-- ===== [视图] v_user =====",
+		`CREATE OR REPLACE VIEW "v_user" AS SELECT 1;`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("DDL 导出文件缺少内容 %q，实际内容:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, ";;") {
+		t.Errorf("DDL 导出文件出现双分号，实际内容:\n%s", content)
+	}
+}
+
+// TestDDLExportDisabled run.enable_ddl_output=false 时不应创建导出文件
+func TestDDLExportDisabled(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "should_not_exist.sql")
+	m := &Manager{config: &config.Config{Run: config.RunConfig{
+		EnableDDLOutput:   false,
+		DDLOutputFilePath: outPath,
+	}}}
+
+	if err := m.openDDLExportFile(); err != nil {
+		t.Fatalf("openDDLExportFile() 失败: %v", err)
+	}
+	if m.ddlOutputFile != nil {
+		t.Fatal("enable_ddl_output=false 时不应打开导出文件")
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("enable_ddl_output=false 时不应创建导出文件 %s", outPath)
+	}
+}
+
+// TestManagerCloseNilFiles Close 在文件句柄均为 nil（如测试或部分初始化路径）
+// 时不应 panic，且应返回 nil
+func TestManagerCloseNilFiles(t *testing.T) {
+	m := &Manager{}
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close() 在无文件句柄时应返回 nil，实际: %v", err)
 	}
 }

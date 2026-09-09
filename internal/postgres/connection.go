@@ -990,14 +990,16 @@ func (c *Connection) BatchInsertDataWithCompositeKeys(ctx context.Context, tx pg
 		if primaryKey == "" {
 			continue
 		}
+		found := false
 		for i, col := range columns {
 			if strings.EqualFold(col, primaryKey) {
 				resolvedPrimaryKeys = append(resolvedPrimaryKeys, copyColumns[i])
+				found = true
 				break
 			}
 		}
 		// fallback: 如果没找到，使用转换后的主键名
-		if len(resolvedPrimaryKeys) < len(primaryKeys) {
+		if !found {
 			resolvedPK := primaryKey
 			if lowercaseColumns {
 				resolvedPK = strings.ToLower(primaryKey)
