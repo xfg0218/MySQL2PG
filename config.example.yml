@@ -78,3 +78,5 @@ run:
   log_file_path: ./conversion.log  # 日志文件保存路径
   show_console_logs: true      # 是否在控制台显示日志信息
   show_log_in_console: false   # 是否在控制台显示Log日志输出
+  enable_ddl_output: false     # 是否把转换后的 PostgreSQL DDL（表/分区/索引/视图/函数等）导出到文件。多线程时可能影响性能
+  ddl_output_file_path: ./ddl/pgsql_ddl.sql  # DDL 导出文件路径（相对路径以运行目录为准，目录不存在会自动创建）

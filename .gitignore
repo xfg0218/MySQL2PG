@@ -26,6 +26,7 @@ mysql2pg
 config.yml
 *.log
 *.exe
+ddl/
 # gitlab ci
 .cache
 .golangci.yml
