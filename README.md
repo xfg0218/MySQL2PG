@@ -1,3 +1,5 @@
+
+
 <div align="center">
 
 [![License][license-badge]][license-url] [![Stars][stars-badge]][stars-url] [![Last Commit][last-commit-badge]][commits-url] [![Language][go-badge]][repo-url] [![Go Version][go-version-badge]][go-url]
@@ -176,7 +178,7 @@ Start
 - **Configuration**: `connection_params: charset=utf8mb4&parseTime=false&interpolateParams=true`
 - **Supported Parameters**:
   - `charset=utf8mb4` - Use UTF8MB4 charset, supports emojis.
-  - `parseTime=false` - Disable automatic time type parsing.
+  - `parseTime` - Forced to `true` by the tool; any `parseTime` value in `connection_params` is ignored.
   - `interpolateParams=true` - Enable parameter interpolation for better security.
 - **Notes**:
   - Format is `key=value&key=value`.
