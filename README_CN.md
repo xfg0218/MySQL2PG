@@ -165,7 +165,7 @@ MySQL2PG是一款用Go语言开发的专业级数据库转换工具，专注于�
 - **参数配置**：`connection_params: charset=utf8mb4&parseTime=false&interpolateParams=true`
 - **支持的参数**：
   - `charset=utf8mb4` - 使用UTF8MB4字符集，支持表情符号
-  - `parseTime=false` - 禁用时间类型自动解析
+  - `parseTime=true` - 强制解析时间类型，忽略 `connection_params` 中的 `parseTime` 值
   - `interpolateParams=true` - 启用参数插值，提高安全性
 - **注意事项**：
   - 参数格式为key=value&key=value形式
