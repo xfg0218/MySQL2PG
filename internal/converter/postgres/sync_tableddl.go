@@ -47,6 +47,11 @@ var (
 	// BIT(64) 最大值 18446744073709551615 超出 BIGINT 上限，需映射为 NUMERIC(20,0)
 	// （MySQL BIT 宽度上限为 64，BIT(n<=63) 走标准 bit -> BIGINT 映射）
 	reBit64 = regexp.MustCompile(`(?i)\bbit\(64\)`)
+	// DEFAULT 子句中的 MySQL 位字面量 b'0101'（issue #177）。
+	// bit(n) 已映射为 BIGINT（bit(64) 为 NUMERIC(20,0)），而 b'...' 在 PG 中是 bit
+	// 类型字面量，透传会报 42804「column is of type bigint but default expression
+	// is of type bit」，故需转为十进制整数。限定在 default 之后以避免误伤其他位置。
+	reBitLiteralDefault = regexp.MustCompile(`(?i)(\bdefault\s+)b'([01]+)'`)
 
 	// 类型清理相关正则
 	reVarcharMissingParen  = regexp.MustCompile(`(?i)varchar\(\d+`)
@@ -1448,6 +1453,23 @@ func cleanTypeDefinition(typeDefinition string, tinyInt1AsBoolean bool) string {
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00 00:00:00.000000'", "")
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00 00:00:00.000'", "")
 	lowerTypeDef = strings.ReplaceAll(lowerTypeDef, " default '0000-00-00'", "")
+
+	// MySQL 位字面量 DEFAULT b'0101' → 十进制整数（issue #177）：
+	// bit(n) 已映射为 BIGINT（bit(64) 为 NUMERIC(20,0)），而 b'...' 在 PG 中是 bit
+	// 类型字面量，透传会报 42804。MySQL bit 宽度上限为 64，其最大值
+	// 18446744073709551615 恰为 uint64 上界，故 ParseUint(_, 2, 64) 不会溢出；
+	// 解析失败时保留原样，让 PG 报错暴露而非静默吞掉。
+	lowerTypeDef = reBitLiteralDefault.ReplaceAllStringFunc(lowerTypeDef, func(m string) string {
+		match := reBitLiteralDefault.FindStringSubmatch(m)
+		if len(match) != 3 {
+			return m
+		}
+		v, err := strconv.ParseUint(match[2], 2, 64)
+		if err != nil {
+			return m
+		}
+		return match[1] + strconv.FormatUint(v, 10)
+	})
 
 	if strings.Contains(strings.ToUpper(lowerTypeDef), "GENERATED ALWAYS AS") {
 		lowerTypeDef = reCharsetPrefix.ReplaceAllString(lowerTypeDef, "$1")

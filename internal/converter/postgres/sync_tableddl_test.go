@@ -685,6 +685,77 @@ func TestConvertTableDDL_BitTypes(t *testing.T) {
 	}
 }
 
+// TestConvertTableDDL_BitLiteralDefault issue #177：
+// MySQL 位字面量 DEFAULT b'0101' 必须转为十进制整数。
+// bit(n) 映射为 BIGINT（bit(64) 为 NUMERIC(20,0)），而 b'...' 在 PG 中是 bit 类型
+// 字面量，透传会报 42804「column is of type bigint but default expression is of type bit」
+func TestConvertTableDDL_BitLiteralDefault(t *testing.T) {
+	const ones64 = "1111111111111111111111111111111111111111111111111111111111111111"
+
+	mysqlDDL := `CREATE TABLE test_bit_default (
+  b_zero bit(8) DEFAULT b'0',
+  b_one bit(1) DEFAULT b'1',
+  b_multi bit(8) DEFAULT b'1010',
+  b_max bit(64) DEFAULT b'` + ones64 + `',
+  b_upper bit(4) DEFAULT B'1010',
+  b_null bit(1) DEFAULT NULL
+) ENGINE=InnoDB`
+
+	result, err := ConvertTableDDL(mysqlDDL, false)
+	if err != nil {
+		t.Fatalf("ConvertTableDDL failed: %v", err)
+	}
+
+	checks := []struct {
+		name string
+		want string
+	}{
+		{"b'0' 转 0", `"b_zero" BIGINT default 0`},
+		{"b'1' 转 1", `"b_one" BIGINT default 1`},
+		{"b'1010' 转 10", `"b_multi" BIGINT default 10`},
+		// bit(64) 全 1 恰为 uint64 上界，验证不溢出
+		{"bit(64) 全 1 转 uint64 上界", `"b_max" NUMERIC(20,0) default 18446744073709551615`},
+		// 大写 B'...' 经 toLowerOutsideQuotes 后同样应被转换
+		{"大写 B'1010' 转 10", `"b_upper" BIGINT default 10`},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !strings.Contains(result.DDL, c.want) {
+				t.Errorf("DDL 应包含 %q，实际 DDL: %s", c.want, result.DDL)
+			}
+		})
+	}
+
+	// 产物中不得残留任何 MySQL 位字面量
+	if strings.Contains(strings.ToLower(result.DDL), "b'") {
+		t.Errorf("DDL 不应残留位字面量 b'...': %s", result.DDL)
+	}
+}
+
+// TestConvertTableDDL_BitLiteralDefaultKeepsStringLiterals
+// 位字面量转换必须限定在 DEFAULT 之后，不得误伤字符串字面量内容
+func TestConvertTableDDL_BitLiteralDefaultKeepsStringLiterals(t *testing.T) {
+	mysqlDDL := `CREATE TABLE test_bit_guard (
+  note varchar(50) DEFAULT 'xb''1010''',
+  flag bit(4) DEFAULT b'1010'
+) ENGINE=InnoDB`
+
+	result, err := ConvertTableDDL(mysqlDDL, false)
+	if err != nil {
+		t.Fatalf("ConvertTableDDL failed: %v", err)
+	}
+
+	// 字符串字面量 'xb''1010''' 的内容必须原样保留（x 前缀确保它不以 b' 开头，
+	// 从而与位字面量形态区分开），不能被当成位字面量转成十进制
+	if !strings.Contains(result.DDL, "xb''1010''") {
+		t.Errorf("字符串字面量内容应原样保留，实际 DDL: %s", result.DDL)
+	}
+	// 真正的位字面量仍应被转换
+	if !strings.Contains(result.DDL, `"flag" BIGINT default 10`) {
+		t.Errorf("位字面量应转为十进制，实际 DDL: %s", result.DDL)
+	}
+}
+
 // TestCleanTypeDefinition_TinyInt1Mapping tinyint(1) 映射策略（P2-03 + 42883 修复）：
 // 默认映射为 SMALLINT 保留整数语义（兼容视图/函数中 `col = 1` 等用法），
 // 显式开启 tinyInt1AsBoolean 时映射为 BOOLEAN。
