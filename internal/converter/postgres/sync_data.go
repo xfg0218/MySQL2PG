@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -201,6 +202,16 @@ func SyncTableData(ctx context.Context, mysqlConn *mysql.Connection, postgresCon
 
 			go func(table mysql.TableInfo) {
 				defer func() {
+					// worker 顶层必须 recover：数据层要把外部数据库返回的任意字节塞进 Go 类型，
+					// 切片越界 / 类型断言失败 / nil map 写入都可能 panic。不 recover 会让单张表的
+					// 异常终止整个迁移进程，而此时目标表可能正处于「已 TRUNCATE + 半截数据」状态。
+					// 置于 defer 开头，确保后续资源释放语句自身异常时错误已入队（issue #172）
+					if r := recover(); r != nil {
+						select {
+						case errorChan <- fmt.Errorf("同步表 %s 时发生 panic: %v\n%s", table.Name, r, debug.Stack()):
+						default:
+						}
+					}
 					<-semaphore
 					updateProgress()
 					wg.Done()
@@ -276,21 +287,25 @@ func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresC
 		return fmt.Errorf("同步表 %s 失败: %w", table.Name, err)
 	}
 
-	// 如果表为空，处理空表逻辑
-	if totalRows == 0 {
-		return handleEmptyTable(postgresConn, config, table.Name, table.DDL, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, printer)
-	}
-
 	// 取消检查：开始实际写入前若已取消则直接退出
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("同步表 %s 已取消: %w", table.Name, err)
 	}
 
 	// 清空表数据（根据配置）
+	// 必须位于下方空表早返回之前：否则 MySQL 侧为空表、PG 侧同名表仍有上一轮数据时，
+	// 陈旧行不会被清掉，handleEmptyTable 的行数校验会以
+	// "数据校验不一致: MySQL 0 行, PostgreSQL N 行 (truncate_before_sync=true，终止迁移)"
+	// 终止整个迁移，而真实原因是工具自己漏做了 truncate（issue #171）
 	if config.Conversion.Options.TruncateBeforeSync {
 		if err := truncateTable(ctx, postgresConn, table.Name, logError); err != nil {
 			return fmt.Errorf("同步表 %s 失败: %w", table.Name, err)
 		}
+	}
+
+	// 如果表为空，处理空表逻辑（truncate 已在上方完成，此处只做序列回填与行数校验）
+	if totalRows == 0 {
+		return handleEmptyTable(postgresConn, config, table.Name, table.DDL, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, printer)
 	}
 
 	// 分页插入数据
@@ -392,9 +407,29 @@ func truncateTable(ctx context.Context, postgresConn *postgres.Connection, table
 	return nil
 }
 
+// buildTableSyncContext 构造数据同步用的 context：脱离根 context 的取消信号
+// （让已开启的批次能完整提交），并套一层超时。
+//
+// 超时是必需的而非可选的：context.WithoutCancel 返回的 ctx 其 Done() 为 nil，
+// 而 go-sql-driver 的 watchCancel 在 ctx.Done() == nil 时直接返回、不启动 watcher
+// （mysql@v1.7.1/connection.go:592-595）；中断阻塞 read 依赖的正是该 watcher
+// （connection.go:620-622：<-ctx.Done() → mc.cancel → cleanup 关闭 netConn）。
+// 没有超时，网络半开时 goroutine 会永久阻塞在 socket read、占住 semaphore，
+// 且根 ctx 已被剥离导致 Ctrl-C 无效（issue #173）。
+//
+// timeoutSeconds <= 0 时退化为纯 WithoutCancel；配置层已将 <=0 回落为默认 3600，
+// 正常路径不会走到该分支，此处仅为函数自身的完备性与可测性。
+func buildTableSyncContext(ctx context.Context, timeoutSeconds int) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	if timeoutSeconds <= 0 {
+		return base, func() {}
+	}
+	return context.WithTimeout(base, time.Duration(timeoutSeconds)*time.Second)
+}
+
 // paginateAndInsert 分页读取 MySQL 数据并批量插入 PostgreSQL
 // ctx 为根 context：每轮批次开始前检查取消信号，取消后不再开启新批次；
-// 已开启批次的 DB 操作使用 context.WithoutCancel 派生的批次 context，
+// 已开启批次的 DB 操作使用 buildTableSyncContext 派生的 context，
 // 脱离取消信号，保证进行中的批次完整提交后再退出
 func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgresConn *postgres.Connection, config *config.Config, table mysql.TableInfo, columns []string, columnTypes map[string]string, totalRows int64, log func(format string, args ...interface{}), logError func(errMsg string, args ...interface{}), mutex *sync.Mutex, progressChan chan progressUpdate) (int64, error) {
 	// 获取批量大小配置
@@ -479,15 +514,23 @@ func paginateAndInsert(ctx context.Context, mysqlConn *mysql.Connection, postgre
 	// 进度条状态跟踪：起始时间用于计算速度与 ETA
 	syncStartTime := time.Now()
 
+	// 同步 context：脱离根取消信号 + 表级超时（issue #173）。
+	// 必须在循环外创建一次：流式读取的 rows 跨批次复用且绑定该 context，
+	// 逐批创建并 cancel 会关闭其底层连接，导致后续批次读取失败。
+	batchCtx, cancelBatch := buildTableSyncContext(ctx, config.Conversion.Limits.TableSyncTimeoutSeconds)
+	defer cancelBatch()
+
 	for {
 		// 取消检查：开启新批次前若已取消则停止，进行中的批次不受影响（完整提交）
 		if err := ctx.Err(); err != nil {
 			return processedRows, fmt.Errorf("表 %s 同步已取消（已处理 %d 行）: %w", table.Name, processedRows, err)
 		}
 
-		// 批次 context：脱离根 context 的取消信号，
-		// 保证本轮已开启的批次（MySQL 分页查询 + PG 事务）能完整执行并提交
-		batchCtx := context.WithoutCancel(ctx)
+		// 超时检查：表级 context 到期后不再开启新批次，
+		// 并给出可操作的提示（否则用户只看到底层驱动的 connection 错误）
+		if err := batchCtx.Err(); err != nil {
+			return processedRows, fmt.Errorf("表 %s 同步超时（已处理 %d 行，可通过 conversion.limits.table_sync_timeout_seconds 调整）: %w", table.Name, processedRows, err)
+		}
 
 		var rows *sql.Rows
 		var currentBatchSize int

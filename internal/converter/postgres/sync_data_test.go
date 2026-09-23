@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -467,4 +468,71 @@ func TestBuildOffsetOrderBy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildTableSyncContext issue #173：批次 context 必须同时满足两个约束——
+// (1) 脱离根取消信号，让已开启的批次能完整提交；
+// (2) Done() 非 nil，否则 go-sql-driver 的 watchCancel 在 ctx.Done() == nil 时
+//
+//	直接返回、不启动 watcher（mysql@v1.7.1/connection.go:592-595），
+//	而中断阻塞 socket read 依赖的正是该 watcher（connection.go:620-622）。
+func TestBuildTableSyncContext(t *testing.T) {
+	t.Run("有超时时 Done 非 nil 且换算为秒", func(t *testing.T) {
+		ctx, cancel := buildTableSyncContext(context.Background(), 3600)
+		defer cancel()
+
+		if ctx.Done() == nil {
+			t.Fatal("Done() 必须非 nil，否则驱动不会启动取消监听，网络半开时永久阻塞")
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("应设置 deadline")
+		}
+		// 验证单位换算：误用 Millisecond/Minute 都会让超时偏离 1 小时一个数量级
+		if d := time.Until(deadline); d <= 3590*time.Second || d > 3600*time.Second {
+			t.Errorf("deadline 应约为 3600 秒后，实际剩余 %v", d)
+		}
+	})
+
+	t.Run("根 context 取消不穿透", func(t *testing.T) {
+		root, cancelRoot := context.WithCancel(context.Background())
+		ctx, cancel := buildTableSyncContext(root, 3600)
+		defer cancel()
+
+		cancelRoot()
+
+		if err := ctx.Err(); err != nil {
+			t.Errorf("根取消不应穿透（否则已开启的批次无法完整提交），实际 %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Error("根取消后批次 context 不应立即结束")
+		default:
+		}
+	})
+
+	t.Run("到期后 Err 为 DeadlineExceeded", func(t *testing.T) {
+		// buildTableSyncContext 的最小粒度是秒，此处用等价组合验证到期语义
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 10*time.Millisecond)
+		defer cancel()
+
+		select {
+		case <-ctx.Done():
+			if ctx.Err() != context.DeadlineExceeded {
+				t.Errorf("应为 DeadlineExceeded，实际 %v", ctx.Err())
+			}
+		case <-time.After(time.Second):
+			t.Fatal("超时未触发")
+		}
+	})
+
+	t.Run("timeout 非正数退化为纯 WithoutCancel", func(t *testing.T) {
+		for _, timeout := range []int{0, -1} {
+			ctx, cancel := buildTableSyncContext(context.Background(), timeout)
+			if ctx.Done() != nil {
+				t.Errorf("timeout=%d 时 Done() 应为 nil（保持旧行为）", timeout)
+			}
+			cancel() // 必须是 no-op 且不 panic
+		}
+	})
 }

@@ -11,7 +11,10 @@ mysql:
   conn_max_lifetime: 3600    # 连接池配置的最大生命周期（秒）
   # 注意：parseTime 由工具强制开启（时间列依赖 time.Time 语义进入 CopyFrom），此处配置该项会被忽略
   connection_params: charset=utf8mb4&interpolateParams=true&readTimeout=60s&writeTimeout=60s&timeout=30s # MySQL连接参数
-  consistent_snapshot: false # 数据读取使用一致性快照（源库并发写入时保证读到一致数据；要求 REPEATABLE READ 隔离级别）
+  consistent_snapshot: false # 数据读取使用一致性快照（源库并发写入时保证读到一致数据）
+                             # 注意：与 conversion.limits.concurrency > 1 互斥，开启时须把 concurrency 设为 1
+                             # （快照事务绑定单条 MySQL 连接，无法被多个 goroutine 并发使用，配置校验会直接拒绝该组合）
+                             # 隔离级别由工具自动设为 REPEATABLE READ，无需在源库侧配置
 
 # PostgreSQL连接配置
 postgresql:
@@ -69,6 +72,8 @@ conversion:
     max_users_per_batch: 10     # 一次性转换用户的个数限制
     max_rows_per_batch: 50000   # 一次性同步数据的行数限制（宽表会按估算行宽自适应下调）
     batch_insert_size: 50000    # 批量插入的大小（建议与 max_rows_per_batch 保持一致）
+    table_sync_timeout_seconds: 3600  # 单表数据同步超时（秒）。批次 context 需脱离取消信号以让已开启的批次完整提交，
+                                      # 但脱离后若无超时，网络半开时会永久阻塞且 Ctrl-C 无效；超大表可调大（如 86400）
 
 # 运行配置
 run:

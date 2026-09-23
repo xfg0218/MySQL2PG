@@ -163,13 +163,29 @@ type Connection struct {
 }
 
 // BeginConsistentSnapshot 开启一致性快照事务（P1-07）
-// 要求 MySQL 事务隔离级别为 REPEATABLE READ（InnoDB 默认）；
-// 开启后数据读取类查询（QueryTableRows/GetTableData*/GetTableRowCount）均通过该事务执行
+// 隔离级别由本函数显式指定为 REPEATABLE READ，不依赖服务端默认值；
+// 开启后数据读取类查询（QueryTableRows/GetTableData*/GetTableRowCount）均通过该事务执行。
+//
+// 注意：该事务是 Connection 上的单个 *sql.Tx，绑定一条 MySQL 连接，
+// 因此只在 concurrency=1 下可用；配置层已对 consistent_snapshot 与
+// concurrency>1 的组合做互斥校验（issue #175）
 func (c *Connection) BeginConsistentSnapshot(ctx context.Context) error {
-	tx, err := c.db.BeginTx(ctx, nil)
+	// 显式指定 REPEATABLE READ：MySQL 的 WITH CONSISTENT SNAPSHOT 只在 RR 下建立快照，
+	// 在 READ COMMITTED 下会被忽略并仅产生 warning，导致「一致性快照」静默失效。
+	// 源库为减少 gap lock 而配成 RC 的情况并不罕见，不能依赖服务端默认值（issue #175）。
+	// ReadOnly 让 InnoDB 走只读事务路径，同时避免任何误写源库的可能。
+	tx, err := c.db.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})
 	if err != nil {
 		return fmt.Errorf("开始快照事务失败: %w", err)
 	}
+	// 下面这条 START TRANSACTION 不是冗余，请勿「优化」掉：
+	// BeginTx 只设定隔离级别，InnoDB 的一致性读快照是在首次读取时才建立，
+	// 若各表首次读取的时间点不同则跨表不一致；WITH CONSISTENT SNAPSHOT 让快照
+	// 在事务开始即刻建立。MySQL 会隐式提交上方 BeginTx 开启的空只读事务，
+	// 多一次往返但无副作用，这是拿到跨表一致快照的必要代价。
 	if _, err := tx.ExecContext(ctx, "START TRANSACTION WITH CONSISTENT SNAPSHOT"); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("开启一致性快照失败: %w", err)
@@ -290,6 +306,12 @@ func (c *Connection) GetTableColumns(tableName string) ([]string, error) {
 		columns = append(columns, field)
 	}
 
+	// rows.Next() 在 I/O 中断或包解码错误时返回 false，错误只能从 rows.Err() 取到。
+	// 漏检会把"结果集被截断"当成"正常读完"，导致少迁列且全程无告警（行数校验只比 COUNT(*)，照样通过）
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历表 %s 列信息失败: %w", tableName, err)
+	}
+
 	return columns, nil
 }
 
@@ -314,6 +336,11 @@ func (c *Connection) GetTableColumnsWithTypes(tableName string) ([]string, map[s
 
 		columns = append(columns, field)
 		columnTypes[field] = colType
+	}
+
+	// 同 GetTableColumns：截断的列清单会被 sync_data.go 直接用于构造 SELECT 与 CopyFrom 的 copyColumns
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("遍历表 %s 列信息失败: %w", tableName, err)
 	}
 
 	return columns, columnTypes, nil
@@ -474,6 +501,14 @@ func (c *Connection) GetTablePrimaryKeys(tableName string) ([]string, error) {
 		if columnName != "" {
 			primaryKeys = append(primaryKeys, columnName)
 		}
+	}
+
+	// 必须置于下方 len(primaryKeys) == 0 检查之前：空检查只兜底"完全没读到主键"，
+	// 而复合主键 (a,b,c) 被截断成 (a,b) 时 len==2 会顺利通过检查，
+	// 使 keyset 分页的 WHERE (a,b) > (?,?) 游标不再唯一 → 跨批次漏行 + 重复行，
+	// 且漏 N 行与重 N 行在 COUNT(*) 校验下可能刚好抵消，报告"数据一致"
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历表 %s 主键信息失败: %w", tableName, err)
 	}
 
 	if len(primaryKeys) == 0 {

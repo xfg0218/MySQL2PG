@@ -107,6 +107,15 @@ type LimitsConfig struct {
 	MaxUsersPerBatch     int `mapstructure:"max_users_per_batch"`
 	MaxRowsPerBatch      int `mapstructure:"max_rows_per_batch"` // 一次性同步数据的行数限制
 	BatchInsertSize      int `mapstructure:"batch_insert_size"`  // 批量插入的大小
+	// 单表数据同步的超时秒数（issue #173）。批次 context 用 WithoutCancel 派生，
+	// 以让已开启的批次不受根取消影响；但 WithoutCancel 同时使 Done() 返回 nil，
+	// go-sql-driver 的 watchCancel 因此不启动监听，网络半开时 goroutine 会永久阻塞、
+	// 占住 semaphore 且 Ctrl-C 无效。套一层超时后 Done() 非 nil，驱动 watcher 生效，
+	// 超时会关闭连接从而中断阻塞的 read。
+	//
+	// 采用表级而非批级语义：流式读取的 rows 跨批次复用且绑定首轮 context，
+	// 逐批 cancel 会关闭其底层连接，故超时覆盖整表同步过程。
+	TableSyncTimeoutSeconds int `mapstructure:"table_sync_timeout_seconds"`
 }
 
 // RunConfig 运行配置
@@ -249,6 +258,13 @@ func (c *Config) ValidateConfig() error {
 	if c.Conversion.Limits.BatchInsertSize <= 0 {
 		c.Conversion.Limits.BatchInsertSize = 50000 // 默认值，与 MaxRowsPerBatch 对齐，避免读 50000 行却按 10000 行分块插入
 	}
+	if c.Conversion.Limits.TableSyncTimeoutSeconds <= 0 {
+		// 默认 1 小时：按 10000 行/秒估算可覆盖约 3600 万行的单表，对绝大多数表足够宽松；
+		// 同时把「网络半开导致永久挂死且 Ctrl-C 无效」收敛为超时后释放 semaphore 并报错。
+		// 不提供 0=不限制的逃生口——那等于保留原缺陷；超大表可显式配置更大值（如 86400）。
+		// 与本结构体其余字段的 <=0 回落默认值语义保持一致。
+		c.Conversion.Limits.TableSyncTimeoutSeconds = 3600
+	}
 
 	// MPP 配置默认值
 	if c.Conversion.MPP.Database == "" {
@@ -261,6 +277,20 @@ func (c *Config) ValidateConfig() error {
 		if db != "auto" && db != "greenplum" && db != "yugabyte" {
 			return fmt.Errorf("MPP数据库类型无效: %s（支持: greenplum, yugabyte, auto）", db)
 		}
+	}
+
+	// consistent_snapshot 与并发互斥（issue #175）：
+	// 快照事务是 mysql.Connection 上的单个 *sql.Tx，绑定一条 MySQL 连接，
+	// querier() 对所有数据读取返回同一个 Tx。concurrency>1 时多个 goroutine 会在
+	// 同一连接上并发查询，go-sql-driver 的 packet buffer 不支持并发使用而返回
+	// ErrBusyBuffer；isTransientConnError 又把它判为可重试，但 Tx 绑定固定连接
+	// 不会换连接，重试必然再次失败 → 整表同步失败并报出误导性的 "busy buffer"。
+	// 必须放在上方 Concurrency 默认值回落之后，否则未显式配置并发时会误判。
+	if c.MySQL.ConsistentSnapshot && c.Conversion.Limits.Concurrency > 1 {
+		return fmt.Errorf("consistent_snapshot 与 concurrency > 1 互斥（当前 concurrency=%d）: "+
+			"一致性快照事务绑定单条 MySQL 连接，无法被多个 goroutine 并发使用；"+
+			"请关闭 mysql.consistent_snapshot，或将 conversion.limits.concurrency 设为 1",
+			c.Conversion.Limits.Concurrency)
 	}
 
 	return nil

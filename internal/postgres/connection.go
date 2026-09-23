@@ -1096,16 +1096,16 @@ func (c *Connection) BatchInsertDataWithCompositeKeys(ctx context.Context, tx pg
 		return 0, nil, nil, err
 	}
 
-	// 只有在没有找到主键值的情况下，才执行 MAX 查询（作为后备方案）
-	if len(resolvedPrimaryKeys) > 0 && lastValue == nil {
-		// 对于复合主键，只查询第一个主键列
-		query := fmt.Sprintf("SELECT MAX(\"%s\") FROM \"%s\"", resolvedPrimaryKeys[0], tableName)
-		err := tx.QueryRow(ctx, query).Scan(&lastValue)
-		if err != nil && err != pgx.ErrNoRows {
-			return 0, nil, nil, fmt.Errorf("获取最后一个主键值失败：%w", err)
-		}
-	}
-
+	// 主键游标只能来自本批实际写入的行（lastValue / compositeLastValues）。
+	//
+	// 此处曾有一段「兜底」：lastValue 为 nil 时在本 PG 事务上执行
+	// SELECT MAX(主键) FROM 目标表，并把结果当作下一轮 MySQL keyset 游标返回。
+	// 用目标库的状态充当源库的读取游标在设计上是错的——skip_existing_tables=true
+	// 且目标表已有数据时，PG 的 MAX 大于 MySQL 已读位置会导致中间整段数据静默丢失，
+	// 小于则重复读取撞主键；而 validateData 只比 COUNT(*)，漏行与重行可能刚好抵消，
+	// 报告仍显示「数据一致」。已删除（issue #176）。
+	//
+	// 游标不可用时应由调用方退回 OFFSET 分页并告警，绝不应查询目标库。
 	return totalRows, lastValue, compositeLastValues, nil
 }
 

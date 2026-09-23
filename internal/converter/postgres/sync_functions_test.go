@@ -2323,3 +2323,108 @@ END`
 		debugConversionResult(t, "func_001_complex_analysis", mysqlDDL)
 	})
 }
+
+// TestFunctionConverter_UpdateSetPreserved reSetVar 的本意是转换变量赋值
+// （SET v = 1 → v := 1），但它无法区分 UPDATE t SET a = 1，会把 SET 整个删掉
+// 并把 = 改成 :=，产出 UPDATE t a := 1 这种非法 SQL。
+// 真实 PostgreSQL 上报：42601 syntax error at or near ":="。
+//
+// 修复方式：应用 reSetVar 前先把 UPDATE...SET 的 SET 掩蔽为占位符，之后还原。
+// RE2 不支持后顾断言，无法用 (?<!UPDATE ...) 直接排除。
+func TestFunctionConverter_UpdateSetPreserved(t *testing.T) {
+	wrap := func(body string) string {
+		return "CREATE DEFINER=`root`@`localhost` FUNCTION `f`(p_id INT) RETURNS int(11)\n" +
+			"    MODIFIES SQL DATA\nBEGIN\n" + body + "\nEND"
+	}
+
+	tests := []struct {
+		name    string
+		body    string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "单列 UPDATE 的 SET 必须保留",
+			body:    "UPDATE orders SET status = 1 WHERE id = p_id;",
+			want:    []string{"UPDATE orders SET status = 1"},
+			notWant: []string{"orders status :=", ":= 1 WHERE"},
+		},
+		{
+			name:    "多列 UPDATE 只有首列被改是修复前的典型症状",
+			body:    "UPDATE orders SET status = 1, amount = 0 WHERE id = p_id;",
+			want:    []string{"SET status = 1, amount = 0"},
+			notWant: []string{"status := 1, amount = 0"},
+		},
+		{
+			name:    "变量赋值仍应转换为 :=",
+			body:    "DECLARE v INT;\nSET v = p_id + 1;\nRETURN v;",
+			want:    []string{"v := p_id + 1"},
+			notWant: []string{"SET v ="},
+		},
+		{
+			name:    "UPDATE 与变量赋值共存时各自正确",
+			body:    "DECLARE v INT;\nSET v = 1;\nUPDATE orders SET status = v;",
+			want:    []string{"v := 1", "UPDATE orders SET status = v"},
+			notWant: []string{"orders status :="},
+		},
+		{
+			name:    "表名含 set 字样不应被误匹配",
+			body:    "UPDATE dataset SET x = 1;",
+			want:    []string{"UPDATE dataset SET x = 1"},
+			notWant: []string{"dataset x :="},
+		},
+		{
+			name:    "多表 UPDATE",
+			body:    "UPDATE t1, t2 SET t1.a = t2.b;",
+			want:    []string{"SET t1.a = t2.b"},
+			notWant: []string{"t1.a :="},
+		},
+		{
+			name:    "小写形态（MySQL 8.0 view/函数体常见）",
+			body:    "update orders set status = 1 where id = p_id;",
+			want:    []string{"SET status = 1"},
+			notWant: []string{"orders status :="},
+		},
+		{
+			name:    "UPDATE 与 SET 之间有换行",
+			body:    "UPDATE orders\n    SET status = 1\n    WHERE id = p_id;",
+			want:    []string{"SET status = 1"},
+			notWant: []string{"orders status :="},
+		},
+		{
+			name:    "字符串字面量内的 SET 不受影响",
+			body:    "DECLARE s VARCHAR(50);\nSET s = 'SET a = 1';\nRETURN s;",
+			want:    []string{"'SET a = 1'"},
+			notWant: []string{"'a := 1'"},
+		},
+		{
+			name:    "两条 UPDATE 语句互不干扰",
+			body:    "UPDATE a SET x = 1;\nUPDATE b SET y = 2;",
+			want:    []string{"UPDATE a SET x = 1", "UPDATE b SET y = 2"},
+			notWant: []string{"a x :=", "b y :="},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ConvertFunctionDDL(mysql.FunctionInfo{Name: "f", DDL: wrap(tt.body)})
+			if err != nil {
+				t.Fatalf("ConvertFunctionDDL failed: %v", err)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("产物应包含 %q，实际:\n%s", w, got)
+				}
+			}
+			for _, nw := range tt.notWant {
+				if strings.Contains(got, nw) {
+					t.Errorf("产物不应包含 %q，实际:\n%s", nw, got)
+				}
+			}
+			// 任何情况下都不应残留掩蔽占位符
+			if strings.Contains(got, updateSetPlaceholder) {
+				t.Errorf("产物残留掩蔽占位符 %q:\n%s", updateSetPlaceholder, got)
+			}
+		})
+	}
+}

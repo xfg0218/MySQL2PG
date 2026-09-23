@@ -71,6 +71,57 @@ func TestRunBatchStage(t *testing.T) {
 			t.Fatal("应聚合到阶段错误")
 		}
 	})
+
+	// issue #172：worker 顶层必须 recover，否则单个批次的 panic 会终止整个迁移进程，
+	// 且跳过 errorChan 写入，聚合错误列表里完全看不到这次失败
+	t.Run("worker panic 转成错误而非终止进程", func(t *testing.T) {
+		m := &Manager{}
+		var wg sync.WaitGroup
+		semaphore := make(chan struct{}, 4)
+		errorChan := make(chan error, 8)
+
+		var mu sync.Mutex
+		var completed []string
+		// batchSize=1 → 每个对象一个 goroutine；"b" 必然 panic
+		stageFn := func(batch []string, sem chan struct{}) error {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			for _, o := range batch {
+				if o == "b" {
+					panic("模拟数据层 panic: index out of range")
+				}
+				mu.Lock()
+				completed = append(completed, o)
+				mu.Unlock()
+			}
+			return nil
+		}
+
+		// 若 worker 顶层没有 recover，这一行会让测试进程直接崩溃
+		runBatchStage(m, &wg, semaphore, errorChan, "同步表数据", []string{"a", "b", "c"}, 1, stageFn)
+
+		err := drainErrors(errorChan)
+		if err == nil {
+			t.Fatal("panic 应被转成 error 进入聚合通道")
+		}
+		msg := err.Error()
+		for _, want := range []string{"同步表数据", "模拟数据层 panic", "goroutine"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("错误信息应含 %q 以便定位，实际 %q", want, msg)
+			}
+		}
+
+		// panic 批次之外的对象必须照常完成——这是「降级为单点失败」而非「整体终止」的关键
+		mu.Lock()
+		got := len(completed)
+		mu.Unlock()
+		if got != 2 {
+			t.Errorf("除 panic 的对象外应完成 2 个，实际 %d 个: %v", got, completed)
+		}
+		if len(m.conversionStats) != 1 || m.conversionStats[0].ObjectCount != 3 {
+			t.Errorf("阶段统计仍应正常记录，实际 %+v", m.conversionStats)
+		}
+	})
 }
 
 // TestManagerContextNilSafe 未通过 NewManager 构造的 Manager
@@ -378,5 +429,74 @@ func TestManagerCloseNilFiles(t *testing.T) {
 	m := &Manager{}
 	if err := m.Close(); err != nil {
 		t.Fatalf("Close() 在无文件句柄时应返回 nil，实际: %v", err)
+	}
+}
+
+// TestProgressLineGuardConcurrentAccess issue #174：
+// progressLineGuard 由 runBatchStage 按批派发的多个 goroutine 并发写入，
+// 同时被 Log/logError 在其他 goroutine 中读取。本测试需在 -race 下运行才有完整意义：
+// 若字段是普通指针，写方与读方之间必报 DATA RACE。
+func TestProgressLineGuardConcurrentAccess(t *testing.T) {
+	m := newTestManager(1)
+
+	const workers = 8
+	const iterations = 300
+	var wg sync.WaitGroup
+
+	// 写方：复现 syncTableData 的 Store(printer) / defer Store(nil)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				m.progressLineGuard.Store(newProgressPrinter())
+				m.progressLineGuard.Store(nil)
+			}
+		}()
+	}
+
+	// 读方：复现 Log/logError 中的 Load-then-call。
+	// 若先判空再用字段本身（而非 Load 到局部变量），两行之间被 Store(nil)
+	// 就会解引用 nil——endLine 首行即 p.mu.Lock()
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				if guard := m.progressLineGuard.Load(); guard != nil {
+					guard.endLine()
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// TestProgressLineGuardUsedByLog 验证守卫确实被 Log/logError 使用：
+// 输出普通行前必须收尾未结束的进度行，否则两者会粘连
+func TestProgressLineGuardUsedByLog(t *testing.T) {
+	m := newTestManager(1)
+	m.config.Run.ShowLogInConsole = true
+	m.config.Run.ShowConsoleLogs = true
+
+	// 未注册守卫时不应 panic
+	m.Log("无守卫")
+	m.logError("无守卫")
+
+	// 注册处于 dirty 状态的守卫：endLine 应真正收尾并把 dirty 复位
+	p := newProgressPrinter()
+	p.dirty = true
+	m.progressLineGuard.Store(p)
+
+	m.Log("有守卫")
+	if p.dirty {
+		t.Error("Log 输出前应已通过 endLine 收尾进度行，dirty 应被复位")
+	}
+
+	p.dirty = true
+	m.logError("有守卫")
+	if p.dirty {
+		t.Error("logError 输出前应已通过 endLine 收尾进度行，dirty 应被复位")
 	}
 }
