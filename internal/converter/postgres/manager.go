@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -565,7 +566,16 @@ func runBatchStage[T any](m *Manager, wg *sync.WaitGroup, semaphore chan struct{
 		batch := objects[i:end]
 		wg.Add(1)
 		go func(batch []T) {
-			defer wg.Done()
+			defer func() {
+				// 批次 worker 顶层 recover：runBatchStage 是全部 8 个转换阶段的通用派发器，
+				// 此处一改即覆盖表结构/视图/数据/索引/函数/用户/权限各阶段。
+				// 不 recover 时 panic 会跳过下方 errorChan 写入并终止整个迁移进程，
+				// 聚合错误列表里完全看不到这次失败（issue #172）
+				if r := recover(); r != nil {
+					errorChan <- fmt.Errorf("阶段「%s」执行时发生 panic: %v\n%s", stageName, r, debug.Stack())
+				}
+				wg.Done()
+			}()
 			if err := stageFn(batch, semaphore); err != nil {
 				errorChan <- err
 			}

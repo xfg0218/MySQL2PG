@@ -71,6 +71,57 @@ func TestRunBatchStage(t *testing.T) {
 			t.Fatal("应聚合到阶段错误")
 		}
 	})
+
+	// issue #172：worker 顶层必须 recover，否则单个批次的 panic 会终止整个迁移进程，
+	// 且跳过 errorChan 写入，聚合错误列表里完全看不到这次失败
+	t.Run("worker panic 转成错误而非终止进程", func(t *testing.T) {
+		m := &Manager{}
+		var wg sync.WaitGroup
+		semaphore := make(chan struct{}, 4)
+		errorChan := make(chan error, 8)
+
+		var mu sync.Mutex
+		var completed []string
+		// batchSize=1 → 每个对象一个 goroutine；"b" 必然 panic
+		stageFn := func(batch []string, sem chan struct{}) error {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			for _, o := range batch {
+				if o == "b" {
+					panic("模拟数据层 panic: index out of range")
+				}
+				mu.Lock()
+				completed = append(completed, o)
+				mu.Unlock()
+			}
+			return nil
+		}
+
+		// 若 worker 顶层没有 recover，这一行会让测试进程直接崩溃
+		runBatchStage(m, &wg, semaphore, errorChan, "同步表数据", []string{"a", "b", "c"}, 1, stageFn)
+
+		err := drainErrors(errorChan)
+		if err == nil {
+			t.Fatal("panic 应被转成 error 进入聚合通道")
+		}
+		msg := err.Error()
+		for _, want := range []string{"同步表数据", "模拟数据层 panic", "goroutine"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("错误信息应含 %q 以便定位，实际 %q", want, msg)
+			}
+		}
+
+		// panic 批次之外的对象必须照常完成——这是「降级为单点失败」而非「整体终止」的关键
+		mu.Lock()
+		got := len(completed)
+		mu.Unlock()
+		if got != 2 {
+			t.Errorf("除 panic 的对象外应完成 2 个，实际 %d 个: %v", got, completed)
+		}
+		if len(m.conversionStats) != 1 || m.conversionStats[0].ObjectCount != 3 {
+			t.Errorf("阶段统计仍应正常记录，实际 %+v", m.conversionStats)
+		}
+	})
 }
 
 // TestManagerContextNilSafe 未通过 NewManager 构造的 Manager

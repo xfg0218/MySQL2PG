@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -201,6 +202,16 @@ func SyncTableData(ctx context.Context, mysqlConn *mysql.Connection, postgresCon
 
 			go func(table mysql.TableInfo) {
 				defer func() {
+					// worker 顶层必须 recover：数据层要把外部数据库返回的任意字节塞进 Go 类型，
+					// 切片越界 / 类型断言失败 / nil map 写入都可能 panic。不 recover 会让单张表的
+					// 异常终止整个迁移进程，而此时目标表可能正处于「已 TRUNCATE + 半截数据」状态。
+					// 置于 defer 开头，确保后续资源释放语句自身异常时错误已入队（issue #172）
+					if r := recover(); r != nil {
+						select {
+						case errorChan <- fmt.Errorf("同步表 %s 时发生 panic: %v\n%s", table.Name, r, debug.Stack()):
+						default:
+						}
+					}
 					<-semaphore
 					updateProgress()
 					wg.Done()
