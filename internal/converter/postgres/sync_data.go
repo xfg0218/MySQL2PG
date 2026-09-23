@@ -276,21 +276,25 @@ func syncSingleTable(ctx context.Context, mysqlConn *mysql.Connection, postgresC
 		return fmt.Errorf("同步表 %s 失败: %w", table.Name, err)
 	}
 
-	// 如果表为空，处理空表逻辑
-	if totalRows == 0 {
-		return handleEmptyTable(postgresConn, config, table.Name, table.DDL, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, printer)
-	}
-
 	// 取消检查：开始实际写入前若已取消则直接退出
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("同步表 %s 已取消: %w", table.Name, err)
 	}
 
 	// 清空表数据（根据配置）
+	// 必须位于下方空表早返回之前：否则 MySQL 侧为空表、PG 侧同名表仍有上一轮数据时，
+	// 陈旧行不会被清掉，handleEmptyTable 的行数校验会以
+	// "数据校验不一致: MySQL 0 行, PostgreSQL N 行 (truncate_before_sync=true，终止迁移)"
+	// 终止整个迁移，而真实原因是工具自己漏做了 truncate（issue #171）
 	if config.Conversion.Options.TruncateBeforeSync {
 		if err := truncateTable(ctx, postgresConn, table.Name, logError); err != nil {
 			return fmt.Errorf("同步表 %s 失败: %w", table.Name, err)
 		}
+	}
+
+	// 如果表为空，处理空表逻辑（truncate 已在上方完成，此处只做序列回填与行数校验）
+	if totalRows == 0 {
+		return handleEmptyTable(postgresConn, config, table.Name, table.DDL, totalRows, log, logError, mutex, completedTasks, totalTasks, inconsistentTables, printer)
 	}
 
 	// 分页插入数据
