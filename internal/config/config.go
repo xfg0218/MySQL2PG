@@ -279,5 +279,19 @@ func (c *Config) ValidateConfig() error {
 		}
 	}
 
+	// consistent_snapshot 与并发互斥（issue #175）：
+	// 快照事务是 mysql.Connection 上的单个 *sql.Tx，绑定一条 MySQL 连接，
+	// querier() 对所有数据读取返回同一个 Tx。concurrency>1 时多个 goroutine 会在
+	// 同一连接上并发查询，go-sql-driver 的 packet buffer 不支持并发使用而返回
+	// ErrBusyBuffer；isTransientConnError 又把它判为可重试，但 Tx 绑定固定连接
+	// 不会换连接，重试必然再次失败 → 整表同步失败并报出误导性的 "busy buffer"。
+	// 必须放在上方 Concurrency 默认值回落之后，否则未显式配置并发时会误判。
+	if c.MySQL.ConsistentSnapshot && c.Conversion.Limits.Concurrency > 1 {
+		return fmt.Errorf("consistent_snapshot 与 concurrency > 1 互斥（当前 concurrency=%d）: "+
+			"一致性快照事务绑定单条 MySQL 连接，无法被多个 goroutine 并发使用；"+
+			"请关闭 mysql.consistent_snapshot，或将 conversion.limits.concurrency 设为 1",
+			c.Conversion.Limits.Concurrency)
+	}
+
 	return nil
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -127,6 +128,59 @@ func TestValidateConfigTableSyncTimeoutDefault(t *testing.T) {
 			}
 			if got := c.Conversion.Limits.TableSyncTimeoutSeconds; got != tc.want {
 				t.Errorf("TableSyncTimeoutSeconds = %d, 期望 %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateConfigConsistentSnapshotConcurrencyMutex issue #175：
+// 快照事务是 mysql.Connection 上的单个 *sql.Tx，绑定一条连接，
+// querier() 对所有数据读取返回同一个 Tx；concurrency>1 时并发查询会撞
+// go-sql-driver 的 packet buffer（ErrBusyBuffer），且因 Tx 不换连接使重试无效。
+// 该组合必须在配置校验阶段就被拒绝，而不是运行到数据同步才失败。
+func TestValidateConfigConsistentSnapshotConcurrencyMutex(t *testing.T) {
+	newCfg := func(snapshot bool, concurrency int) *Config {
+		c := &Config{}
+		c.MySQL.Host = "localhost"
+		c.MySQL.Username = "u"
+		c.MySQL.Database = "d"
+		c.MySQL.ConsistentSnapshot = snapshot
+		c.PostgreSQL.Host = "localhost"
+		c.PostgreSQL.Username = "u"
+		c.PostgreSQL.Database = "d"
+		c.Conversion.Limits.Concurrency = concurrency
+		return c
+	}
+
+	cases := []struct {
+		name        string
+		snapshot    bool
+		concurrency int
+		wantErr     bool
+	}{
+		{name: "快照关闭 + 高并发（默认场景）", snapshot: false, concurrency: 10, wantErr: false},
+		{name: "快照关闭 + 单并发", snapshot: false, concurrency: 1, wantErr: false},
+		{name: "快照开启 + 单并发应允许", snapshot: true, concurrency: 1, wantErr: false},
+		{name: "快照开启 + 高并发必须拒绝", snapshot: true, concurrency: 10, wantErr: true},
+		// 校验必须位于 Concurrency 默认值回落之后：未配置并发时回落为 1，不应误判
+		{name: "快照开启 + 未配置并发（回落默认 1）不应误判", snapshot: true, concurrency: 0, wantErr: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := newCfg(tc.snapshot, tc.concurrency).ValidateConfig()
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("consistent_snapshot 与 concurrency>1 的组合应被拒绝")
+				}
+				if !strings.Contains(err.Error(), "consistent_snapshot") {
+					t.Errorf("错误信息应指明冲突的配置项，实际 %q", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("该组合不应校验失败: %v", err)
 			}
 		})
 	}
