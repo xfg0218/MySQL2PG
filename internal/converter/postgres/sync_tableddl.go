@@ -68,8 +68,15 @@ var (
 	reBasicTypes           = regexp.MustCompile(`(?i)\b(bigint|integer|smallint|int|bigserial|serial|boolean|text|bytea|timestamp|date|time|decimal|double precision|real)\b`)
 
 	// 表相关正则
-	reComment      = regexp.MustCompile(`(?i)\s+comment\s+'((?:[^']|'')*)'\s*,?\s*|\s+comment\s+"([^"]*)"\s*,?\s*`)
-	reTableComment = regexp.MustCompile(`(?i)\s+COMMENT\s*=\s*'([^']*)'`)
+	// 注释字面量必须同时支持 MySQL 的两种转义形态：
+	//   - 反斜杠转义 \'（SHOW CREATE TABLE 的默认输出，除非 sql_mode 含 NO_BACKSLASH_ESCAPES）
+	//   - 双写转义 ''
+	// 旧正则 '((?:[^']|'')*)' 不认 \'，匹配会在 user\ 处提前闭合，造成两个后果：
+	// 残留的 s note' 文本进入列定义使 PG 报 42601 syntax error at or near "s"，
+	// 且该列注释被截断为 user\（DEFAULT NULL 也随之丢失）。转换器却返回 err=nil。
+	// 捕获到的内容仍是 MySQL 转义形态，需经 unescapeMySQLStringLiteral 还原为原始文本。
+	reComment      = regexp.MustCompile(`(?i)\s+comment\s+'((?:[^'\\]|''|\\.)*)'\s*,?\s*|\s+comment\s+"((?:[^"\\]|\\.)*)"\s*,?\s*`)
+	reTableComment = regexp.MustCompile(`(?i)\s+COMMENT\s*=\s*'((?:[^'\\]|''|\\.)*)'`)
 
 	// 索引相关正则
 	reIndexPattern = regexp.MustCompile(`(?i)^(UNIQUE\s+)?(FULLTEXT\s+)?(KEY|INDEX)\s+`)
@@ -263,7 +270,8 @@ func parseTableInfo(mysqlDDL string) (tableName string, isTemporary bool, tableC
 	tableComment = ""
 	tableCommentMatch := reTableComment.FindStringSubmatch(mysqlDDL)
 	if tableCommentMatch != nil {
-		tableComment = tableCommentMatch[1]
+		// 同列注释：还原 MySQL 转义，PG 侧转义由下游负责
+		tableComment = unescapeMySQLStringLiteral(tableCommentMatch[1])
 	}
 
 	var bracketCount int
@@ -730,6 +738,64 @@ func normalizePartitionBound(bound string) string {
 		return "MAXVALUE"
 	}
 	return trimmed
+}
+
+// unescapeMySQLStringLiteral 把 MySQL 字符串字面量中的转义序列还原为原始文本。
+//
+// MySQL 的 SHOW CREATE TABLE 用反斜杠转义（COMMENT 'user\'s note'），而 PostgreSQL
+// 在 standard_conforming_strings=on（默认）下不认反斜杠转义，因此必须先还原为原始内容，
+// 再由下游生成端按 PG 规则重新转义（GenerateColumnCommentsSQL 与 processComment 均已
+// 把 ' 转为 ”）。此处刻意不做 PG 转义，避免二次转义。
+//
+// 还原规则遵循 MySQL 字符串字面量语义：
+//   - \' \" \\   → 对应字符
+//   - ”         → '（双写转义，即 NO_BACKSLASH_ESCAPES 模式下的形态）
+//   - \n \r \t \b → 对应控制符
+//   - \0         → 丢弃（PostgreSQL 文本类型不允许 NUL 字节）
+//   - \% \_      → 保留反斜杠（MySQL 对这两个转义保留反斜杠本身）
+//   - 其他 \x    → 反斜杠被忽略、取字符本身
+//     （MySQL 文档：For all other escape sequences, backslash is ignored）
+//
+// 按字节遍历对 UTF-8 安全：多字节序列的每个字节都 >= 0x80，不会与 \ (0x5C)
+// 或 ' (0x27) 冲突。
+func unescapeMySQLStringLiteral(s string) string {
+	if !strings.Contains(s, `\`) && !strings.Contains(s, "''") {
+		return s
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			i++
+			switch s[i] {
+			case 'n':
+				b.WriteByte('\n')
+			case 'r':
+				b.WriteByte('\r')
+			case 't':
+				b.WriteByte('\t')
+			case 'b':
+				b.WriteByte('\b')
+			case '0':
+				// PostgreSQL 文本类型不接受 NUL 字节，丢弃
+			case '%', '_':
+				b.WriteByte('\\')
+				b.WriteByte(s[i])
+			default:
+				b.WriteByte(s[i])
+			}
+			continue
+		}
+		if c == '\'' && i+1 < len(s) && s[i+1] == '\'' {
+			b.WriteByte('\'')
+			i++
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // toLowerOutsideQuotes 将字符串中非引号包裹内容转换为小写
@@ -1238,10 +1304,12 @@ func processColumnDefinition(line string, lowercaseColumns bool) (columnName str
 
 	commentMatch := reComment.FindStringSubmatch(line)
 	if commentMatch != nil {
+		// 捕获内容仍是 MySQL 转义形态，须还原为原始文本；
+		// PG 侧的 ' → '' 转义由下游 GenerateColumnCommentsSQL / processComment 负责
 		if commentMatch[1] != "" {
-			columnComment = commentMatch[1]
+			columnComment = unescapeMySQLStringLiteral(commentMatch[1])
 		} else {
-			columnComment = commentMatch[2]
+			columnComment = unescapeMySQLStringLiteral(commentMatch[2])
 		}
 	}
 	line = reComment.ReplaceAllString(line, "")

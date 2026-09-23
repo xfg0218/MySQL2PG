@@ -756,6 +756,114 @@ func TestConvertTableDDL_BitLiteralDefaultKeepsStringLiterals(t *testing.T) {
 	}
 }
 
+// TestUnescapeMySQLStringLiteral MySQL 字符串字面量转义的还原规则。
+// MySQL 的 SHOW CREATE TABLE 用反斜杠转义（COMMENT 'user\'s note'），
+// 而 PG 在 standard_conforming_strings=on 下不认反斜杠转义，故须先还原为原始文本，
+// 再由下游生成端按 PG 规则把 ' 转为 ”。
+func TestUnescapeMySQLStringLiteral(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"无转义原样返回", "plain comment", "plain comment"},
+		{"空串", "", ""},
+		{"反斜杠单引号", `user\'s note`, "user's note"},
+		{"双写单引号", "it''s ok", "it's ok"},
+		{"双反斜杠", `path\\to`, `path\to`},
+		{"换行与制表", `line1\nline2\ttab`, "line1\nline2\ttab"},
+		{"回车与退格", `a\rb\bc`, "a\rb\bc"},
+		{"NUL 被丢弃", `a\0b`, "ab"},
+		{"百分号与下划线保留反斜杠", `100\% and \_x`, `100\% and \_x`},
+		{"未知转义忽略反斜杠", `\z`, "z"},
+		{"双引号转义", `say \"hi\"`, `say "hi"`},
+		{"中文与转义混排", `用户\'s 备注`, "用户's 备注"},
+		{"末尾孤立反斜杠原样保留", `trailing\`, `trailing\`},
+		{"多个转义共存", `a\'b\\c\nd`, "a'b\\c\nd"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := unescapeMySQLStringLiteral(tt.input); got != tt.want {
+				t.Errorf("unescapeMySQLStringLiteral(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestConvertTableDDL_CommentBackslashEscape 含反斜杠转义撇号的注释不得破坏 DDL 结构。
+//
+// 修复前 reComment 只认 ” 双写转义，匹配会在 user\ 处提前闭合，导致：
+//   - 残留 s note' 使 PG 报 42601 syntax error at or near "s"
+//   - 该列的 DEFAULT NULL 消失
+//   - ColumnComments 中 note 被截断为 "user\"，TableComment 被截断为 "table\"
+//   - 而转换器返回 err=nil、Warnings=[]，完全静默
+//
+// 列定义是逐行处理的，故后续 plain 列本身不受影响；此处仍断言其完整性以防回归。
+func TestConvertTableDDL_CommentBackslashEscape(t *testing.T) {
+	mysqlDDL := "CREATE TABLE `t_comment` (\n" +
+		"  `id` int(11) NOT NULL AUTO_INCREMENT,\n" +
+		"  `note` varchar(100) DEFAULT NULL COMMENT 'user\\'s note',\n" +
+		"  `plain` varchar(50) DEFAULT NULL COMMENT 'normal comment',\n" +
+		"  PRIMARY KEY (`id`)\n" +
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='table\\'s comment'"
+
+	result, err := ConvertTableDDL(mysqlDDL, true)
+	if err != nil {
+		t.Fatalf("ConvertTableDDL failed: %v", err)
+	}
+
+	// 1. 不得残留被截断的注释文本
+	for _, bad := range []string{"s note'", `\'`, "note',"} {
+		if strings.Contains(result.DDL, bad) {
+			t.Errorf("DDL 不应残留 %q，实际: %s", bad, result.DDL)
+		}
+	}
+
+	// 2. 两列的定义都必须完整存在（修复前 plain 的 COMMENT 会被并入 note）
+	for _, want := range []string{`"note" VARCHAR(100)`, `"plain" VARCHAR(50)`} {
+		if !strings.Contains(result.DDL, want) {
+			t.Errorf("DDL 应包含完整的列定义 %q，实际: %s", want, result.DDL)
+		}
+	}
+
+	// 3. 括号必须平衡（结构未被破坏）
+	if openCnt, closeCnt := strings.Count(result.DDL, "("), strings.Count(result.DDL, ")"); openCnt != closeCnt {
+		t.Errorf("DDL 括号不平衡: ( = %d, ) = %d，实际: %s", openCnt, closeCnt, result.DDL)
+	}
+
+	// 4. 注释内容须还原为原始文本（PG 侧转义由下游生成端负责）
+	if got := result.ColumnComments["note"]; got != "user's note" {
+		t.Errorf("ColumnComments[note] = %q, want %q", got, "user's note")
+	}
+	if got := result.ColumnComments["plain"]; got != "normal comment" {
+		t.Errorf("ColumnComments[plain] = %q, want %q", got, "normal comment")
+	}
+	if result.TableComment != "table's comment" {
+		t.Errorf("TableComment = %q, want %q", result.TableComment, "table's comment")
+	}
+}
+
+// TestGenerateColumnCommentsSQL_EscapesSingleQuote 还原后的注释在生成 PG 语句时
+// 必须按 PG 规则把 ' 转为 ”，否则 COMMENT ON 语句本身会语法错误
+func TestGenerateColumnCommentsSQL_EscapesSingleQuote(t *testing.T) {
+	sqls := GenerateColumnCommentsSQL(
+		`"t_comment"`,
+		map[string]string{"note": `"note"`},
+		map[string]string{"note": "user's note"},
+	)
+
+	if len(sqls) != 1 {
+		t.Fatalf("应生成 1 条语句，实际 %d: %v", len(sqls), sqls)
+	}
+	if !strings.Contains(sqls[0], "IS 'user''s note'") {
+		t.Errorf("单引号应按 PG 规则双写，实际: %s", sqls[0])
+	}
+	if strings.Contains(sqls[0], `\'`) {
+		t.Errorf("不应残留反斜杠转义，实际: %s", sqls[0])
+	}
+}
+
 // TestCleanTypeDefinition_TinyInt1Mapping tinyint(1) 映射策略（P2-03 + 42883 修复）：
 // 默认映射为 SMALLINT 保留整数语义（兼容视图/函数中 `col = 1` 等用法），
 // 显式开启 tinyInt1AsBoolean 时映射为 BOOLEAN。
