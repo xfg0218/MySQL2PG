@@ -290,6 +290,12 @@ func (c *Connection) GetTableColumns(tableName string) ([]string, error) {
 		columns = append(columns, field)
 	}
 
+	// rows.Next() 在 I/O 中断或包解码错误时返回 false，错误只能从 rows.Err() 取到。
+	// 漏检会把"结果集被截断"当成"正常读完"，导致少迁列且全程无告警（行数校验只比 COUNT(*)，照样通过）
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历表 %s 列信息失败: %w", tableName, err)
+	}
+
 	return columns, nil
 }
 
@@ -314,6 +320,11 @@ func (c *Connection) GetTableColumnsWithTypes(tableName string) ([]string, map[s
 
 		columns = append(columns, field)
 		columnTypes[field] = colType
+	}
+
+	// 同 GetTableColumns：截断的列清单会被 sync_data.go 直接用于构造 SELECT 与 CopyFrom 的 copyColumns
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("遍历表 %s 列信息失败: %w", tableName, err)
 	}
 
 	return columns, columnTypes, nil
@@ -474,6 +485,14 @@ func (c *Connection) GetTablePrimaryKeys(tableName string) ([]string, error) {
 		if columnName != "" {
 			primaryKeys = append(primaryKeys, columnName)
 		}
+	}
+
+	// 必须置于下方 len(primaryKeys) == 0 检查之前：空检查只兜底"完全没读到主键"，
+	// 而复合主键 (a,b,c) 被截断成 (a,b) 时 len==2 会顺利通过检查，
+	// 使 keyset 分页的 WHERE (a,b) > (?,?) 游标不再唯一 → 跨批次漏行 + 重复行，
+	// 且漏 N 行与重 N 行在 COUNT(*) 校验下可能刚好抵消，报告"数据一致"
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历表 %s 主键信息失败: %w", tableName, err)
 	}
 
 	if len(primaryKeys) == 0 {
