@@ -66,7 +66,15 @@ var (
 	reRepeat  = regexp.MustCompile(`(?i)REPEAT\s*`)
 	reUntil   = regexp.MustCompile(`(?i)UNTIL\s+([^\n]+?)\s*END\s+REPEAT;`)
 	reSetVar  = regexp.MustCompile(`(?i)\bSET\s+(\w+)\s*=\s*`)
-	reReturn  = regexp.MustCompile(`(?i)RETURN\s+`)
+	// reUpdateSetClause 匹配 UPDATE 语句中的 SET 关键字，用于在应用 reSetVar 之前
+	// 先把它掩蔽起来。reSetVar 的本意是转换变量赋值（SET v = 1 → v := 1），
+	// 但它无法区分 UPDATE t SET a = 1，会把 SET 整个删掉并把 = 改成 :=，
+	// 产出 UPDATE t a := 1 这种非法 SQL（PG 报 42601 syntax error at or near ":="）。
+	// Go 的 RE2 不支持后顾断言，无法用 (?<!UPDATE ...) 排除，故采用「先掩蔽、后还原」。
+	// [^;]*? 非贪婪且不跨分号，确保只吃掉同一语句内最近的那个 SET；
+	// \b 边界使表名中的 set 字样（如 dataset）不会被误匹配。
+	reUpdateSetClause = regexp.MustCompile(`(?i)\b(UPDATE\s+[^;]*?)\bSET\s+`)
+	reReturn          = regexp.MustCompile(`(?i)RETURN\s+`)
 
 	// 游标相关
 	reCursorDeclare = regexp.MustCompile(`(?i)DECLARE\s+(\w+)\s+CURSOR\s+FOR\s+([^;]+?);`)
@@ -80,10 +88,16 @@ var (
 	reIfAssignment    = regexp.MustCompile(`(?i)IF\s+([^=]+?)([a-zA-Z_]+)\s*:=`)
 	reUpdateThen      = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+THEN\s+([a-zA-Z_]+)\s*:=`)
 	reUpdateThenEq    = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+THEN\s+([a-zA-Z_]+)\s*=`)
-	reIsNullSyntax    = regexp.MustCompile(`(?i)IS\s+NOT\s+THEN\s+NULL`)
-	reEndIfIf         = regexp.MustCompile(`(?i)END\s+IF;\s*END\s+IF;`)
-	reEndLoopLoop     = regexp.MustCompile(`(?i)END\s+LOOP;\s*END\s+LOOP;`)
-	reTooManyEnds     = regexp.MustCompile(`(?i)(end\s+){3,}`)
+	// reUpdateSet 原先定义在 applyMiscFixes 函数体内（注释写着 "needs to be defined
+	// locally since it was missed in global var definition step"），导致每次调用都重新
+	// 编译一次正则。其替换目标 "UPDATE $1 SET " 对匹配文本几乎是恒等的，实际作用只是
+	// 把 SET 前后的多个空白规范化为单空格，故移到包级保留而不删除。
+	// 注：UPDATE...SET 被 reSetVar 破坏的问题由 reUpdateSetClause 掩蔽机制解决，与本规则无关。
+	reUpdateSet    = regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+SET\s+`)
+	reIsNullSyntax = regexp.MustCompile(`(?i)IS\s+NOT\s+THEN\s+NULL`)
+	reEndIfIf      = regexp.MustCompile(`(?i)END\s+IF;\s*END\s+IF;`)
+	reEndLoopLoop  = regexp.MustCompile(`(?i)END\s+LOOP;\s*END\s+LOOP;`)
+	reTooManyEnds  = regexp.MustCompile(`(?i)(end\s+){3,}`)
 	// 增强变量声明匹配，支持更多类型和格式（包括 NUMERIC）
 	reVarDecl = regexp.MustCompile(`(?i)\s*(\w+)\s+(INT|VARCHAR|TEXT|DECIMAL|NUMERIC|DATE|TIME|TIMESTAMP|BOOLEAN|FLOAT|DOUBLE|CHAR|REFCURSOR|TINYINT|BIGINT|MEDIUMINT|SMALLINT)\s*(?:UNSIGNED)?\s*(?:\((\d+(?:,\d+)?)\))?\s*(?:DEFAULT\s+([^;]+))?;`)
 
@@ -145,6 +159,12 @@ var (
 	reUnsigned = regexp.MustCompile(`(?i)\s+UNSIGNED`)
 	reZerofill = regexp.MustCompile(`(?i)\s+ZEROFILL`)
 )
+
+// updateSetPlaceholder 在应用 reSetVar 期间用于掩蔽 UPDATE 语句的 SET 关键字。
+// 全小写、无空白、无引号，可安全穿过后续的小写化与单词级替换
+// （与 sync_sql_literals.go 中 literalMask 的占位符设计同理）。
+// 还原时替换为 "SET "（带尾随空格），因为掩蔽正则吃掉了原来的 SET\s+。
+const updateSetPlaceholder = "__m2pg_upd_set__"
 
 // =================================================================================================
 // 转换器结构体定义
@@ -726,7 +746,8 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 	}{
 		// reCharLength:   "LENGTH($1)", // PG supports char_length
 		{reRegexp, "~", false},
-		{reSetVar, "$1 := ", false},
+		// reSetVar 不放在本表中：它必须与 UPDATE...SET 的掩蔽/还原配对执行，
+		// 见下方 maskedBody 处的单独处理
 		{reNow, "CURRENT_TIMESTAMP", false},
 		{reCurrentDate, "CURRENT_DATE", false},
 		{reSysDate, "CURRENT_TIMESTAMP", false},
@@ -786,6 +807,16 @@ func (c *FunctionConverter) convertBuiltinFunctions() {
 	// NOW/SYSDATE/LEAVE/年份函数等字样不会被误替换
 	mask := newLiteralMask()
 	maskedBody := mask.mask(body)
+
+	// reSetVar 单独处理：把变量赋值 SET v = 1 转成 v := 1，但必须跳过 UPDATE 语句的
+	// SET 子句——否则 UPDATE t SET a = 1 会变成 UPDATE t a := 1（PG 报 42601）。
+	// RE2 无后顾断言，故先把 UPDATE...SET 的 SET 换成占位符，应用规则后再还原。
+	// 在遮蔽后的文本上执行，字符串字面量里的 "SET a = 1" 不受影响。
+	// ${1} 必须用花括号：占位符以下划线开头，否则会被并入组名解析。
+	maskedBody = reUpdateSetClause.ReplaceAllString(maskedBody, "${1}"+updateSetPlaceholder)
+	maskedBody = reSetVar.ReplaceAllString(maskedBody, "$1 := ")
+	maskedBody = strings.ReplaceAll(maskedBody, updateSetPlaceholder, "SET ")
+
 	for _, item := range orderedReplacements {
 		if !item.readsLiteral {
 			maskedBody = item.re.ReplaceAllString(maskedBody, item.repl)
@@ -1708,10 +1739,6 @@ func fixLoopSyntax(body string) string {
 
 // applyMiscFixes 应用杂项修复
 func applyMiscFixes(body string) string {
-	// reUpdateSet needs to be defined locally since it was missed in global var definition step
-	// or I can define it here.
-	reUpdateSet := regexp.MustCompile(`(?i)UPDATE\s+(\w+)\s+SET\s+`)
-
 	// Handle reIfAssignment specifically to avoid double THEN
 	body = reIfAssignment.ReplaceAllStringFunc(body, func(m string) string {
 		if strings.Contains(strings.ToUpper(m), "THEN") {
