@@ -69,6 +69,8 @@ conversion:
     max_users_per_batch: 10     # 一次性转换用户的个数限制
     max_rows_per_batch: 50000   # 一次性同步数据的行数限制（宽表会按估算行宽自适应下调）
     batch_insert_size: 50000    # 批量插入的大小（建议与 max_rows_per_batch 保持一致）
+    table_sync_timeout_seconds: 3600  # 单表数据同步超时（秒）。批次 context 需脱离取消信号以让已开启的批次完整提交，
+                                      # 但脱离后若无超时，网络半开时会永久阻塞且 Ctrl-C 无效；超大表可调大（如 86400）
 
 # 运行配置
 run:
