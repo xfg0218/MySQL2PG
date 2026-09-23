@@ -82,8 +82,10 @@ type Manager struct {
 	// 评估结果（仅在评估模式下填充）
 	assessmentResults *AssessmentResults
 	// 数据同步阶段的进度行守卫：控制台输出普通行前先结束未收尾的进度行，避免粘连。
-	// 写入发生在同步 worker 启动前与全部结束后，不存在并发读写
-	progressLineGuard *progressPrinter
+	// 必须用 atomic：写入点位于 syncTableData 内部，而它是 runBatchStage 的 stageFn，
+	// 每个批次一个 goroutine（表数 / max_ddl_per_batch，211 表默认配置下约 22 个并发写），
+	// 同时 Log/logError 在其他 goroutine 中读取（issue #174）
+	progressLineGuard atomic.Pointer[progressPrinter]
 }
 
 // AssessmentResults 评估结果
@@ -1516,9 +1518,11 @@ func (m *Manager) convertUsers(users []mysql.UserInfo, semaphore chan struct{}) 
 func (m *Manager) syncTableData(tables []mysql.TableInfo, semaphore chan struct{}) error {
 	progressChan := make(chan progressUpdate, m.config.Conversion.Limits.Concurrency)
 	printer := newProgressPrinter()
-	// 注册进度行守卫：数据同步期间 log/logError 的控制台输出先结束未收尾的进度行
-	m.progressLineGuard = printer
-	defer func() { m.progressLineGuard = nil }()
+	// 注册进度行守卫：数据同步期间 log/logError 的控制台输出先结束未收尾的进度行。
+	// 本函数由 runBatchStage 按批派发为独立 goroutine，故必须用 atomic 写入（issue #174）。
+	// 注：多批各自的 printer 互相覆盖、争抢 stdout 属独立的结构性问题，本次只消除数据竞争
+	m.progressLineGuard.Store(printer)
+	defer func() { m.progressLineGuard.Store(nil) }()
 	return SyncTableData(
 		m.context(),
 		m.mysqlConn,
@@ -1681,8 +1685,10 @@ func (m *Manager) Log(format string, args ...interface{}) {
 
 	// 根据配置决定是否在控制台显示
 	if m.config.Run.ShowLogInConsole {
-		if m.progressLineGuard != nil {
-			m.progressLineGuard.endLine()
+		// 先 Load 到局部变量再判空调用，消除 check-then-use 窗口：
+		// 否则两行之间被其他 goroutine Store(nil) 就会解引用 nil（endLine 首行即 p.mu.Lock()）
+		if guard := m.progressLineGuard.Load(); guard != nil {
+			guard.endLine()
 		}
 		fmt.Println(logMsg)
 	}
@@ -1709,8 +1715,9 @@ func (m *Manager) logError(errMsg string, args ...interface{}) {
 
 	// 根据配置决定是否在控制台显示
 	if m.config.Run.ShowConsoleLogs {
-		if m.progressLineGuard != nil {
-			m.progressLineGuard.endLine()
+		// 同 Log：Load 到局部变量再调用，避免 check-then-use 期间被置 nil
+		if guard := m.progressLineGuard.Load(); guard != nil {
+			guard.endLine()
 		}
 		fmt.Printf("错误: %s\n", errMsg)
 	}

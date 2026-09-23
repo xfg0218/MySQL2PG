@@ -431,3 +431,72 @@ func TestManagerCloseNilFiles(t *testing.T) {
 		t.Fatalf("Close() 在无文件句柄时应返回 nil，实际: %v", err)
 	}
 }
+
+// TestProgressLineGuardConcurrentAccess issue #174：
+// progressLineGuard 由 runBatchStage 按批派发的多个 goroutine 并发写入，
+// 同时被 Log/logError 在其他 goroutine 中读取。本测试需在 -race 下运行才有完整意义：
+// 若字段是普通指针，写方与读方之间必报 DATA RACE。
+func TestProgressLineGuardConcurrentAccess(t *testing.T) {
+	m := newTestManager(1)
+
+	const workers = 8
+	const iterations = 300
+	var wg sync.WaitGroup
+
+	// 写方：复现 syncTableData 的 Store(printer) / defer Store(nil)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				m.progressLineGuard.Store(newProgressPrinter())
+				m.progressLineGuard.Store(nil)
+			}
+		}()
+	}
+
+	// 读方：复现 Log/logError 中的 Load-then-call。
+	// 若先判空再用字段本身（而非 Load 到局部变量），两行之间被 Store(nil)
+	// 就会解引用 nil——endLine 首行即 p.mu.Lock()
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				if guard := m.progressLineGuard.Load(); guard != nil {
+					guard.endLine()
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// TestProgressLineGuardUsedByLog 验证守卫确实被 Log/logError 使用：
+// 输出普通行前必须收尾未结束的进度行，否则两者会粘连
+func TestProgressLineGuardUsedByLog(t *testing.T) {
+	m := newTestManager(1)
+	m.config.Run.ShowLogInConsole = true
+	m.config.Run.ShowConsoleLogs = true
+
+	// 未注册守卫时不应 panic
+	m.Log("无守卫")
+	m.logError("无守卫")
+
+	// 注册处于 dirty 状态的守卫：endLine 应真正收尾并把 dirty 复位
+	p := newProgressPrinter()
+	p.dirty = true
+	m.progressLineGuard.Store(p)
+
+	m.Log("有守卫")
+	if p.dirty {
+		t.Error("Log 输出前应已通过 endLine 收尾进度行，dirty 应被复位")
+	}
+
+	p.dirty = true
+	m.logError("有守卫")
+	if p.dirty {
+		t.Error("logError 输出前应已通过 endLine 收尾进度行，dirty 应被复位")
+	}
+}
